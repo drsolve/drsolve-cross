@@ -1,0 +1,353 @@
+name: C/C++ CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+
+  # ──────────────────────────────────────────────────────────────
+  # Linux: build FLINT + PML from source → static binary + test
+  # ──────────────────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    env:
+      INSTALL_PREFIX: ${{ github.workspace }}/deps
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgmp-dev libmpfr-dev \
+            autoconf automake libtool pkg-config \
+            make gcc g++ binutils cmake
+
+      - name: Set build environment
+        run: |
+          echo "INSTALL_PREFIX=$INSTALL_PREFIX"                >> $GITHUB_ENV
+          echo "C_INCLUDE_PATH=$INSTALL_PREFIX/include"        >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$INSTALL_PREFIX/lib"              >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$INSTALL_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
+          mkdir -p "$INSTALL_PREFIX"
+
+      - name: Build FLINT 3.4.0 (static)
+        run: |
+          git clone --depth=1 --branch flint-3.4 https://github.com/flintlib/flint.git
+          cd flint
+          ./bootstrap.sh
+          ./configure \
+            --prefix="$INSTALL_PREFIX" \
+            --enable-static \
+            --disable-shared
+          make -j$(nproc)
+          make install
+
+      - name: Build PML (static)
+        run: |
+          git clone https://github.com/vneiger/pml.git
+          cd pml/flint-extras
+          ./bootstrap.sh
+          ./configure \
+            --prefix="$INSTALL_PREFIX" \
+            --enable-static \
+            --disable-shared
+          make -j$(nproc)
+          make install
+
+      - name: Configure (CMake, static)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDIXONRES_STATIC=ON \
+            -DFLINT_ROOT="$INSTALL_PREFIX" \
+            -DPML_ROOT="$INSTALL_PREFIX"
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Verify static linkage
+        run: |
+          echo "=== ldd build/dixon ==="
+          ldd ./build/dixon || true
+          if ldd ./build/dixon 2>/dev/null | grep -E 'libflint|libpml'; then
+            echo "ERROR: binary dynamically linked against FLINT or PML"
+            exit 1
+          fi
+          echo "OK: FLINT and PML are statically linked"
+
+      - name: Prepare release artifact
+        run: |
+          ARCH=$(uname -m)
+          TAG="${{ github.ref_name }}"
+          strip ./build/dixon
+          ARTIFACT_NAME="dixon-${TAG}-linux-${ARCH}"
+          mkdir -p dist
+          cp ./build/dixon "dist/${ARTIFACT_NAME}"
+          cat > dist/build-info-linux.txt <<EOF
+          Binary   : ${ARTIFACT_NAME}
+          Built on : $(date -u +"%Y-%m-%d %H:%M UTC")
+          OS       : $(lsb_release -ds 2>/dev/null || uname -sr)
+          Arch     : ${ARCH}
+          Ref      : ${{ github.ref }}
+          SHA      : ${{ github.sha }}
+          FLINT    : static (3.4.0)
+          PML      : static
+          EOF
+          cat dist/build-info-linux.txt
+          echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+      - name: Upload CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/
+          retention-days: 90
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ env.ARTIFACT_NAME }}
+            dist/build-info-linux.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # ──────────────────────────────────────────────────────────────
+  # macOS: build FLINT + PML from source → static binary + test
+  # ──────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    env:
+      INSTALL_PREFIX: ${{ github.workspace }}/deps
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          brew update
+          brew install gmp mpfr autoconf automake libtool pkg-config cmake
+
+      - name: Set build environment
+        run: |
+          BREW=$(brew --prefix)
+          echo "INSTALL_PREFIX=$INSTALL_PREFIX"                                       >> $GITHUB_ENV
+          echo "CPATH=$INSTALL_PREFIX/include:$BREW/include"                          >> $GITHUB_ENV
+          echo "LIBRARY_PATH=$INSTALL_PREFIX/lib:$BREW/lib"                           >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=$INSTALL_PREFIX/lib/pkgconfig:$BREW/lib/pkgconfig"    >> $GITHUB_ENV
+          mkdir -p "$INSTALL_PREFIX"
+
+      - name: Build FLINT 3.4.0 (static)
+        run: |
+          BREW=$(brew --prefix)
+          git clone --depth=1 --branch flint-3.4 https://github.com/flintlib/flint.git
+          cd flint
+          ./bootstrap.sh
+          ./configure \
+            --prefix="$INSTALL_PREFIX" \
+            --enable-static \
+            --disable-shared \
+            --with-gmp="$BREW" \
+            --with-mpfr="$BREW"
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      - name: Build PML (static)
+        run: |
+          git clone https://github.com/vneiger/pml.git
+          cd pml/flint-extras
+          ./bootstrap.sh
+          ./configure \
+            --prefix="$INSTALL_PREFIX" \
+            --enable-static \
+            --disable-shared
+          make -j$(sysctl -n hw.ncpu)
+          make install
+
+      # macOS: localize FLINT symbols that conflict with PML via nmedit
+      # (Apple ld lacks --allow-multiple-definition)
+      - name: Resolve FLINT/PML duplicate symbols (macOS nmedit)
+        run: |
+          FLINT_A="$INSTALL_PREFIX/lib/libflint.a"
+          PML_A="$INSTALL_PREFIX/lib/libpml.a"
+          TMPDIR_WORK=$(mktemp -d)
+
+          echo "Collecting PML exported symbols..."
+          PML_SYMS=$(nm -g "$PML_A" 2>/dev/null \
+            | awk '/ T / || / D / || / B / {sym=$3; sub(/^_/,"",sym); print sym}' \
+            | sort -u)
+
+          echo "Extracting libflint.a..."
+          (cd "$TMPDIR_WORK" && ar -x "$FLINT_A")
+
+          MODIFIED_OBJS=""
+
+          for obj in "$TMPDIR_WORK"/*.o; do
+            obj_name=$(basename "$obj")
+
+            ALL_GLOBALS=$(nm -g "$obj" 2>/dev/null \
+              | awk '/ T / || / D / || / B / {sym=$3; sub(/^_/,"",sym); print sym}' \
+              | sort -u)
+
+            CONFLICTS=$(comm -12 \
+              <(echo "$ALL_GLOBALS") \
+              <(echo "$PML_SYMS"))
+
+            [ -z "$CONFLICTS" ] && continue
+
+            echo "In $obj_name — making local:"
+            echo "$CONFLICTS" | sed 's/^/    /'
+
+            KEEP_FILE=$(mktemp)
+            comm -23 \
+              <(echo "$ALL_GLOBALS") \
+              <(echo "$CONFLICTS" | sort -u) \
+              | grep -v '^[[:space:]]*$' \
+              | sed 's/^/_/' \
+              > "$KEEP_FILE"
+
+            KEEP_COUNT=$(grep -c '' "$KEEP_FILE" || echo 0)
+
+            if [ "$KEEP_COUNT" -gt 0 ]; then
+              nmedit -s "$KEEP_FILE" "$obj"
+            else
+              nmedit -p "$obj"
+            fi
+
+            rm -f "$KEEP_FILE"
+            MODIFIED_OBJS="$MODIFIED_OBJS $obj_name"
+          done
+
+          if [ -n "$MODIFIED_OBJS" ]; then
+            echo "Updating libflint.a with localized objects..."
+            (cd "$TMPDIR_WORK" && ar -r "$FLINT_A" $MODIFIED_OBJS)
+            echo "Sanity check — nmod_mat_set still in libflint.a:"
+            nm -g "$FLINT_A" 2>/dev/null | grep ' T _nmod_mat_set$' \
+              || { echo "ERROR: _nmod_mat_set missing after nmedit!"; exit 1; }
+          else
+            echo "No conflicting symbols — nothing to localize."
+          fi
+
+          rm -rf "$TMPDIR_WORK"
+
+      - name: Configure (CMake, static)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DDIXONRES_STATIC=ON \
+            -DFLINT_ROOT="$INSTALL_PREFIX" \
+            -DPML_ROOT="$INSTALL_PREFIX"
+
+      - name: Build
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Verify static linkage
+        run: |
+          echo "=== otool -L build/dixon ==="
+          otool -L ./build/dixon
+          if otool -L ./build/dixon | grep -E 'libflint|libpml'; then
+            echo "ERROR: binary dynamically linked against FLINT or PML"
+            exit 1
+          fi
+          echo "OK: FLINT and PML are statically linked"
+
+      - name: Prepare release artifact
+        run: |
+          MACOS_VER=$(sw_vers -productVersion | cut -d. -f1-2)
+          ARCH=$(uname -m)
+          TAG="${{ github.ref_name }}"
+          strip ./build/dixon
+          ARTIFACT_NAME="dixon-${TAG}-macos${MACOS_VER}-${ARCH}"
+          mkdir -p dist
+          cp ./build/dixon "dist/${ARTIFACT_NAME}"
+          cat > dist/build-info-macos.txt <<EOF
+          Binary   : ${ARTIFACT_NAME}
+          Built on : $(date -u +"%Y-%m-%d %H:%M UTC")
+          macOS    : $(sw_vers -productVersion)
+          Arch     : ${ARCH}
+          Ref      : ${{ github.ref }}
+          SHA      : ${{ github.sha }}
+          FLINT    : static (3.4.0)
+          PML      : static
+          EOF
+          cat dist/build-info-macos.txt
+          echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> $GITHUB_ENV
+
+      - name: Upload CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: dist/
+          retention-days: 90
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/${{ env.ARTIFACT_NAME }}
+            dist/build-info-macos.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # ──────────────────────────────────────────────────────────────
+  # Windows: cross-compile from Linux via MinGW-w64
+  # Uses bundled third_party/ FLINT & PML — build + smoke-test
+  # No binary upload (Windows installer handled separately)
+  # ──────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64 cross-compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-mingw-w64-x86-64 \
+            g++-mingw-w64-x86-64 \
+            cmake make
+
+      - name: Configure (CMake, MinGW cross-compile)
+        run: |
+          cmake -B build-win \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake"
+
+      - name: Build
+        run: cmake --build build-win -j$(nproc)
+
+      - name: Verify executables exist
+        run: |
+          echo "=== build-win layout ==="
+          find build-win -name "*.exe" -o -name "*.dll" | sort
+          test -f build-win/dixon.exe            || test -f build-win/bin/dixon_cli_real.exe
+          echo "OK: Windows build succeeded"
+
+      - name: Upload Windows build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dixon-windows-x86_64
+          path: |
+            build-win/dixon.exe
+            build-win/dixon_win_gui.exe
+            build-win/bin/dixon_cli_real.exe
+            build-win/dll/
+            build-win/lib/libdixon-1.a
+            build-win/lib/libdixon-1.dll.a
+          retention-days: 30

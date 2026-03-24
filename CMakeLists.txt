@@ -1,0 +1,671 @@
+cmake_minimum_required(VERSION 3.16)
+
+project(DixonRes
+  VERSION 0.1.1
+  DESCRIPTION "Dixon Resultant & Polynomial System Solver"
+  LANGUAGES C
+)
+
+# ============================================================
+# Build options
+# ============================================================
+option(DIXONRES_ENABLE_PML       "Use PML library if found"                ON)
+option(DIXONRES_ENABLE_OPENMP    "Enable OpenMP if available"              ON)
+option(DIXONRES_ENABLE_LTO       "Enable Link Time Optimization (-flto)"   ON)
+option(DIXONRES_ENABLE_ASAN      "Enable AddressSanitizer"                 OFF)
+option(DIXONRES_STATIC           "Link FLINT/PML statically into binary"   OFF)
+option(DIXONRES_BUILD_SHARED_LIB "Build libdixon as a shared library"      ON)
+option(DIXONRES_BUILD_STATIC_LIB "Build libdixon as a static library"      ON)
+option(DIXONRES_BUILD_GUI        "Build Windows GUI targets (Windows only)" ON)
+option(DIXONRES_BUILD_ATTACK     "Build programs in ../Attack if present"  ON)
+
+# Hint paths exposed to the user  (override via -DFLINT_ROOT=... etc.)
+set(FLINT_ROOT ""   CACHE PATH "Root directory of FLINT installation")
+set(PML_ROOT   ""   CACHE PATH "Root directory of PML installation")
+
+# ============================================================
+# Default build type
+# ============================================================
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+    Release Debug RelWithDebInfo MinSizeRel)
+endif()
+
+# ============================================================
+# Standard modules
+# ============================================================
+include(GNUInstallDirs)
+include(CheckIPOSupported)
+include(CheckCCompilerFlag)
+include(CTest)
+
+# ============================================================
+# Platform detection
+# ============================================================
+if(WIN32 OR MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  set(DIXONRES_WINDOWS TRUE)
+else()
+  set(DIXONRES_WINDOWS FALSE)
+endif()
+
+# When cross-compiling for Windows from Linux/macOS, the bundled
+# third_party/ directory is used.  Native Windows builds need the
+# user to supply -DFLINT_ROOT= / -DPML_ROOT= (or install to a
+# standard prefix such as C:/msys64/ucrt64).
+if(DIXONRES_WINDOWS AND NOT FLINT_ROOT)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/mingw/include/flint/flint.h")
+    set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/mingw")
+  else()
+    set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/flint")
+  endif()
+endif()
+if(DIXONRES_WINDOWS AND DIXONRES_ENABLE_PML AND NOT PML_ROOT)
+  set(PML_ROOT "${CMAKE_SOURCE_DIR}/third_party/pml")
+endif()
+
+# ============================================================
+# C standard
+# ============================================================
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS ON)     # GNU extensions used by FLINT headers
+
+# ============================================================
+# LTO
+# ============================================================
+if(DIXONRES_ENABLE_LTO)
+  check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
+  if(_ipo_ok)
+    # Applied per-target below
+    message(STATUS "LTO: supported")
+  else()
+    set(DIXONRES_ENABLE_LTO OFF)
+    message(STATUS "LTO: not supported (${_ipo_msg})")
+  endif()
+endif()
+
+# ============================================================
+# Arch / tuning flags
+# ============================================================
+if(NOT CMAKE_CROSSCOMPILING)
+  check_c_compiler_flag(-march=native _march_native)
+  if(_march_native)
+    add_compile_options($<$<CONFIG:Release>:-march=native>)
+  endif()
+else()
+  # MinGW cross-build: mirror the flags from Makefile-windows
+  add_compile_options(-msse4.1 -mpclmul)
+endif()
+
+# ============================================================
+# AddressSanitizer
+# ============================================================
+if(DIXONRES_ENABLE_ASAN)
+  check_c_compiler_flag(-fsanitize=address _asan_ok)
+  if(_asan_ok)
+    add_compile_options(-fsanitize=address)
+    add_link_options(-fsanitize=address)
+    message(STATUS "ASan: enabled")
+  else()
+    message(WARNING "ASan requested but -fsanitize=address is not supported; disabling.")
+    set(DIXONRES_ENABLE_ASAN OFF)
+  endif()
+endif()
+
+# ============================================================
+# Find FLINT  (required)
+# ============================================================
+set(_flint_include_hints
+  "${FLINT_ROOT}/include"
+)
+set(_flint_lib_hints
+  "${FLINT_ROOT}/lib"
+)
+if(DIXONRES_WINDOWS)
+  list(PREPEND _flint_include_hints
+    "${CMAKE_SOURCE_DIR}/third_party/mingw/include"
+    "${CMAKE_SOURCE_DIR}/third_party/flint/include"
+  )
+  list(PREPEND _flint_lib_hints
+    "${CMAKE_SOURCE_DIR}/third_party/flint/lib"
+    "${CMAKE_SOURCE_DIR}/third_party/mingw/lib"
+  )
+endif()
+list(APPEND _flint_include_hints
+  /usr/local/include
+  /opt/homebrew/include
+  /opt/local/include
+)
+list(APPEND _flint_lib_hints
+  /usr/local/lib
+  /opt/homebrew/lib
+  /opt/local/lib
+)
+
+# 1. Try the official CMake config installed by FLINT >= 3.x
+find_package(FLINT CONFIG QUIET
+  HINTS "${FLINT_ROOT}" "${FLINT_ROOT}/lib/cmake/flint"
+)
+
+if(FLINT_FOUND AND TARGET FLINT::flint)
+  message(STATUS "FLINT: found via CMake config (${FLINT_VERSION})")
+  # Alias to our internal name
+  if(NOT TARGET FLINT::FLINT)
+    add_library(FLINT::FLINT ALIAS FLINT::flint)
+  endif()
+else()
+  # 2. Manual detection
+  if(DIXONRES_WINDOWS AND FLINT_INCLUDE_DIR)
+    if(NOT EXISTS "${FLINT_INCLUDE_DIR}/flint/flint.h" OR NOT EXISTS "${FLINT_INCLUDE_DIR}/gmp.h")
+      unset(FLINT_INCLUDE_DIR CACHE)
+    endif()
+  endif()
+
+  find_path(FLINT_INCLUDE_DIR
+    NAMES flint/flint.h
+    HINTS ${_flint_include_hints}
+  )
+
+  if(DIXONRES_STATIC)
+    find_library(FLINT_LIBRARY
+      NAMES libflint.a
+      HINTS ${_flint_lib_hints}
+    )
+  else()
+    find_library(FLINT_LIBRARY
+      NAMES flint
+      HINTS ${_flint_lib_hints}
+    )
+  endif()
+
+  if(NOT FLINT_INCLUDE_DIR)
+    message(FATAL_ERROR
+      "FLINT header (flint/flint.h) not found.\n"
+      "Install FLINT or set -DFLINT_ROOT=/path/to/flint")
+  endif()
+  if(NOT FLINT_LIBRARY)
+    message(FATAL_ERROR
+      "FLINT library not found.\n"
+      "Install FLINT or set -DFLINT_ROOT=/path/to/flint")
+  endif()
+
+  message(STATUS "FLINT: ${FLINT_LIBRARY}")
+
+  add_library(FLINT::FLINT UNKNOWN IMPORTED GLOBAL)
+  set_target_properties(FLINT::FLINT PROPERTIES
+    IMPORTED_LOCATION             "${FLINT_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${FLINT_INCLUDE_DIR}"
+  )
+endif()
+
+# FLINT always needs HAVE_FLINT defined
+target_compile_definitions(FLINT::FLINT INTERFACE HAVE_FLINT)
+
+# ============================================================
+# Find GMP and MPFR  (FLINT runtime deps)
+# ============================================================
+find_library(GMP_LIBRARY   NAMES gmp
+  HINTS ${_flint_lib_hints})
+find_library(MPFR_LIBRARY  NAMES mpfr
+  HINTS ${_flint_lib_hints})
+
+if(NOT GMP_LIBRARY)
+  message(FATAL_ERROR "libgmp not found (required by FLINT).")
+endif()
+if(NOT MPFR_LIBRARY)
+  message(FATAL_ERROR "libmpfr not found (required by FLINT).")
+endif()
+
+# ============================================================
+# Find OpenBLAS  (Windows only, optional on others)
+# ============================================================
+if(DIXONRES_WINDOWS)
+  find_library(OPENBLAS_LIBRARY NAMES openblas
+    HINTS "${FLINT_ROOT}/lib" "${CMAKE_SOURCE_DIR}/third_party/flint/lib")
+  if(NOT OPENBLAS_LIBRARY)
+    message(WARNING "OpenBLAS not found; linking may fail on Windows.")
+  endif()
+endif()
+
+# ============================================================
+# Find PML  (optional)
+# ============================================================
+set(PML_AVAILABLE FALSE)
+
+if(DIXONRES_ENABLE_PML)
+  find_path(PML_INCLUDE_DIR
+    NAMES pml.h pml/pml.h
+    HINTS "${PML_ROOT}/include"
+          /usr/local/include
+          /opt/homebrew/include
+  )
+
+  if(DIXONRES_STATIC)
+    find_library(PML_LIBRARY NAMES libpml.a
+      HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
+  else()
+    find_library(PML_LIBRARY NAMES pml
+      HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
+  endif()
+
+  if(PML_INCLUDE_DIR AND PML_LIBRARY)
+    # Determine correct include sub-path for nmod_poly_mat_utils.h
+    if(EXISTS "${PML_INCLUDE_DIR}/nmod_poly_mat_utils.h")
+      set(_pml_extra_inc "")          # flat layout: headers directly in PML_INCLUDE_DIR
+    elseif(EXISTS "${PML_INCLUDE_DIR}/pml/nmod_poly_mat_utils.h")
+      set(_pml_extra_inc "${PML_INCLUDE_DIR}/pml")  # subdirectory layout
+    else()
+      message(STATUS "PML: nmod_poly_mat_utils.h not found under ${PML_INCLUDE_DIR} -- disabling PML")
+      set(PML_LIBRARY "")
+    endif()
+
+    if(PML_LIBRARY AND NOT EXISTS "${PML_INCLUDE_DIR}/config.h")
+      message(STATUS "PML: config.h not found under ${PML_INCLUDE_DIR} -- disabling PML")
+      set(PML_LIBRARY "")
+    endif()
+  endif()
+
+  if(PML_INCLUDE_DIR AND PML_LIBRARY)
+    set(PML_AVAILABLE TRUE)
+    message(STATUS "PML: ${PML_LIBRARY}")
+
+    add_library(PML::PML UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(PML::PML PROPERTIES
+      IMPORTED_LOCATION             "${PML_LIBRARY}"
+      INTERFACE_INCLUDE_DIRECTORIES "${PML_INCLUDE_DIR}"
+      INTERFACE_COMPILE_DEFINITIONS "HAVE_PML"
+    )
+    if(_pml_extra_inc)
+      set_property(TARGET PML::PML APPEND PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES "${_pml_extra_inc}")
+    endif()
+  else()
+    message(STATUS "PML: not found (optional) -- building without PML support")
+  endif()
+endif()
+
+# ============================================================
+# Find OpenMP
+# ============================================================
+if(DIXONRES_ENABLE_OPENMP)
+  find_package(OpenMP COMPONENTS C)
+  if(OpenMP_C_FOUND)
+    message(STATUS "OpenMP: ${OpenMP_C_FLAGS}")
+  else()
+    message(STATUS "OpenMP: not found")
+  endif()
+endif()
+
+# ============================================================
+# System libraries list  (per platform)
+# ============================================================
+set(_sys_libs "")
+if(APPLE)
+  list(APPEND _sys_libs ${MPFR_LIBRARY} ${GMP_LIBRARY} m)
+elseif(DIXONRES_WINDOWS)
+  list(APPEND _sys_libs ${MPFR_LIBRARY} ${GMP_LIBRARY} m pthread)
+  if(OPENBLAS_LIBRARY)
+    list(APPEND _sys_libs ${OPENBLAS_LIBRARY})
+  endif()
+else()  # Linux
+  list(APPEND _sys_libs ${MPFR_LIBRARY} ${GMP_LIBRARY} m pthread stdc++)
+endif()
+
+# ============================================================
+# Common link-library list  (shared between all targets)
+# ============================================================
+set(_dixon_deps FLINT::FLINT)
+if(PML_AVAILABLE)
+  list(APPEND _dixon_deps PML::PML)
+endif()
+if(OpenMP_C_FOUND)
+  list(APPEND _dixon_deps OpenMP::OpenMP_C)
+endif()
+list(APPEND _dixon_deps ${_sys_libs})
+
+# ============================================================
+# Math source list  (shared between library and exe targets)
+# ============================================================
+set(MATH_SOURCES
+  src/dixon_complexity.c
+  src/dixon_flint.c
+  src/dixon_interface_flint.c
+  src/dixon_test.c
+  src/dixon_with_ideal_reduction.c
+  src/fq_mat_det.c
+  src/fq_mpoly_mat_det.c
+  src/fq_multivariate_interpolation.c
+  src/fq_mvpoly.c
+  src/fq_nmod_roots.c
+  src/fq_poly_mat_det.c
+  src/fq_sparse_interpolation.c
+  src/fq_unified_interface.c
+  src/gf2n_mpoly.c
+  src/gf2n_field.c
+  src/gf2n_poly.c
+  src/polynomial_system_solver.c
+  src/resultant_with_ideal_reduction.c
+  src/unified_mpoly_det.c
+  src/unified_mpoly_interface.c
+  src/unified_mpoly_resultant.c
+)
+
+# Convenience function: apply standard settings to a dixon target
+function(dixon_target_common _tgt)
+  target_include_directories(${_tgt} PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/dixon>
+  )
+  target_link_libraries(${_tgt} PUBLIC ${_dixon_deps})
+  target_compile_options(${_tgt} PRIVATE
+    $<$<CONFIG:Release>:-O3>
+    $<$<CONFIG:Debug>:-O0 -g>
+  )
+  if(DIXONRES_ENABLE_LTO)
+    set_property(TARGET ${_tgt} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+  endif()
+endfunction()
+
+# ============================================================
+# Static library: libdixon.a  (libdixon-1.a on Windows)
+# ============================================================
+if(DIXONRES_BUILD_STATIC_LIB OR DIXONRES_STATIC)
+  add_library(dixon_static STATIC ${MATH_SOURCES})
+  dixon_target_common(dixon_static)
+  if(DIXONRES_WINDOWS)
+    set_target_properties(dixon_static PROPERTIES OUTPUT_NAME "libdixon-1")
+  else()
+    set_target_properties(dixon_static PROPERTIES OUTPUT_NAME "dixon")
+  endif()
+  set_target_properties(dixon_static PROPERTIES
+    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+  )
+endif()
+
+# ============================================================
+# Shared library: libdixon.so / .dylib / libdixon-1.dll
+# ============================================================
+if(DIXONRES_BUILD_SHARED_LIB AND NOT DIXONRES_STATIC)
+  add_library(dixon_shared SHARED ${MATH_SOURCES})
+  dixon_target_common(dixon_shared)
+
+  if(DIXONRES_WINDOWS)
+    # Windows DLL with import library
+    set_target_properties(dixon_shared PROPERTIES
+      OUTPUT_NAME            "libdixon-1"
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dll"
+      ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"   # .dll.a import lib
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+    )
+  else()
+    set_target_properties(dixon_shared PROPERTIES
+      OUTPUT_NAME            "dixon"
+      LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
+      VERSION                "${PROJECT_VERSION}"
+      SOVERSION              "1"
+    )
+  endif()
+
+  # macOS: set install name so binaries find the dylib at runtime
+  if(APPLE)
+    set_target_properties(dixon_shared PROPERTIES
+      INSTALL_NAME_DIR "@rpath"
+      BUILD_WITH_INSTALL_RPATH FALSE
+    )
+  endif()
+endif()
+
+# ============================================================
+# Main executable: dixon
+# On Windows it lives in bin/ as dixon_cli_real.exe;
+# the top-level dixon.exe is a thin launcher (built below).
+# ============================================================
+# The original Makefile compiles all sources together in one
+# translation unit for maximum inlining ("unity" compilation).
+# With CMake IPO/LTO enabled this is equivalent at link-time.
+# We replicate the unity approach via a separate object library
+# that is linked privately into the executable.
+
+add_executable(dixon_exe dixon.c ${MATH_SOURCES})
+dixon_target_common(dixon_exe)
+
+if(DIXONRES_WINDOWS)
+  set_target_properties(dixon_exe PROPERTIES
+    OUTPUT_NAME              "dixon_cli_real"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+  )
+else()
+  set_target_properties(dixon_exe PROPERTIES
+    OUTPUT_NAME "dixon"
+  )
+
+  # RPATH: find shared libs relative to binary and from install prefix
+  if(APPLE)
+    set_target_properties(dixon_exe PROPERTIES
+      INSTALL_RPATH "@loader_path/../lib"
+      BUILD_WITH_INSTALL_RPATH FALSE
+      BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
+    )
+  else()
+    # Linux: embed RPATH to bundled lib dir and FLINT/PML locations
+    set(_rpath_dirs "${CMAKE_BINARY_DIR}/lib;\$ORIGIN/../lib")
+    get_filename_component(_flint_lib_dir "${FLINT_LIBRARY}" DIRECTORY)
+    list(APPEND _rpath_dirs "${_flint_lib_dir}")
+    if(PML_AVAILABLE)
+      get_filename_component(_pml_lib_dir "${PML_LIBRARY}" DIRECTORY)
+      list(APPEND _rpath_dirs "${_pml_lib_dir}")
+    endif()
+    string(REPLACE ";" ":" _rpath_str "${_rpath_dirs}")
+    set_target_properties(dixon_exe PROPERTIES
+      INSTALL_RPATH           "\$ORIGIN/../lib"
+      BUILD_RPATH             "${_rpath_str}"
+      BUILD_WITH_INSTALL_RPATH FALSE
+    )
+  endif()
+endif()
+
+# Static-link mode: add linker flags for duplicate-symbol tolerance
+# (FLINT and PML share some symbol names intentionally)
+if(DIXONRES_STATIC)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(dixon_exe PRIVATE
+      -Wl,--allow-multiple-definition
+      -no-pie
+    )
+  endif()
+  # macOS: Apple ld resolves duplicates by first-definition-wins; no flag needed.
+  # (In CI, nmedit is used to localise FLINT symbols before linking.)
+endif()
+
+# ============================================================
+# Windows: launcher (dixon.exe) and GUI (dixon_win_gui.exe)
+# ============================================================
+if(DIXONRES_WINDOWS AND DIXONRES_BUILD_GUI)
+
+  # Thin launcher: sets DLL path then spawns bin/dixon_cli_real.exe
+  add_executable(dixon_launcher win_gui/dixon_launcher.c)
+  target_compile_definitions(dixon_launcher PRIVATE _WIN32_WINNT=0x0601)
+  set_target_properties(dixon_launcher PROPERTIES
+    OUTPUT_NAME              "dixon"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  )
+
+  # Windows GUI frontend
+  add_executable(dixon_win_gui WIN32
+    win_gui/dixon_gui.c
+    win_gui/dixon_wrapper.c
+  )
+  target_compile_definitions(dixon_win_gui PRIVATE _WIN32_WINNT=0x0601)
+  target_link_libraries(dixon_win_gui PRIVATE comctl32 comdlg32 shlwapi)
+  set_target_properties(dixon_win_gui PROPERTIES
+    OUTPUT_NAME              "dixon_win_gui"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+  )
+
+  # Copy runtime DLLs from runtime/ → dll/  (mirrors the Makefile `runtime` target)
+  file(GLOB _runtime_dlls "${CMAKE_SOURCE_DIR}/runtime/*.dll")
+  if(_runtime_dlls)
+    add_custom_command(TARGET dixon_exe POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/dll"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              ${_runtime_dlls} "${CMAKE_BINARY_DIR}/dll/"
+      COMMENT "Copying runtime DLLs → dll/"
+      VERBATIM
+    )
+  endif()
+endif()
+
+# ============================================================
+# Attack programs  (optional, ../Attack directory)
+# ============================================================
+if(DIXONRES_BUILD_ATTACK)
+  cmake_path(GET CMAKE_SOURCE_DIR PARENT_PATH _attack_parent)
+  set(_attack_dir "${_attack_parent}/Attack")
+  if(EXISTS "${_attack_dir}" AND IS_DIRECTORY "${_attack_dir}")
+    file(GLOB_RECURSE _attack_srcs CONFIGURE_DEPENDS "${_attack_dir}/*.c")
+    foreach(_src IN LISTS _attack_srcs)
+      # Skip Jupyter checkpoint directories
+      if(_src MATCHES "\\.ipynb_checkpoints/")
+        continue()
+      endif()
+      cmake_path(GET _src STEM   _aname)
+      cmake_path(GET _src PARENT_PATH _adir)
+      set(_tgt "attack_${_aname}")
+      add_executable(${_tgt} EXCLUDE_FROM_ALL ${_src} ${MATH_SOURCES})
+      dixon_target_common(${_tgt})
+      set_target_properties(${_tgt} PROPERTIES
+        OUTPUT_NAME              "${_aname}"
+        RUNTIME_OUTPUT_DIRECTORY "${_adir}"
+      )
+    endforeach()
+    message(STATUS "Attack programs: found at ${_attack_dir}")
+  else()
+    message(STATUS "Attack programs: ${_attack_dir} not found -- skipping")
+  endif()
+endif()
+
+# ============================================================
+# Install rules
+# ============================================================
+
+# Executable
+install(TARGETS dixon_exe
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# Static library
+if(DIXONRES_BUILD_STATIC_LIB OR DIXONRES_STATIC)
+  install(TARGETS dixon_static
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  )
+endif()
+
+# Shared library
+if(DIXONRES_BUILD_SHARED_LIB AND NOT DIXONRES_STATIC)
+  install(TARGETS dixon_shared
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}   # Windows DLL → bin/
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}   # Windows import lib → lib/
+  )
+  # Linux: run ldconfig after install
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    install(CODE "
+      execute_process(
+        COMMAND ldconfig \"${CMAKE_INSTALL_FULL_LIBDIR}\"
+        ERROR_QUIET
+      )")
+  endif()
+endif()
+
+# Headers
+install(DIRECTORY include/
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dixon
+  FILES_MATCHING PATTERN "*.h"
+)
+
+# ============================================================
+# CTest
+# ============================================================
+enable_testing()
+
+# Helper to register a test and route output files to a tmp dir
+set(_test_wd "${CMAKE_BINARY_DIR}")
+
+add_test(NAME dixon_help
+  COMMAND dixon_exe --help
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(dixon_help PROPERTIES PASS_REGULAR_EXPRESSION ".")
+
+add_test(NAME dixon_basic
+  COMMAND dixon_exe "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_basic_rational
+  COMMAND dixon_exe "x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z" "x,y" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_solve
+  COMMAND dixon_exe --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_solve_linear
+  COMMAND dixon_exe --solve "x+y-3, x-y+1" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_comp
+  COMMAND dixon_exe --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_comp_short
+  COMMAND dixon_exe -c "x^2+y^2+1, x*y+z, x+y+z^2" "x,y" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_comp_omega
+  COMMAND dixon_exe --comp --omega 2.373
+    "x^4+y^4+z^4+w^4+1, x^3*y+z+1, x+y^3+z^2+w, x*y*z*w+1"
+    "x,y,z" 65537
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_random
+  COMMAND dixon_exe --random "[3,3,2]" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_random_solve
+  COMMAND dixon_exe -r --solve "[2]*3" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_random_comp
+  COMMAND dixon_exe -r --comp "[3,2]*2" 65537
+  WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME dixon_extension_field
+  COMMAND dixon_exe --silent "x+y^2+t, x*y+t*y+1" "x" "2^8"
+  WORKING_DIRECTORY ${_test_wd}
+)
+
+# ============================================================
+# Configuration summary
+# ============================================================
+message(STATUS "")
+message(STATUS "=== DixonRes ${PROJECT_VERSION} — Build Configuration ===")
+message(STATUS "  Platform        : ${CMAKE_SYSTEM_NAME} (${CMAKE_SYSTEM_PROCESSOR})")
+message(STATUS "  Build type      : ${CMAKE_BUILD_TYPE}")
+message(STATUS "  Compiler        : ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
+message(STATUS "  FLINT           : ${FLINT_LIBRARY}")
+if(PML_AVAILABLE)
+  message(STATUS "  PML             : ${PML_LIBRARY}")
+else()
+  message(STATUS "  PML             : disabled")
+endif()
+if(OpenMP_C_FOUND)
+  message(STATUS "  OpenMP          : ${OpenMP_C_VERSION}")
+else()
+  message(STATUS "  OpenMP          : not found")
+endif()
+message(STATUS "  LTO             : ${DIXONRES_ENABLE_LTO}")
+message(STATUS "  ASan            : ${DIXONRES_ENABLE_ASAN}")
+message(STATUS "  Static linking  : ${DIXONRES_STATIC}")
+message(STATUS "  Install prefix  : ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "==============================================")
