@@ -260,9 +260,28 @@ if(DIXONRES_ENABLE_PML)
       set(PML_LIBRARY "")
     endif()
 
-    if(PML_LIBRARY AND NOT EXISTS "${PML_INCLUDE_DIR}/config.h")
-      message(STATUS "PML: config.h not found under ${PML_INCLUDE_DIR} -- disabling PML")
-      set(PML_LIBRARY "")
+    if(PML_LIBRARY)
+      if(EXISTS "${PML_INCLUDE_DIR}/config.h")
+        # Already in the main include dir — nothing to do
+      else()
+        # autoconf config.h is sometimes not installed; look for it next to the library
+        get_filename_component(_pml_lib_dir "${PML_LIBRARY}" DIRECTORY)
+        find_path(_pml_config_dir
+          NAMES config.h
+          HINTS "${_pml_lib_dir}/../include"
+                "${PML_ROOT}/include"
+                "${CMAKE_BINARY_DIR}"
+          NO_DEFAULT_PATH
+        )
+        if(_pml_config_dir)
+          message(STATUS "PML: config.h found at ${_pml_config_dir} -- adding to include path")
+          # Append the directory so #include "config.h" resolves correctly
+          set(_pml_extra_config_inc "${_pml_config_dir}")
+        else()
+          message(STATUS "PML: config.h not found -- disabling PML")
+          set(PML_LIBRARY "")
+        endif()
+      endif()
     endif()
   endif()
 
@@ -279,6 +298,10 @@ if(DIXONRES_ENABLE_PML)
     if(_pml_extra_inc)
       set_property(TARGET PML::PML APPEND PROPERTY
         INTERFACE_INCLUDE_DIRECTORIES "${_pml_extra_inc}")
+    endif()
+    if(_pml_extra_config_inc)
+      set_property(TARGET PML::PML APPEND PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES "${_pml_extra_config_inc}")
     endif()
   else()
     message(STATUS "PML: not found (optional) -- building without PML support")

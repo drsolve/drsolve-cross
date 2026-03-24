@@ -58,6 +58,7 @@ jobs:
             --disable-shared
           make -j$(nproc)
           make install
+          cp config.h "$INSTALL_PREFIX/include/config.h"
 
       - name: Configure (CMake, static)
         run: |
@@ -173,6 +174,7 @@ jobs:
             --disable-shared
           make -j$(sysctl -n hw.ncpu)
           make install
+          cp config.h "$INSTALL_PREFIX/include/config.h"
 
       # macOS: localize FLINT symbols that conflict with PML via nmedit
       # (Apple ld lacks --allow-multiple-definition)
