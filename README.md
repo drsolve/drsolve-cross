@@ -2,8 +2,6 @@
 
 A cross-platform C library and command-line tool for computing Dixon resultants and solving polynomial systems over finite fields and the rationals ℚ, based on the FLINT and PML libraries.
 
-Website: <https://dixonres.github.io>
-
 ## Library & Platform Support
 
 DixonRes is distributed as both a **shared library** (`libdixon.so` / `libdixon.dylib` / `libdixon-1.dll`) and a **static library** (`libdixon.a` / `libdixon-1.a`), alongside the `dixon` command-line executable.
@@ -13,9 +11,6 @@ DixonRes is distributed as both a **shared library** (`libdixon.so` / `libdixon.
 | Linux (x86-64, ARM64) | `libdixon.so` | `libdixon.a` | `dixon` |
 | macOS (x86-64, Apple Silicon) | `libdixon.dylib` | `libdixon.a` | `dixon` |
 | Windows (x86-64) | `libdixon-1.dll` | `libdixon-1.a` | `dixon.exe` + `dixon_win_gui.exe` |
-
-Pre-built static binaries for Linux and macOS are available on the [Releases](https://github.com/DixonRes/DixonRes/releases) page.  
-A Windows GUI installer is available at [DixonRes/DixonRes-Windows](https://github.com/DixonRes/DixonRes-Windows).
 
 ---
 
