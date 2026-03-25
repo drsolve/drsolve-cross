@@ -59,7 +59,7 @@ if(DIXONRES_WINDOWS AND CMAKE_CROSSCOMPILING)
   message(STATUS "Windows: cross-compiling from ${CMAKE_HOST_SYSTEM_NAME}")
 elseif(DIXONRES_WINDOWS)
   set(DIXONRES_WINDOWS_NATIVE TRUE)
-  message(STATUS "Windows: native build (MSYS2/UCRT64)")
+  message(STATUS "Windows: native build (MSYS2/MINGW64)")
 else()
   set(DIXONRES_WINDOWS_CROSS FALSE)
   set(DIXONRES_WINDOWS_NATIVE FALSE)
@@ -104,37 +104,37 @@ if(DIXONRES_WINDOWS_CROSS AND NOT DIXONRES_USE_BUNDLED_DEPS)
   
   # GMP (GNU Multiple Precision Arithmetic Library)
   list(APPEND MSYS2_PACKAGES
-    "mingw-w64-ucrt-x86_64-gmp"
+    "mingw-w64-x86_64-gmp"
     "6.3.0-2"
-    "e82a75968a556484a50084578238a84eb60fb93e34986fd6695c537975bd39ea"
+    "8924433974c4add46cb46ea4f6ef283b5c5139d3f552375115b5580f855015cc"
   )
   
   # MPFR (GNU Multiple Precision Floating-Point Library)
   list(APPEND MSYS2_PACKAGES
-    "mingw-w64-ucrt-x86_64-mpfr"
+    "mingw-w64-x86_64-mpfr"
     "4.2.2-1"
-    "4cd9f334abed608e2b6c90151a20ee6645ed0a8f9b1fd5a57b0244df2af63a0f"
+    "d774caec6c1655970fb9908b1b9521ce398ea394da62aab48fb2f050845dcd3c"
   )
   
   # OpenBLAS (Optimized BLAS library)
   list(APPEND MSYS2_PACKAGES
-    "mingw-w64-ucrt-x86_64-openblas"
+    "mingw-w64-x86_64-openblas"
     "0.3.31-1"
-    "a2b11c1883786fc82e7b04cb01cd86aa27456ae5ce0cac975ae2c9620e5a7f2d"
+    "744ec919b71ce7e148678bc67426af03a78f20a383390330a6d94a4fc4f7675d"
   )
   
   # GCC runtime libraries
   list(APPEND MSYS2_PACKAGES
-    "mingw-w64-ucrt-x86_64-gcc-libs"
+    "mingw-w64-x86_64-gcc-libs"
     "15.2.0-13"
-    "2529e62407a945761e00749d3f5ea601e68b926f82fc2dad7ba968cebd65d1d7"
+    "5ccdbb9cbc1356f92cb77c22429c67b8d7ab0976e84293c8297548284826fb72"
   )
   
   # WinPthread
   list(APPEND MSYS2_PACKAGES
-    "mingw-w64-ucrt-x86_64-libwinpthread"
+    "mingw-w64-x86_64-libwinpthread"
     "13.0.0.r560.g3197fc7d6-1"
-    "c1a84fa9f0f3f1dc26c5e9ccc0aae184806985b06dde0984b0521d89e387fe2b"
+    "b12bd011c79bcac1c742a94a8222d782913dcdebd0298aebb08ae90556405c0f"
   )
   
   # Download and extract all packages
@@ -300,14 +300,14 @@ list(APPEND _flint_lib_hints
 )
 # Pull in lib dirs from all MSYS2-fetched packages so that GMP/MPFR/etc. are found
 foreach(_msys2_dep
-    "mingw-w64-ucrt-x86_64-gmp"
-    "mingw-w64-ucrt-x86_64-mpfr"
-    "mingw-w64-ucrt-x86_64-openblas"
-    "mingw-w64-ucrt-x86_64-gcc-libs"
-    "mingw-w64-ucrt-x86_64-libwinpthread")
+    "mingw-w64-x86_64-gmp"
+    "mingw-w64-x86_64-mpfr"
+    "mingw-w64-x86_64-openblas"
+    "mingw-w64-x86_64-gcc-libs"
+    "mingw-w64-x86_64-libwinpthread")
   if(DEFINED ${_msys2_dep}_SOURCE_DIR)
-    list(APPEND _flint_lib_hints     "${${_msys2_dep}_SOURCE_DIR}/ucrt64/lib")
-    list(APPEND _flint_include_hints "${${_msys2_dep}_SOURCE_DIR}/ucrt64/include")
+    list(APPEND _flint_lib_hints     "${${_msys2_dep}_SOURCE_DIR}/mingw64/lib")
+    list(APPEND _flint_include_hints "${${_msys2_dep}_SOURCE_DIR}/mingw64/include")
   endif()
 endforeach()
 
