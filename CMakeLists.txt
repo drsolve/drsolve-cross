@@ -298,6 +298,18 @@ list(APPEND _flint_lib_hints
   /opt/homebrew/lib
   /opt/local/lib
 )
+# Pull in lib dirs from all MSYS2-fetched packages so that GMP/MPFR/etc. are found
+foreach(_msys2_dep
+    "mingw-w64-ucrt-x86_64-gmp"
+    "mingw-w64-ucrt-x86_64-mpfr"
+    "mingw-w64-ucrt-x86_64-openblas"
+    "mingw-w64-ucrt-x86_64-gcc-libs"
+    "mingw-w64-ucrt-x86_64-libwinpthread")
+  if(DEFINED ${_msys2_dep}_SOURCE_DIR)
+    list(APPEND _flint_lib_hints     "${${_msys2_dep}_SOURCE_DIR}/ucrt64/lib")
+    list(APPEND _flint_include_hints "${${_msys2_dep}_SOURCE_DIR}/ucrt64/include")
+  endif()
+endforeach()
 
 # 1. Try the official CMake config installed by FLINT >= 3.x
 find_package(FLINT CONFIG QUIET
