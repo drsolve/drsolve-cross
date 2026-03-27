@@ -36,9 +36,27 @@ static void skip_whitespace(parser_state_t *state) {
 
 static void parse_number(parser_state_t *state) {
     size_t start = state->pos;
+    int is_fraction = 0;
+    int is_decimal = 0;
     
     while (!at_end(state) && isdigit(peek(state))) {
         advance(state);
+    }
+    
+    if (!at_end(state) && peek(state) == '.') {
+        is_decimal = 1;
+        advance(state);
+        while (!at_end(state) && isdigit(peek(state))) {
+            advance(state);
+        }
+    }
+    
+    if (!at_end(state) && peek(state) == '/') {
+        is_fraction = 1;
+        advance(state);
+        while (!at_end(state) && isdigit(peek(state))) {
+            advance(state);
+        }
     }
     
     size_t len = state->pos - start;
@@ -46,13 +64,105 @@ static void parse_number(parser_state_t *state) {
     strncpy(state->current.str, state->input + start, len);
     state->current.str[len] = '\0';
 
-    fmpz_t parsed_value;
-    fmpz_init(parsed_value);
+    fmpq_t parsed_value;
+    fmpq_init(parsed_value);
+    
+    int success = 0;
+    
+    if (is_fraction) {
+        char *slash = strchr(state->current.str, '/');
+        if (slash) {
+            *slash = '\0';
+            fmpz_t num, den;
+            fmpz_init(num);
+            fmpz_init(den);
+            if (fmpz_set_str(num, state->current.str, 10) == 0 && 
+                fmpz_set_str(den, slash + 1, 10) == 0 && 
+                !fmpz_is_zero(den)) {
+                fmpq_set_fmpz_frac(parsed_value, num, den);
+                success = 1;
+            }
+            fmpz_clear(num);
+            fmpz_clear(den);
+        }
+    } else if (is_decimal) {
+        char *dot = strchr(state->current.str, '.');
+        if (dot) {
+            size_t decimal_places = strlen(dot + 1);
+            fmpz_t num, den;
+            fmpz_init(num);
+            fmpz_init(den);
+            char *temp_str = (char*) malloc(len + 1);
+            size_t j = 0;
+            for (size_t i = 0; i < len; i++) {
+                if (state->current.str[i] != '.') {
+                    temp_str[j++] = state->current.str[i];
+                }
+            }
+            temp_str[j] = '\0';
+            
+            if (fmpz_set_str(num, temp_str, 10) == 0) {
+                fmpz_set_ui(den, 1);
+                for (size_t i = 0; i < decimal_places; i++) {
+                    fmpz_mul_ui(den, den, 10);
+                }
+                fmpq_set_fmpz_frac(parsed_value, num, den);
+                fmpq_canonicalise(parsed_value);
+                success = 1;
+            }
+            free(temp_str);
+            fmpz_clear(num);
+            fmpz_clear(den);
+        }
+    } else {
+        fmpz_t num;
+        fmpz_init(num);
+        if (fmpz_set_str(num, state->current.str, 10) == 0) {
+            fmpq_set_fmpz(parsed_value, num);
+            success = 1;
+        }
+        fmpz_clear(num);
+    }
 
-    if (fmpz_set_str(parsed_value, state->current.str, 10) == 0) {
-        fq_nmod_set_fmpz(state->current.value, parsed_value, state->ctx);
-        if (fmpz_fits_si(parsed_value)) {
-            state->current.int_value = fmpz_get_si(parsed_value);
+    if (success) {
+        mp_limb_t prime = fq_nmod_ctx_prime(state->ctx);
+        
+        fmpz_t num_mod, den_mod, den_inv;
+        fmpz_init(num_mod);
+        fmpz_init(den_mod);
+        fmpz_init(den_inv);
+        fmpz_t p;
+        fmpz_init(p);
+        fmpz_set_ui(p, prime);
+        
+        fmpz_mod(num_mod, fmpq_numref(parsed_value), p);
+        fmpz_mod(den_mod, fmpq_denref(parsed_value), p);
+        
+        if (fmpz_is_zero(den_mod)) {
+            fprintf(stderr, "Warning: denominator divisible by prime %lu, setting to zero\n", prime);
+            fq_nmod_zero(state->current.value, state->ctx);
+        } else {
+            if (fmpz_invmod(den_inv, den_mod, p)) {
+                fmpz_t coeff_mod;
+                fmpz_init(coeff_mod);
+                fmpz_mul(coeff_mod, num_mod, den_inv);
+                fmpz_mod(coeff_mod, coeff_mod, p);
+                fq_nmod_set_fmpz(state->current.value, coeff_mod, state->ctx);
+                fmpz_clear(coeff_mod);
+            } else {
+                fprintf(stderr, "Warning: cannot invert denominator mod prime %lu, setting to zero\n", prime);
+                fq_nmod_zero(state->current.value, state->ctx);
+            }
+        }
+        
+        fmpz_clear(num_mod);
+        fmpz_clear(den_mod);
+        fmpz_clear(den_inv);
+        fmpz_clear(p);
+        
+        if (fmpz_fits_si(fmpq_numref(parsed_value)) && 
+            fmpz_is_one(fmpq_denref(parsed_value))) {
+            state->current.int_value = fmpz_get_si(fmpq_numref(parsed_value));
             state->current.int_value_valid = 1;
         } else {
             state->current.int_value = 0;
@@ -64,7 +174,7 @@ static void parse_number(parser_state_t *state) {
         fq_nmod_zero(state->current.value, state->ctx);
     }
 
-    fmpz_clear(parsed_value);
+    fmpq_clear(parsed_value);
     state->current.type = TOK_NUMBER;
     
     DEBUG_PRINT("Number: %s (%ld)%s\n", state->current.str, state->current.int_value,
@@ -344,7 +454,7 @@ void parse_expression(parser_state_t *state, fq_mvpoly_t *poly) {
     }
 }
 
-void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, parser_state_t *state) {
+void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *result, parser_state_t *state, FILE *fp_file, int print_to_stdout) {
     if (g_suppress_univariate_root_reporting) {
         return;
     }
@@ -433,11 +543,22 @@ void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, par
         nmod_roots_init(nmod_roots);
         slong num_roots = our_nmod_poly_roots(nmod_roots, nmod_poly, 1);
 
-        printf("\nRoots in %s (degree %ld):\n", var_name, degree);
-        printf("Find %ld roots:\n", num_roots);
-        for (slong i = 0; i < nmod_roots->num; i++) {
-            printf("  Root %ld: %lu (Multiplicity: %ld)\n", i + 1, 
-                   nmod_roots->roots[i], nmod_roots->mult[i]);
+        if (print_to_stdout) {
+            printf("\nRoots in %s (degree %ld):\n", var_name, degree);
+            printf("Find %ld roots:\n", num_roots);
+            for (slong i = 0; i < nmod_roots->num; i++) {
+                printf("  Root %ld: %lu (Multiplicity: %ld)\n", i + 1, 
+                       nmod_roots->roots[i], nmod_roots->mult[i]);
+            }
+        }
+        
+        if (fp_file) {
+            fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+            fprintf(fp_file, "Find %ld roots:\n", num_roots);
+            for (slong i = 0; i < nmod_roots->num; i++) {
+                fprintf(fp_file, "  Root %ld: %lu (Multiplicity: %ld)\n", i + 1, 
+                       nmod_roots->roots[i], nmod_roots->mult[i]);
+            }
         }
         
         nmod_roots_clear(nmod_roots);
@@ -448,12 +569,26 @@ void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, par
         fq_nmod_roots_init(roots, result->ctx);
         slong num_roots = our_fq_nmod_poly_roots(roots, poly, 1, result->ctx);
 
-        printf("\nRoots in %s (degree %ld):\n", var_name, degree);
-        printf("Find %ld roots:\n", num_roots);
-        for (slong i = 0; i < roots->num; i++) {
-            printf("  Root %ld: ", i + 1);
-            fq_nmod_print_pretty(roots->roots + i, result->ctx);
-            printf(" (Multiplicity: %ld)\n", roots->mult[i]);
+        if (print_to_stdout) {
+            printf("\nRoots in %s (degree %ld):\n", var_name, degree);
+            printf("Find %ld roots:\n", num_roots);
+            for (slong i = 0; i < roots->num; i++) {
+                printf("  Root %ld: ", i + 1);
+                fq_nmod_print_pretty(roots->roots + i, result->ctx);
+                printf(" (Multiplicity: %ld)\n", roots->mult[i]);
+            }
+        }
+        
+        if (fp_file) {
+            fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+            fprintf(fp_file, "Find %ld roots:\n", num_roots);
+            for (slong i = 0; i < roots->num; i++) {
+                fprintf(fp_file, "  Root %ld: ", i + 1);
+                char *root_str = fq_nmod_to_string_with_gen(roots->roots + i, result->ctx, get_generator_name(result->ctx));
+                fprintf(fp_file, "%s", root_str);
+                free(root_str);
+                fprintf(fp_file, " (Multiplicity: %ld)\n", roots->mult[i]);
+            }
         }
         
         fq_nmod_roots_clear(roots, result->ctx);
@@ -461,6 +596,10 @@ void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, par
 
     fq_nmod_poly_clear(poly, result->ctx);
     free(par_used);
+}
+
+void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, parser_state_t *state) {
+    find_and_print_roots_of_univariate_resultant_with_file(result, state, NULL, 1);
 }
 
 // Helper functions
@@ -806,11 +945,12 @@ char* fq_mvpoly_to_string(const fq_mvpoly_t *poly, char **par_names, const char 
 
 // Core Dixon Function
 
-// Internal computation function
-char* compute_dixon_internal(const char **poly_strings, slong npoly_strings,
-                           const char **var_names, slong nvars,
-                           const fq_nmod_ctx_t ctx,
-                           char ***remaining_vars, slong *num_remaining) {
+// Internal computation function with file output
+char* compute_dixon_internal_with_file(const char **poly_strings, slong npoly_strings,
+                                       const char **var_names, slong nvars,
+                                       const fq_nmod_ctx_t ctx,
+                                       char ***remaining_vars, slong *num_remaining,
+                                       FILE *fp_file, int print_to_stdout) {
     
     if (npoly_strings != nvars + 1) {
         fprintf(stderr, "Error: Need exactly %ld polynomials for %ld variables\n",
@@ -886,7 +1026,7 @@ char* compute_dixon_internal(const char **poly_strings, slong npoly_strings,
                                  state.var_names, state.par_names, gen_name);
 
     // Find roots with proper parameter names
-    find_and_print_roots_of_univariate_resultant(&dixon_result_poly, &state);
+    find_and_print_roots_of_univariate_resultant_with_file(&dixon_result_poly, &state, fp_file, print_to_stdout);
     
     // Convert result to string with original parameter names
     char *result_string;
@@ -925,6 +1065,14 @@ char* compute_dixon_internal(const char **poly_strings, slong npoly_strings,
     free(gen_name);
     
     return result_string;
+}
+
+// Internal computation function
+char* compute_dixon_internal(const char **poly_strings, slong npoly_strings,
+                           const char **var_names, slong nvars,
+                           const fq_nmod_ctx_t ctx,
+                           char ***remaining_vars, slong *num_remaining) {
+    return compute_dixon_internal_with_file(poly_strings, npoly_strings, var_names, nvars, ctx, remaining_vars, num_remaining, NULL, 1);
 }
 
 // Helper function: remove whitespace from both ends of string
@@ -1514,10 +1662,36 @@ static void qq_select_reconstruction_primes(ulong *primes, slong *num_primes_out
     *num_primes_out = num_primes;
 }
 
-static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
-                                               const char *vars_string,
-                                               qq_poly_recon_t *best_recon_out,
-                                               int *have_best_recon_out) {
+static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_recon_t *acc, FILE *fp_file);
+
+static void save_result_to_file_internal(const char *filename,
+                                        const char *polys_str,
+                                        const char *vars_str,
+                                        const char *result,
+                                        double computation_time)
+{
+    FILE *out_fp = fopen(filename, "w");
+    if (!out_fp) {
+        fprintf(stderr, "Warning: Could not create output file '%s'\n", filename);
+        return;
+    }
+
+    fprintf(out_fp, "Dixon Resultant Computation\n");
+    fprintf(out_fp, "==========================\n");
+    fprintf(out_fp, "Field: Q\n");
+    fprintf(out_fp, "Mode: Basic Dixon resultant\n");
+    fprintf(out_fp, "Variables eliminated: %s\n", vars_str);
+    fprintf(out_fp, "Polynomials: %s\n", polys_str);
+    fprintf(out_fp, "Computation time: %.3f seconds\n", computation_time);
+    fprintf(out_fp, "\nResultant:\n%s\n", result);
+    fclose(out_fp);
+}
+
+static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string,
+                                                          const char *vars_string,
+                                                          qq_poly_recon_t *best_recon_out,
+                                                          int *have_best_recon_out,
+                                                          const char *output_filename) {
     const slong max_primes = 24;
     const slong min_primes_before_stopping = 12;
     const slong stable_rounds_before_stopping = 8;
@@ -1530,6 +1704,7 @@ static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
     char *best_result = NULL;
     int have_best_recon = 0;
     int stable_count = 0;
+    clock_t start_time = clock();
 
     qq_select_reconstruction_primes(primes, &num_primes, max_primes);
 
@@ -1621,6 +1796,26 @@ static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
         best_result = strdup("0");
     }
 
+    printf("Final reconstruction over Q completed.\n");
+    
+    clock_t end_time = clock();
+    double computation_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+    
+    if (output_filename) {
+        save_result_to_file_internal(output_filename, poly_string, vars_string, best_result, computation_time);
+    }
+    
+    FILE *fp_file = NULL;
+    if (output_filename && have_best_recon && strcmp(best_result, "0") != 0) {
+        fp_file = fopen(output_filename, "a");
+        find_and_print_rational_roots_of_univariate_resultant(&best_recon, fp_file);
+        if (fp_file) {
+            fclose(fp_file);
+        }
+    } else if (have_best_recon && strcmp(best_result, "0") != 0) {
+        find_and_print_rational_roots_of_univariate_resultant(&best_recon, NULL);
+    }
+
     if (best_recon_out) {
         *best_recon_out = best_recon;
     } else {
@@ -1635,7 +1830,14 @@ static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
     return best_result;
 }
 
-static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_recon_t *acc) {
+static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
+                                               const char *vars_string,
+                                               qq_poly_recon_t *best_recon_out,
+                                               int *have_best_recon_out) {
+    return qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string, best_recon_out, have_best_recon_out, NULL);
+}
+
+static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_recon_t *acc, FILE *fp_file) {
     slong actual_par_count = 0;
     slong main_par_idx = -1;
     int *par_used;
@@ -1701,45 +1903,42 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
         return;
     }
 
-    if (degree > FMPQ_ROOT_SEARCH_MAX_DEGREE) {
-        printf("\nSkipping rational root search in %s: degree %ld exceeds limit %ld.\n",
-               var_name, degree, (slong)FMPQ_ROOT_SEARCH_MAX_DEGREE);
-        fmpq_poly_clear(rat_poly);
-        free(par_used);
-        return;
+    fmpq_acb_roots_t all_roots;
+    fmpq_acb_roots_init(&all_roots);
+    slong prec = 64;
+    fmpq_poly_real_roots(&all_roots, rat_poly, prec);
+    
+    printf("\nRoots in %s (degree %ld):\n", var_name, degree);
+    fmpq_acb_roots_print_real(&all_roots);
+    
+    if (fp_file) {
+        fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+        fmpq_acb_roots_print_all_to_file(fp_file, &all_roots);
     }
+    
+    fmpq_acb_roots_clear(&all_roots);
 
-    fmpq_roots_t roots;
-    fmpq_roots_init(&roots);
-
-    slong num_roots = fmpq_poly_roots(&roots, rat_poly, 1);
-
-    if (num_roots > 0) {
-        printf("\nRoots in %s (degree %ld):\n", var_name, degree);
-        fmpq_roots_print(&roots);
-    }
-
-    fmpq_roots_clear(&roots);
     fmpq_poly_clear(rat_poly);
     free(par_used);
 }
 
-char* dixon_str_rational(const char *poly_string,
-                         const char *vars_string) {
+char* dixon_str_rational_with_file(const char *poly_string,
+                                    const char *vars_string,
+                                    const char *output_filename) {
     qq_poly_recon_t best_recon;
     char *best_result;
     int have_best_recon = 0;
 
-    best_result = qq_reconstruct_from_modular_dixon(poly_string, vars_string,
-                                                    &best_recon, &have_best_recon);
+    best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
+                                                              &best_recon, &have_best_recon, output_filename);
     
-    printf("Final reconstruction over Q completed.\n");
-    
-    if (have_best_recon && strcmp(best_result, "0") != 0) {
-        find_and_print_rational_roots_of_univariate_resultant(&best_recon);
-    }
     qq_poly_recon_clear(&best_recon);
     return best_result;
+}
+
+char* dixon_str_rational(const char *poly_string,
+                         const char *vars_string) {
+    return dixon_str_rational_with_file(poly_string, vars_string, NULL);
 }
 
 char* dixon_str_large_prime(const char *poly_string,
@@ -1775,9 +1974,10 @@ char* dixon_str_large_prime(const char *poly_string,
 
 // Unified Dixon function - accepts array of polynomial strings
 // Returns result as string, optionally outputs remaining variables
-char* dixon(const char **poly_strings, slong num_polys, 
-            const char **elim_vars, slong num_elim_vars,
-            const fq_nmod_ctx_t ctx) {
+char* dixon_with_file(const char **poly_strings, slong num_polys, 
+                       const char **elim_vars, slong num_elim_vars,
+                       const fq_nmod_ctx_t ctx,
+                       FILE *fp_file, int print_to_stdout) {
 
     clock_t start = clock();
     /*
@@ -1789,9 +1989,10 @@ char* dixon(const char **poly_strings, slong num_polys,
     char **remaining_vars = NULL;
     slong num_remaining = 0;
     
-    char *result = compute_dixon_internal(poly_strings, num_polys, 
-                                         elim_vars, num_elim_vars, ctx,
-                                         &remaining_vars, &num_remaining);
+    char *result = compute_dixon_internal_with_file(poly_strings, num_polys, 
+                                                    elim_vars, num_elim_vars, ctx,
+                                                    &remaining_vars, &num_remaining,
+                                                    fp_file, print_to_stdout);
     
     // Cleanup remaining vars
     if (remaining_vars) {
@@ -1804,8 +2005,13 @@ char* dixon(const char **poly_strings, slong num_polys,
     clock_t end = clock();
     (void) end;
     (void) start;
-
     return result;
+}
+
+char* dixon(const char **poly_strings, slong num_polys, 
+            const char **elim_vars, slong num_elim_vars,
+            const fq_nmod_ctx_t ctx) {
+    return dixon_with_file(poly_strings, num_polys, elim_vars, num_elim_vars, ctx, NULL, 1);
 }
 
 // Implementation using unified_mpoly_resultant
@@ -2138,9 +2344,11 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     return result_string;
 }
 
-char* dixon_str(const char *poly_string,
-                const char *vars_string,
-                const fq_nmod_ctx_t ctx) {
+char* dixon_str_with_file(const char *poly_string,
+                          const char *vars_string,
+                          const fq_nmod_ctx_t ctx,
+                          FILE *fp_file,
+                          int print_to_stdout) {
 
     slong num_polys, num_vars;
     char **poly_array = split_string(poly_string, &num_polys);
@@ -2148,24 +2356,129 @@ char* dixon_str(const char *poly_string,
     
     char *result = NULL;
     
-    if (num_polys == 2 && num_vars == 1) {
-        result = bivariate_resultant(poly_array[0], poly_array[1], 
-                                     vars_array[0], ctx);        
-    } else {
-        const char **poly_strings = (const char**) malloc(num_polys * sizeof(char*));
-        const char **elim_vars   = (const char**) malloc(num_vars  * sizeof(char*));
+    const char **poly_strings = (const char**) malloc(num_polys * sizeof(char*));
+    const char **elim_vars   = (const char**) malloc(num_vars  * sizeof(char*));
+    
+    for (slong i = 0; i < num_polys; i++) poly_strings[i] = poly_array[i];
+    for (slong i = 0; i < num_vars;  i++) elim_vars[i]    = vars_array[i];
+    
+    result = dixon_with_file(poly_strings, num_polys, elim_vars, num_vars, ctx, fp_file, print_to_stdout);
         
-        for (slong i = 0; i < num_polys; i++) poly_strings[i] = poly_array[i];
-        for (slong i = 0; i < num_vars;  i++) elim_vars[i]    = vars_array[i];
-        
-        result = dixon(poly_strings, num_polys, elim_vars, num_vars, ctx);
-        
-        free(poly_strings);
-        free(elim_vars);
-    }
+    free(poly_strings);
+    free(elim_vars);
     
     free_split_strings(poly_array, num_polys);
     free_split_strings(vars_array, num_vars);
     
     return result;
+}
+
+char* dixon_str(const char *poly_string,
+                const char *vars_string,
+                const fq_nmod_ctx_t ctx) {
+    return dixon_str_with_file(poly_string, vars_string, ctx, NULL, 1);
+}
+
+void append_roots_to_file_from_result(const char *result_str,
+                                       const char *polys_str,
+                                       const char *vars_str,
+                                       const fq_nmod_ctx_t ctx,
+                                       FILE *fp_file) {
+    if (!result_str || !fp_file) {
+        return;
+    }
+    
+    slong num_polys, num_vars;
+    char **poly_array = split_string(polys_str, &num_polys);
+    char **vars_array = split_string(vars_str, &num_vars);
+    
+    // Get generator name
+    char *gen_name = get_generator_name(ctx);
+    
+    // Initialize parser state
+    parser_state_t state = {0};
+    state.var_names = (char**) malloc(num_vars * sizeof(char*));
+    for (slong i = 0; i < num_vars; i++) {
+        state.var_names[i] = strdup(vars_array[i]);
+    }
+    state.nvars = num_vars;
+    state.npars = 0;
+    state.max_pars = 16;
+    state.par_names = (char**) malloc(state.max_pars * sizeof(char*));
+    state.ctx = ctx;
+    state.current.str = NULL;
+    fq_nmod_init(state.current.value, ctx);
+    state.generator_name = strdup(gen_name);
+    
+    // First pass: identify parameters
+    for (slong i = 0; i < num_polys; i++) {
+        fq_mvpoly_t temp;
+        fq_mvpoly_init(&temp, num_vars, state.max_pars, ctx);
+        
+        state.input = poly_array[i];
+        state.pos = 0;
+        state.len = strlen(poly_array[i]);
+        next_token(&state);
+        
+        parse_expression(&state, &temp);
+        fq_mvpoly_clear(&temp);
+    }
+    
+    // Parse the result string into a polynomial
+    fq_mvpoly_t result_poly;
+    fq_mvpoly_init(&result_poly, 0, state.npars, ctx);
+    
+    parser_state_t parse_state = {0};
+    parse_state.input = result_str;
+    parse_state.pos = 0;
+    parse_state.len = strlen(result_str);
+    parse_state.var_names = NULL;
+    parse_state.nvars = 0;
+    parse_state.npars = state.npars;
+    parse_state.max_pars = FLINT_MAX(state.npars, 16);
+    parse_state.par_names = (char**) malloc((size_t) parse_state.max_pars * sizeof(char*));
+    for (slong i = 0; i < state.npars; i++) {
+        parse_state.par_names[i] = strdup(state.par_names[i]);
+    }
+    parse_state.ctx = ctx;
+    parse_state.current.str = NULL;
+    fq_nmod_init(parse_state.current.value, ctx);
+    parse_state.generator_name = NULL;
+    
+    next_token(&parse_state);
+    parse_expression(&parse_state, &result_poly);
+    
+    // Find and append roots to file
+    find_and_print_roots_of_univariate_resultant_with_file(&result_poly, &state, fp_file, 0);
+    
+    // Cleanup
+    fq_mvpoly_clear(&result_poly);
+    
+    for (slong i = 0; i < num_vars; i++) {
+        free(state.var_names[i]);
+    }
+    free(state.var_names);
+    
+    for (slong i = 0; i < state.npars; i++) {
+        free(state.par_names[i]);
+    }
+    free(state.par_names);
+    
+    if (state.generator_name) {
+        free(state.generator_name);
+    }
+    fq_nmod_clear(state.current.value, ctx);
+    
+    for (slong i = 0; i < parse_state.npars; i++) {
+        free(parse_state.par_names[i]);
+    }
+    free(parse_state.par_names);
+    fq_nmod_clear(parse_state.current.value, ctx);
+    if (parse_state.current.str) {
+        free(parse_state.current.str);
+    }
+    
+    free(gen_name);
+    free_split_strings(poly_array, num_polys);
+    free_split_strings(vars_array, num_vars);
 }

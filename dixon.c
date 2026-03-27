@@ -2184,7 +2184,11 @@ int main(int argc, char *argv[])
         }
 
         if (rational_mode) {
-            result = dixon_str_rational(polys_str, vars_str);
+            if (output_filename) {
+                result = dixon_str_rational_with_file(polys_str, vars_str, output_filename);
+            } else {
+                result = dixon_str_rational(polys_str, vars_str);
+            }
         } else if (large_prime_mode) {
             result = dixon_str_large_prime(polys_str, vars_str, p_fmpz);
         } else {
@@ -2228,10 +2232,19 @@ int main(int argc, char *argv[])
         }
     } else {
         if (result) {
-            if (output_filename) {
+            if (output_filename && !rational_mode) {
                 save_result_to_file(output_filename, polys_str, vars_str,
                                     ideal_str, allvars_str, p_fmpz, power,
                                     result, computation_time);
+                if (!silent_mode)
+                    printf("\nResult saved to: %s\n", output_filename);
+                
+                FILE *fp_append = fopen(output_filename, "a");
+                if (fp_append) {
+                    append_roots_to_file_from_result(result, polys_str, vars_str, ctx, fp_append);
+                    fclose(fp_append);
+                }
+            } else if (output_filename && rational_mode) {
                 if (!silent_mode)
                     printf("\nResult saved to: %s\n", output_filename);
             }
