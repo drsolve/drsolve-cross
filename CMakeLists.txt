@@ -365,10 +365,18 @@ endif()
 # Find OpenBLAS  (Windows only, optional on others)
 # ============================================================
 if(DIXONRES_WINDOWS)
+  set(_openblas_hints "")
+  if(DEFINED mingw-w64-x86_64-openblas_SOURCE_DIR)
+    list(APPEND _openblas_hints "${mingw-w64-x86_64-openblas_SOURCE_DIR}/mingw64/lib")
+  endif()
+  list(APPEND _openblas_hints "${FLINT_ROOT}/lib" "${CMAKE_SOURCE_DIR}/third_party/flint/lib")
+  
   find_library(OPENBLAS_LIBRARY NAMES openblas
-    HINTS "${FLINT_ROOT}/lib" "${CMAKE_SOURCE_DIR}/third_party/flint/lib")
+    HINTS ${_openblas_hints})
   if(NOT OPENBLAS_LIBRARY)
     message(WARNING "OpenBLAS not found; linking may fail on Windows.")
+  else()
+    message(STATUS "OpenBLAS found: ${OPENBLAS_LIBRARY}")
   endif()
 endif()
 
