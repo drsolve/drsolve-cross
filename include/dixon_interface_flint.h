@@ -15,6 +15,7 @@
 #include <flint/fq_nmod_poly_factor.h>
 #include "unified_mpoly_resultant.h"
 #include "fq_nmod_roots.h"
+#include "fmpq_acb_roots.h"
 #include "fq_mvpoly.h"
 #include "dixon_flint.h"
 // Debug switch

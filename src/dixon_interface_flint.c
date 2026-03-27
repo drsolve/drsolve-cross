@@ -1701,148 +1701,25 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
         return;
     }
 
-    if (degree > QQ_ROOT_SEARCH_MAX_DEGREE) {
+    if (degree > FMPQ_ROOT_SEARCH_MAX_DEGREE) {
         printf("\nSkipping rational root search in %s: degree %ld exceeds limit %ld.\n",
-               var_name, degree, QQ_ROOT_SEARCH_MAX_DEGREE);
+               var_name, degree, (slong)FMPQ_ROOT_SEARCH_MAX_DEGREE);
         fmpq_poly_clear(rat_poly);
         free(par_used);
         return;
     }
 
-    fmpz_poly_t int_poly, prim_poly, num_divs, den_divs;
-    fmpz_t common_den, content, abs_const, abs_lead, coeff, gcd_nd;
-    slong zero_mult = 0;
-    slong num_roots = 0;
-    char **root_strings = NULL;
-    slong roots_alloc = 0;
+    fmpq_roots_t roots;
+    fmpq_roots_init(&roots);
 
-    fmpz_poly_init(int_poly);
-    fmpz_poly_init(prim_poly);
-    fmpz_poly_init(num_divs);
-    fmpz_poly_init(den_divs);
-    fmpz_init(common_den);
-    fmpz_init(content);
-    fmpz_init(abs_const);
-    fmpz_init(abs_lead);
-    fmpz_init(coeff);
-    fmpz_init(gcd_nd);
+    slong num_roots = fmpq_poly_roots(&roots, rat_poly, 1);
 
-    fmpq_poly_get_numerator(int_poly, rat_poly);
-    fmpq_poly_get_denominator(common_den, rat_poly);
-
-    fmpz_poly_content(content, int_poly);
-    if (fmpz_is_zero(content)) {
-        goto rational_cleanup;
+    if (num_roots > 0) {
+        printf("\nRoots in %s (degree %ld):\n", var_name, degree);
+        fmpq_roots_print(&roots);
     }
 
-    fmpz_poly_scalar_divexact_fmpz(prim_poly, int_poly, content);
-
-    fmpz_poly_get_coeff_fmpz(coeff, prim_poly, fmpz_poly_degree(prim_poly));
-    if (fmpz_sgn(coeff) < 0) {
-        fmpz_poly_neg(prim_poly, prim_poly);
-    }
-
-    while (zero_mult <= fmpz_poly_degree(prim_poly)) {
-        fmpz_poly_get_coeff_fmpz(coeff, prim_poly, zero_mult);
-        if (!fmpz_is_zero(coeff)) break;
-        zero_mult++;
-    }
-
-    if (zero_mult > 0) {
-        if (num_roots >= roots_alloc) {
-            roots_alloc = roots_alloc ? 2 * roots_alloc : 4;
-            root_strings = (char**) realloc(root_strings, (size_t) roots_alloc * sizeof(char*));
-        }
-        root_strings[num_roots++] = strdup("0");
-    }
-
-    if (zero_mult <= fmpz_poly_degree(prim_poly)) {
-        fmpq_t candidate, value;
-
-        fmpq_init(candidate);
-        fmpq_init(value);
-
-        fmpz_poly_get_coeff_fmpz(abs_const, prim_poly, zero_mult);
-        fmpz_abs(abs_const, abs_const);
-        fmpz_poly_get_coeff_fmpz(abs_lead, prim_poly, fmpz_poly_degree(prim_poly));
-        fmpz_abs(abs_lead, abs_lead);
-
-        arith_divisors(num_divs, abs_const);
-        arith_divisors(den_divs, abs_lead);
-
-        slong candidate_count = 2 * fmpz_poly_length(num_divs) * fmpz_poly_length(den_divs);
-        if (candidate_count > QQ_ROOT_SEARCH_MAX_CANDIDATES) {
-            printf("\nSkipping rational root search in %s: %ld candidates exceed limit %ld.\n",
-                   var_name, candidate_count, QQ_ROOT_SEARCH_MAX_CANDIDATES);
-            fmpq_clear(candidate);
-            fmpq_clear(value);
-            goto rational_cleanup;
-        }
-
-        for (slong i = 0; i < fmpz_poly_length(num_divs); i++) {
-            fmpz_t num;
-            fmpz_init(num);
-            fmpz_poly_get_coeff_fmpz(num, num_divs, i);
-
-            for (slong j = 0; j < fmpz_poly_length(den_divs); j++) {
-                fmpz_t den;
-                fmpz_init(den);
-                fmpz_poly_get_coeff_fmpz(den, den_divs, j);
-
-                fmpz_gcd(gcd_nd, num, den);
-                if (fmpz_is_one(gcd_nd)) {
-                    for (int sign = -1; sign <= 1; sign += 2) {
-                        char *root_str;
-
-                        if (sign < 0) fmpz_neg(num, num);
-                        fmpq_set_fmpz_frac(candidate, num, den);
-                        fmpq_canonicalise(candidate);
-                        fmpq_poly_evaluate_fmpq(value, rat_poly, candidate);
-
-                        if (fmpq_is_zero(value)) {
-                            if (num_roots >= roots_alloc) {
-                                roots_alloc = roots_alloc ? 2 * roots_alloc : 4;
-                                root_strings = (char**) realloc(root_strings, (size_t) roots_alloc * sizeof(char*));
-                            }
-                            root_str = fmpq_get_str(NULL, 10, candidate);
-                            root_strings[num_roots++] = strdup(root_str);
-                            flint_free(root_str);
-                        }
-                        if (sign < 0) fmpz_neg(num, num);
-                    }
-                }
-
-                fmpz_clear(den);
-            }
-
-            fmpz_clear(num);
-        }
-
-        fmpq_clear(candidate);
-        fmpq_clear(value);
-    }
-
-    printf("\nRoots in %s (degree %ld):\n", var_name, degree);
-    printf("Find %ld roots:\n", num_roots);
-    for (slong i = 0; i < num_roots; i++) {
-        printf("  Root %ld: %s\n", i + 1, root_strings[i]);
-    }
-
-rational_cleanup:
-    if (root_strings) {
-        for (slong i = 0; i < num_roots; i++) free(root_strings[i]);
-        free(root_strings);
-    }
-    fmpz_poly_clear(int_poly);
-    fmpz_poly_clear(prim_poly);
-    fmpz_poly_clear(num_divs);
-    fmpz_poly_clear(den_divs);
-    fmpz_clear(common_den);
-    fmpz_clear(content);
-    fmpz_clear(abs_const);
-    fmpz_clear(abs_lead);
-    fmpz_clear(coeff);
-    fmpz_clear(gcd_nd);
+    fmpq_roots_clear(&roots);
     fmpq_poly_clear(rat_poly);
     free(par_used);
 }
