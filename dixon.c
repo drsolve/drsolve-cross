@@ -23,7 +23,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.1.1"
+#define PROGRAM_VERSION "0.1.2"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
