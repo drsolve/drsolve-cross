@@ -2074,7 +2074,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     
     if (d_poly.nterms <= 100) {
         printf("Dixon polynomial: %ld terms\n", d_poly.nterms);
-        fq_mvpoly_print_with_names(&d_poly, "Dixon", var_names, par_names, gen_name, 1);
+        fq_mvpoly_print_with_names(&d_poly, "DixonPoly", var_names, par_names, gen_name, 1);
     } else {
         printf("Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
