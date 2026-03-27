@@ -150,8 +150,12 @@
 /* Define the following to what optimization pragmas your compiler allows. */
 #define PUSH_OPTIONS _Pragma("GCC push_options")
 #define POP_OPTIONS
+#ifndef OPTIMIZE_O2
 #define OPTIMIZE_O2 _Pragma("GCC optimize (\"O2\")")
+#endif
+#ifndef OPTIMIZE_OSIZE
 #define OPTIMIZE_OSIZE _Pragma("GCC optimize (\"Os\")")
+#endif
 #define OPTIMIZE_UNROLL_LOOPS _Pragma("GCC optimize (\"unroll-loops\")")
 
 /* Define to 1 if all of the C90 standard headers exist (not just the ones

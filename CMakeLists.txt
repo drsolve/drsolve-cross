@@ -76,12 +76,7 @@ if(DIXONRES_WINDOWS_CROSS AND DIXONRES_USE_BUNDLED_DEPS AND NOT FLINT_ROOT)
     set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/flint")
   endif()
 endif()
-if(DIXONRES_WINDOWS AND DIXONRES_ENABLE_PML AND NOT PML_ROOT)
-  # PML is not available in MSYS2; always use bundled if available
-  if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/pml/src/pml.h")
-    set(PML_ROOT "${CMAKE_SOURCE_DIR}/third_party/pml")
-  endif()
-endif()
+
 
 # ============================================================
 # Fetch MSYS2 packages for cross-compilation (when not using bundled deps)
@@ -200,24 +195,7 @@ if(DIXONRES_WINDOWS_CROSS AND NOT DIXONRES_USE_BUNDLED_DEPS)
     endforeach()
   endif()
   
-  # Also copy PML DLLs if available
-  if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/pml/lib")
-    file(GLOB PML_DLLS "${CMAKE_SOURCE_DIR}/third_party/pml/lib/*.dll")
-    if(PML_DLLS)
-      if(NOT TARGET copy_msys2_dlls)
-        add_custom_target(copy_msys2_dlls ALL
-          COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/dll"
-          COMMENT "Preparing DLL directory..."
-        )
-      endif()
-      add_custom_command(TARGET copy_msys2_dlls POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${PML_DLLS}
-                "${CMAKE_BINARY_DIR}/dll/"
-        COMMENT "Copying PML DLLs..."
-      )
-    endif()
-  endif()
+
 endif()
 
 # ============================================================
@@ -281,10 +259,8 @@ set(_flint_lib_hints
 if(DIXONRES_WINDOWS)
   list(PREPEND _flint_include_hints
     "${CMAKE_SOURCE_DIR}/third_party/mingw/include"
-    "${CMAKE_SOURCE_DIR}/third_party/flint/include"
   )
   list(PREPEND _flint_lib_hints
-    "${CMAKE_SOURCE_DIR}/third_party/flint/lib"
     "${CMAKE_SOURCE_DIR}/third_party/mingw/lib"
   )
 endif()
@@ -397,61 +373,145 @@ if(DIXONRES_WINDOWS)
 endif()
 
 # ============================================================
-# Find PML  (optional)
+# Find PML or build from source  (optional)
 # ============================================================
 set(PML_AVAILABLE FALSE)
 
 if(DIXONRES_ENABLE_PML)
-  find_path(PML_INCLUDE_DIR
-    NAMES pml.h pml/pml.h
-    HINTS "${PML_ROOT}/include"
-          /usr/local/include
-          /opt/homebrew/include
-  )
+  set(PML_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/pml")
+  
+  # For Linux: first try to find pre-installed PML library
+  if(NOT DIXONRES_WINDOWS)
+    find_path(PML_INCLUDE_DIR
+      NAMES pml.h pml/pml.h
+      HINTS "${PML_ROOT}/include"
+            /usr/local/include
+            /opt/homebrew/include
+    )
 
-  if(DIXONRES_STATIC)
-    find_library(PML_LIBRARY NAMES libpml.a
-      HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
-  else()
-    find_library(PML_LIBRARY NAMES pml
-      HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
-  endif()
-
-  if(PML_INCLUDE_DIR AND PML_LIBRARY)
-    # Determine correct include sub-path for nmod_poly_mat_utils.h
-    if(EXISTS "${PML_INCLUDE_DIR}/nmod_poly_mat_utils.h")
-      set(_pml_extra_inc "")          # flat layout: headers directly in PML_INCLUDE_DIR
-    elseif(EXISTS "${PML_INCLUDE_DIR}/pml/nmod_poly_mat_utils.h")
-      set(_pml_extra_inc "${PML_INCLUDE_DIR}/pml")  # subdirectory layout
+    if(DIXONRES_STATIC)
+      find_library(PML_LIBRARY NAMES libpml.a
+        HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
     else()
-      message(STATUS "PML: nmod_poly_mat_utils.h not found under ${PML_INCLUDE_DIR} -- disabling PML")
-      set(PML_LIBRARY "")
+      find_library(PML_LIBRARY NAMES pml
+        HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
     endif()
 
-    if(PML_LIBRARY)
-      if(NOT EXISTS "${PML_INCLUDE_DIR}/config.h" AND
-         NOT EXISTS "${PML_INCLUDE_DIR}/pml/config.h")
-        message(STATUS "PML: config.h not found under ${PML_INCLUDE_DIR} -- disabling PML")
+    if(PML_INCLUDE_DIR AND PML_LIBRARY)
+      # Determine correct include sub-path for nmod_poly_mat_utils.h
+      set(_pml_extra_inc "")
+      if(EXISTS "${PML_INCLUDE_DIR}/nmod_poly_mat_utils.h")
+        set(_pml_extra_inc "")
+      elseif(EXISTS "${PML_INCLUDE_DIR}/pml/nmod_poly_mat_utils.h")
+        set(_pml_extra_inc "${PML_INCLUDE_DIR}/pml")
+      else()
+        message(STATUS "PML: nmod_poly_mat_utils.h not found under ${PML_INCLUDE_DIR}")
         set(PML_LIBRARY "")
       endif()
+
+      if(PML_LIBRARY)
+        if(NOT EXISTS "${PML_INCLUDE_DIR}/config.h" AND
+           NOT EXISTS "${PML_INCLUDE_DIR}/pml/config.h")
+          message(STATUS "PML: config.h not found under ${PML_INCLUDE_DIR}")
+          set(PML_LIBRARY "")
+        endif()
+      endif()
+    endif()
+
+    if(PML_INCLUDE_DIR AND PML_LIBRARY)
+      set(PML_AVAILABLE TRUE)
+      message(STATUS "PML: ${PML_LIBRARY}")
+
+      add_library(PML::PML UNKNOWN IMPORTED GLOBAL)
+      set_target_properties(PML::PML PROPERTIES
+        IMPORTED_LOCATION             "${PML_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${PML_INCLUDE_DIR}"
+        INTERFACE_COMPILE_DEFINITIONS "HAVE_PML"
+      )
+      if(_pml_extra_inc)
+        set_property(TARGET PML::PML APPEND PROPERTY
+          INTERFACE_INCLUDE_DIRECTORIES "${_pml_extra_inc}")
+      endif()
+    else()
+      message(STATUS "PML: pre-installed library not found, trying to build from source...")
     endif()
   endif()
 
-  if(PML_INCLUDE_DIR AND PML_LIBRARY)
-    set(PML_AVAILABLE TRUE)
-    message(STATUS "PML: ${PML_LIBRARY}")
-
-    add_library(PML::PML UNKNOWN IMPORTED GLOBAL)
-    set_target_properties(PML::PML PROPERTIES
-      IMPORTED_LOCATION             "${PML_LIBRARY}"
-      INTERFACE_INCLUDE_DIRECTORIES "${PML_INCLUDE_DIR}"
-      INTERFACE_COMPILE_DEFINITIONS "HAVE_PML"
+  # If not found on Linux, or for Windows, build from source
+  if(NOT PML_AVAILABLE AND EXISTS "${PML_SOURCE_DIR}/src/pml.h")
+    message(STATUS "Building PML from source...")
+    
+    # Collect PML source files (exclude test, profile, timing, and mapml)
+    file(GLOB_RECURSE PML_SOURCES
+      "${PML_SOURCE_DIR}/src/fmpz_extra/*.c"
+      "${PML_SOURCE_DIR}/src/fmpz_mat_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod32_vec/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_vec_extra/*.c"
+      "${PML_SOURCE_DIR}/src/sagemath_extra/*.c"
     )
-    if(_pml_extra_inc)
-      set_property(TARGET PML::PML APPEND PROPERTY
-        INTERFACE_INCLUDE_DIRECTORIES "${_pml_extra_inc}")
+    
+    # Filter out test, profile, and timing files
+    set(PML_FILTERED_SOURCES "")
+    foreach(_src ${PML_SOURCES})
+      if(NOT _src MATCHES "/test/" AND NOT _src MATCHES "/profile/" AND NOT _src MATCHES "/timings/")
+        list(APPEND PML_FILTERED_SOURCES ${_src})
+      endif()
+    endforeach()
+    
+    # Create PML library target
+    add_library(pml STATIC ${PML_FILTERED_SOURCES})
+    
+    # PML include directories
+    target_include_directories(pml PUBLIC
+      "${PML_SOURCE_DIR}/src"
+    )
+    
+    # Link PML with FLINT, GMP, MPFR, and pthread
+    target_link_libraries(pml PUBLIC FLINT::FLINT ${GMP_LIBRARY} ${MPFR_LIBRARY})
+    if(NOT DIXONRES_WINDOWS)
+      target_link_libraries(pml PUBLIC pthread)
     endif()
-  else()
+    
+    # PML compile definitions - avoid conflicting with FLINT's macros
+    target_compile_definitions(pml PUBLIC
+      HAVE_PML
+      PACKAGE_NAME="PML"
+      PACKAGE_VERSION="0.0.5-dev"
+      PACKAGE_STRING="PML 0.0.5-dev"
+      PACKAGE_BUGREPORT="https://github.com/vneiger/pml/issues/"
+      STDC_HEADERS=1
+      FLINT_UNROLL_LOOPS=1
+      PML_USES_PTHREAD=1
+      PML_USES_TLS=1
+      PML_WANT_GMP_INTERNALS=1
+      PML_WANT_PRETTY_TESTS=1
+      PML_HAVE_MACHINE_VECTORS=0
+    )
+    
+    # Platform-specific definitions
+    if(DIXONRES_WINDOWS)
+      target_compile_definitions(pml PUBLIC HAVE_WINDOWS_H=1)
+    else()
+      target_compile_definitions(pml PUBLIC
+        HAVE_ALLOCA_H=1
+        HAVE_DLFCN_H=1
+        HAVE_MALLOC_H=1
+        HAVE_SYS_PARAM_H=1
+        HAVE_UNISTD_H=1
+        HAVE_ALIGNED_ALLOC=1
+      )
+    endif()
+    
+    # Create alias target
+    add_library(PML::PML ALIAS pml)
+    set(PML_AVAILABLE TRUE)
+    message(STATUS "PML: building from source")
+  elseif(NOT PML_AVAILABLE)
     message(STATUS "PML: not found (optional) -- building without PML support")
   endif()
 endif()
@@ -676,33 +736,22 @@ if(DIXONRES_WINDOWS AND DIXONRES_BUILD_GUI)
 
   # Copy runtime DLLs:
   # - For native MSYS2 builds: don't copy (deps come from pacman)
-  # - For cross-compile with bundled deps: copy from runtime/ and PML
+  # - For cross-compile with bundled deps: copy from runtime/
   # - For cross-compile without bundled deps: DLLs are copied via copy_msys2_dlls target
   if(DIXONRES_USE_BUNDLED_DEPS)
     file(GLOB _runtime_dlls "${CMAKE_SOURCE_DIR}/runtime/*.dll")
-    file(GLOB _pml_dlls "${CMAKE_SOURCE_DIR}/third_party/pml/lib/*.dll")
-    if(_runtime_dlls OR _pml_dlls)
+    if(_runtime_dlls)
       add_custom_command(TARGET dixon_exe POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/dll"
         COMMENT "Copying bundled runtime DLLs → dll/"
         VERBATIM
       )
-      if(_runtime_dlls)
-        add_custom_command(TARGET dixon_exe POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                  ${_runtime_dlls} "${CMAKE_BINARY_DIR}/dll/"
-          COMMENT "Copying runtime DLLs..."
-          VERBATIM
-        )
-      endif()
-      if(_pml_dlls)
-        add_custom_command(TARGET dixon_exe POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                  ${_pml_dlls} "${CMAKE_BINARY_DIR}/dll/"
-          COMMENT "Copying PML DLLs..."
-          VERBATIM
-        )
-      endif()
+      add_custom_command(TARGET dixon_exe POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${_runtime_dlls} "${CMAKE_BINARY_DIR}/dll/"
+        COMMENT "Copying runtime DLLs..."
+        VERBATIM
+      )
     endif()
   elseif(TARGET copy_msys2_dlls)
     # Make sure copy_msys2_dlls runs before building dixon_exe
