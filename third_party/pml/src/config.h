@@ -136,27 +136,53 @@
 
 /* Define the following to what diagnostic pragmas your compiler allows.
    These are used to silence certain warnings. */
+#ifndef DIAGNOSTIC_PUSH
 #define DIAGNOSTIC_PUSH _Pragma("GCC diagnostic push")
+#endif
+#ifndef DIAGNOSTIC_POP
 #define DIAGNOSTIC_POP _Pragma("GCC diagnostic pop")
+#endif
+#ifndef DIAGNOSTIC_IGNORE_INCOMPATIBLE_FUNCTION_POINTER_TYPES
 #define DIAGNOSTIC_IGNORE_INCOMPATIBLE_FUNCTION_POINTER_TYPES
+#endif
+#ifndef DIAGNOSTIC_IGNORE_DISCARDED_QUALIFIERS
 #define DIAGNOSTIC_IGNORE_DISCARDED_QUALIFIERS _Pragma("GCC diagnostic ignored \"-Wdiscarded-qualifiers\"")
+#endif
+#ifndef DIAGNOSTIC_IGNORE_FORMAT
 #define DIAGNOSTIC_IGNORE_FORMAT _Pragma("GCC diagnostic ignored \"-Wformat\"")
+#endif
+#ifndef DIAGNOSTIC_IGNORE_DANGLING_POINTER
 #define DIAGNOSTIC_IGNORE_DANGLING_POINTER
+#endif
+#ifndef DIAGNOSTIC_IGNORE_CAST_FUNCTION_TYPE
 #define DIAGNOSTIC_IGNORE_CAST_FUNCTION_TYPE _Pragma("GCC diagnostic ignored \"-Wcast-function-type\"")
+#endif
+#ifndef DIAGNOSTIC_IGNORE_OVERLENGTH_STRINGS
 #define DIAGNOSTIC_IGNORE_OVERLENGTH_STRINGS _Pragma("GCC diagnostic ignored \"-Woverlength-strings\"")
+#endif
+#ifndef DIAGNOSTIC_IGNORE_UNUSED_VARIABLE
 #define DIAGNOSTIC_IGNORE_UNUSED_VARIABLE _Pragma("GCC diagnostic ignored \"-Wunused-variable\"")
+#endif
+#ifndef DIAGNOSTIC_IGNORE_MAYBE_UNINITIALIZED
 #define DIAGNOSTIC_IGNORE_MAYBE_UNINITIALIZED _Pragma("GCC diagnostic ignored \"-Wmaybe-uninitialized\"")
+#endif
 
 /* Define the following to what optimization pragmas your compiler allows. */
+#ifndef PUSH_OPTIONS
 #define PUSH_OPTIONS _Pragma("GCC push_options")
+#endif
+#ifndef POP_OPTIONS
 #define POP_OPTIONS
+#endif
 #ifndef OPTIMIZE_O2
 #define OPTIMIZE_O2 _Pragma("GCC optimize (\"O2\")")
 #endif
 #ifndef OPTIMIZE_OSIZE
 #define OPTIMIZE_OSIZE _Pragma("GCC optimize (\"Os\")")
 #endif
+#ifndef OPTIMIZE_UNROLL_LOOPS
 #define OPTIMIZE_UNROLL_LOOPS _Pragma("GCC optimize (\"unroll-loops\")")
+#endif
 
 /* Define to 1 if all of the C90 standard headers exist (not just the ones
    required in a freestanding environment). This macro is provided for
