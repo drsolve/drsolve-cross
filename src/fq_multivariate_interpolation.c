@@ -10,6 +10,7 @@ extern int g_field_equation_reduction;
 
 // Global control for parallelization
 int USE_PARALLEL = 1;
+int g_interpolation_threads = -1;  // -1 means use default
 
 static ulong interp_field_size_q(const fq_nmod_ctx_t ctx) {
     mp_limb_t p = fq_nmod_ctx_prime(ctx);
@@ -149,7 +150,17 @@ void fq_interpolation_use_half_threads(void) {
     int max_threads = omp_get_max_threads();
     int half_threads = (max_threads + 1) / 2;
     omp_set_num_threads(half_threads);
+    g_interpolation_threads = half_threads;
     //printf("Using %d threads (half of %d available)\n", half_threads, max_threads);
+    #endif
+}
+
+void fq_interpolation_set_threads(int num_threads) {
+    g_interpolation_threads = num_threads;
+    #ifdef _OPENMP
+    if (num_threads > 0) {
+        omp_set_num_threads(num_threads);
+    }
     #endif
 }
 

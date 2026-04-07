@@ -28,6 +28,7 @@
 
 // Global control for parallelization
 extern int USE_PARALLEL;
+extern int g_interpolation_threads;
 
 // Debug switch
 #define DEBUG_FQ_INTERPOLATION 0
@@ -63,6 +64,7 @@ void fq_mvpoly_add_term(fq_mvpoly_t *p, const slong *var_exp, const slong *par_e
 // Parallelization control functions
 void fq_interpolation_set_parallel(int use_parallel);
 void fq_interpolation_use_half_threads(void);
+void fq_interpolation_set_threads(int num_threads);
 
 // Statistics functions
 void reset_interpolation_stats(void);

@@ -6,6 +6,7 @@
  */
 
 #include "dixon_flint.h"
+#include <sys/time.h>
 
 // Global method selection variable definition
 det_method_t dixon_global_method = -1;
@@ -289,16 +290,24 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         }
         
         printf("\nComputing Resultant\n");
-        clock_t start = clock();
+        clock_t cpu_start = clock();
+        double wall_start = get_wall_time();
         
         fq_nmod_t det;
         fq_nmod_init(det, ctx);
         fq_nmod_mat_det(det, scalar_mat, ctx);
         
-        clock_t end = clock();
-        double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
+        clock_t cpu_end = clock();
+        double wall_end = get_wall_time();
+        double cpu_elapsed = (double)(cpu_end - cpu_start) / CLOCKS_PER_SEC;
+        double wall_elapsed = wall_end - wall_start;
         
-        printf("Time: %.3f seconds\n", elapsed);
+        int threads = 1;
+        #ifdef _OPENMP
+        threads = omp_get_max_threads();
+        #endif
+        printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
+               cpu_elapsed, wall_elapsed, threads);
         
         if (!fq_nmod_is_zero(det, ctx)) {
             fq_mvpoly_add_term_fast(result, NULL, NULL, det);
@@ -308,7 +317,8 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         fq_nmod_mat_clear(scalar_mat, ctx);
         
     } else if (npars == 1) {
-        clock_t start = clock();
+        clock_t cpu_start = clock();
+        double wall_start = get_wall_time();
         
         if (method == DET_METHOD_INTERPOLATION) {
             printf("Method: interpolation\n");
@@ -360,12 +370,21 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
             fq_nmod_poly_mat_clear(poly_mat, ctx);
         }
         
-        clock_t end = clock();
-        double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
-        printf("Time: %.3f seconds\n", elapsed);
+        clock_t cpu_end = clock();
+        double wall_end = get_wall_time();
+        double cpu_elapsed = (double)(cpu_end - cpu_start) / CLOCKS_PER_SEC;
+        double wall_elapsed = wall_end - wall_start;
+        
+        int threads = 1;
+        #ifdef _OPENMP
+        threads = omp_get_max_threads();
+        #endif
+        printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
+               cpu_elapsed, wall_elapsed, threads);
         
     } else {
-        clock_t start = clock();
+        clock_t cpu_start = clock();
+        double wall_start = get_wall_time();
         switch (method) {
             case DET_METHOD_INTERPOLATION:
                 printf("Method: interpolation\n");
@@ -398,9 +417,17 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
                                                0, npars, ctx, res_deg_bound);
                 break;
         }
-        clock_t end = clock();
-        double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
-        printf("Time: %.3f seconds\n", elapsed);
+        clock_t cpu_end = clock();
+        double wall_end = get_wall_time();
+        double cpu_elapsed = (double)(cpu_end - cpu_start) / CLOCKS_PER_SEC;
+        double wall_elapsed = wall_end - wall_start;
+        
+        int threads = 1;
+        #ifdef _OPENMP
+        threads = omp_get_max_threads();
+        #endif
+        printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
+               cpu_elapsed, wall_elapsed, threads);
     }
 
     if (g_field_equation_reduction) {
@@ -2059,7 +2086,8 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     cleanup_unified_workspace();
     
     printf("\nStep 1: Build Dixon polynomial\n");
-    clock_t step1_start = clock();
+    clock_t step1_cpu_start = clock();
+    double step1_wall_start = get_wall_time();
     fq_mvpoly_t **M_mvpoly;
     printf("Build Cancellation Matrix\n");
     build_fq_cancellation_matrix_mvpoly(&M_mvpoly, polys, nvars, npars);
@@ -2078,7 +2106,16 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     } else {
         printf("Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
-    printf("Time: %.3f seconds\n", (double)(clock() - step1_start) / CLOCKS_PER_SEC);
+    clock_t step1_cpu_end = clock();
+    double step1_wall_end = get_wall_time();
+    double step1_cpu_elapsed = (double)(step1_cpu_end - step1_cpu_start) / CLOCKS_PER_SEC;
+    double step1_wall_elapsed = step1_wall_end - step1_wall_start;
+    int threads = 1;
+    #ifdef _OPENMP
+    threads = omp_get_max_threads();
+    #endif
+    printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
+           step1_cpu_elapsed, step1_wall_elapsed, threads);
     
     fq_mvpoly_t **coeff_matrix;
     slong max_indices = d_poly.nterms > 0 ? d_poly.nterms : 1;

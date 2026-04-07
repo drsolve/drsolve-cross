@@ -11,11 +11,16 @@
 #include <fcntl.h>
 #include <math.h>
 #include <time.h>
+#include <sys/time.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "dixon_flint.h"
 #include "dixon_interface_flint.h"
 #include "fq_mvpoly.h"
 #include "fq_unified_interface.h"
+#include "fq_multivariate_interpolation.h"
 #include "unified_mpoly_resultant.h"
 #include "dixon_with_ideal_reduction.h"
 #include "dixon_complexity.h"
@@ -34,7 +39,8 @@
 /* =========================================================================
  * Print usage
  * ========================================================================= */
-static void print_usage(const char *prog_name)
+
+static void print_version()
 {
     printf("===============================================\n");
     printf("DixonRes v%s\n", PROGRAM_VERSION);
@@ -45,7 +51,10 @@ static void print_usage(const char *prog_name)
     printf("PML support: DISABLED\n");
 #endif
     printf("===============================================\n");
+}
 
+static void print_usage(const char *prog_name)
+{
     printf("USAGE:\n");
     printf("  Basic Dixon:\n");
     printf("    %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
@@ -115,7 +124,7 @@ static void print_usage(const char *prog_name)
     printf("  %s --silent \"x+y^2+t, x*y+t*y+1\" \"x\" 2^8\n", prog_name);
     printf("  %s --solve \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("  (AES polynomial for GF(2^8), 't' is the field extension generator)\n");
-    printf("  %s example.dat\n", prog_name);
+    printf("  %s example.dr\n", prog_name);
 }
 
 /* =========================================================================
@@ -1045,7 +1054,7 @@ static void save_solver_result_to_file(const char *filename,
                                        const char *polys_str,
                                        const fmpz_t prime, ulong power,
                                        const polynomial_solutions_t *sols,
-                                       double computation_time)
+                                       double cpu_time, double wall_time, int threads_num)
 {
     FILE *out_fp = fopen(filename, "w");
     if (!out_fp) {
@@ -1062,7 +1071,7 @@ static void save_solver_result_to_file(const char *filename,
     }
     fprintf(out_fp, "\n");
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
-    fprintf(out_fp, "Computation time: %.3f seconds\n", computation_time);
+    fprintf(out_fp, "CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_time, wall_time, threads_num);
     fprintf(out_fp, "\nSolutions:\n==========\n");
 
     if (!sols) { fprintf(out_fp, "Solution structure is null\n"); fclose(out_fp); return; }
@@ -1138,7 +1147,7 @@ static void save_solver_result_to_file(const char *filename,
 static void save_rational_solver_result_to_file(const char *filename,
                                                 const char *polys_str,
                                                 const rational_solutions_t *sols,
-                                                double computation_time)
+                                                double cpu_time, double wall_time, int threads_num)
 {
     FILE *out_fp = fopen(filename, "w");
     if (!out_fp) {
@@ -1150,7 +1159,7 @@ static void save_rational_solver_result_to_file(const char *filename,
     fprintf(out_fp, "==================================\n");
     fprintf(out_fp, "Field: Q\n");
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
-    fprintf(out_fp, "Computation time: %.3f seconds\n", computation_time);
+    fprintf(out_fp, "CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_time, wall_time, threads_num);
     fprintf(out_fp, "\nSolutions:\n==========\n");
 
     if (!sols) { fprintf(out_fp, "Solution structure is null\n"); fclose(out_fp); return; }
@@ -1415,7 +1424,7 @@ static void save_result_to_file(const char *filename,
                                 const char *allvars_str,
                                 const fmpz_t prime, ulong power,
                                 const char *result,
-                                double computation_time)
+                                double cpu_time, double wall_time, int threads_num)
 {
     FILE *out_fp = fopen(filename, "w");
     if (!out_fp) {
@@ -1441,7 +1450,7 @@ static void save_result_to_file(const char *filename,
     }
     fprintf(out_fp, "Variables eliminated: %s\n", vars_str);
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
-    fprintf(out_fp, "Computation time: %.3f seconds\n", computation_time);
+    fprintf(out_fp, "CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_time, wall_time, threads_num);
     fprintf(out_fp, "\nResultant:\n%s\n", result);
     fclose(out_fp);
 }
@@ -1682,8 +1691,12 @@ int main(int argc, char *argv[])
 {
     clock_t start_time = clock();
     const char *prog_name = display_prog_name(argv[0]);
+    
+    // Initialize wall clock time at the very beginning
+    struct timeval program_start;
+    gettimeofday(&program_start, NULL);
 
-    if (argc == 1) { print_usage(prog_name); return 0; }
+    if (argc == 1) { print_version(); print_usage(prog_name); return 0; }
 
     /* ---- parse leading flags ---- */
     int    silent_mode = 0;
@@ -1695,6 +1708,8 @@ int main(int argc, char *argv[])
     int    field_eq_mode = 0; /* --field-equation */
     int    arg_offset  = 0;
     double omega       = DIXON_OMEGA;   /* default, overridden by --omega */
+    int    det_method  = -1;  /* determinant method, -1 means use default */
+    int    num_threads = -1;  /* number of threads, -1 means use default */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -1726,6 +1741,28 @@ int main(int argc, char *argv[])
             }
             arg_offset += 2;
             i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "--method") == 0) && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
+                det_method = (int)val;
+            } else {
+                fprintf(stderr, "Warning: invalid --method value '%s', "
+                                "must be 0-3. Using default.\n", argv[i + 1]);
+            }
+            arg_offset += 2;
+            i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "--threads") == 0) && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (endptr && *endptr == '\0' && val > 0) {
+                num_threads = (int)val;
+            } else {
+                fprintf(stderr, "Warning: invalid --threads value '%s', "
+                                "must be positive integer. Using default.\n", argv[i + 1]);
+            }
+            arg_offset += 2;
+            i++;          /* skip the value token */
         } else {
             break;
         }
@@ -1740,21 +1777,13 @@ int main(int argc, char *argv[])
     if (effective_argc >= 2 &&
         (strcmp(effective_argv[1], "--help") == 0 ||
          strcmp(effective_argv[1], "-h")     == 0)) {
-        if (!silent_mode) print_usage(prog_name);
+        if (!silent_mode)  { print_version(); print_usage(prog_name); }
         return 0;
     }
 
     /* ---- version banner ---- */
     if (!silent_mode) {
-        printf("=================================================\n");
-        printf("DixonRes v%s\n", PROGRAM_VERSION);
-        printf("FLINT version: %s\n", FLINT_VERSION);
-#ifdef HAVE_PML
-        printf("PML support: ENABLED\n");
-#else
-        printf("PML support: DISABLED\n");
-#endif
-        printf("=================================================\n\n");
+        print_version();
     }
 
     /* ---- test modes ---- */
@@ -1927,8 +1956,14 @@ int main(int argc, char *argv[])
         }
 
     } else {
-        /* Basic Dixon */
-        if (effective_argc == 2) {
+        /* Basic Dixon, or auto-detect solve mode if only two args */
+        if (effective_argc == 3) {
+            /* Auto-detect solve mode: only polynomials and field size */
+            solve_mode = 1;
+            polys_str = effective_argv[1];
+            field_str = effective_argv[2];
+            output_filename = generate_timestamped_filename("solution");
+        } else if (effective_argc == 2) {
             FILE *fp = fopen(effective_argv[1], "r");
             if (!fp) {
                 if (!silent_mode)
@@ -2185,6 +2220,29 @@ int main(int argc, char *argv[])
     }
 
     /* ======================================================
+     * Set determinant method and thread count
+     * ====================================================== */
+    if (det_method != -1) {
+        dixon_global_method = (det_method_t)det_method;
+        if (!silent_mode) {
+            printf("Determinant method: ");
+            switch (det_method) {
+                case 0: printf("Recursive expansion\n"); break;
+                case 1: printf("Kronecker substitution\n"); break;
+                case 2: printf("Interpolation\n"); break;
+                case 3: printf("Huang interpolation\n"); break;
+                default: printf("Default\n");
+            }
+        }
+    }
+    if (num_threads != -1) {
+        fq_interpolation_set_threads(num_threads);
+        if (!silent_mode) {
+            printf("Using %d threads\n", num_threads);
+        }
+    }
+
+    /* ======================================================
      * EXECUTE requested mode
      * ====================================================== */
 
@@ -2311,8 +2369,20 @@ int main(int argc, char *argv[])
     }
 
     /* ---- compute total time ---- */
-    clock_t end_time       = clock();
-    double  computation_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+    clock_t cpu_end_time   = clock();
+    double  cpu_time       = (double)(cpu_end_time - start_time) / CLOCKS_PER_SEC;
+    
+    // Compute wall time
+    struct timeval program_end;
+    gettimeofday(&program_end, NULL);
+    double wall_time = (program_end.tv_sec - program_start.tv_sec) + 
+                      (program_end.tv_usec - program_start.tv_usec) / 1000000.0;
+
+    /* ---- Get total threads first ---- */
+    int total_threads = 1;
+    #ifdef _OPENMP
+    total_threads = omp_get_max_threads();
+    #endif
 
     /* ---- output results ---- */
     if (comp_mode) {
@@ -2328,7 +2398,7 @@ int main(int argc, char *argv[])
                 if (output_filename) {
                     save_rational_solver_result_to_file(output_filename, polys_str,
                                                        rational_solutions,
-                                                       computation_time);
+                                                       cpu_time, wall_time, total_threads);
                     if (!silent_mode)
                         printf("Result saved to: %s\n", output_filename);
                 }
@@ -2347,7 +2417,7 @@ int main(int argc, char *argv[])
                 if (output_filename) {
                     save_solver_result_to_file(output_filename, polys_str,
                                                p_fmpz, power, solutions,
-                                               computation_time);
+                                               cpu_time, wall_time, total_threads);
                     if (!silent_mode)
                         printf("Result saved to: %s\n", output_filename);
                 }
@@ -2363,7 +2433,7 @@ int main(int argc, char *argv[])
             if (output_filename && !rational_mode) {
                 save_result_to_file(output_filename, polys_str, vars_str,
                                     ideal_str, allvars_str, p_fmpz, power,
-                                    result, computation_time);
+                                    result, cpu_time, wall_time, total_threads);
                 if (!silent_mode)
                     printf("\nResult saved to: %s\n", output_filename);
                 
@@ -2383,7 +2453,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("Total computation time: %.3f seconds\n", computation_time);
+    printf("Total - CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
+           cpu_time, wall_time, total_threads);
 
     /* ---- cleanup ---- */
     if (ctx_initialized) fq_nmod_ctx_clear(ctx);
