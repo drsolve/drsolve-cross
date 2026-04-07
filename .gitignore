@@ -13,7 +13,7 @@ nppBackup/
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
+dixon
 *.cmake
 !cmake/*.cmake
 !cmake/**/*.cmake
