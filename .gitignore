@@ -25,6 +25,7 @@ CPackSourceConfig.cmake
 *.lo
 *.o
 *.obj
+*.mk
 
 # Precompiled Headers
 *.gch
