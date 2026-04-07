@@ -1440,7 +1440,7 @@ int solve_by_back_substitution_recursive_enhanced(char **original_polys, slong n
                 if (found_dimension_gt_zero > 0) {
                     printf("All equation combinations for base solution %ld resulted in dimension > 0\n", base_idx + 1);
                     printf("PROPAGATING DIMENSION > 0 to main system\n");
-                    
+                    /*
                     // CRITICAL: If all recursive calls have dimension > 0, the main system has dimension > 0
                     sols->has_no_solutions = -1;
                     
@@ -1451,6 +1451,7 @@ int solve_by_back_substitution_recursive_enhanced(char **original_polys, slong n
                     }
                     free(reduced_polys);
                     return 1;  // Early return with dimension > 0 status
+                    */
                 } else {
                     printf("All equation combinations failed (no solutions) for base solution %ld\n", base_idx + 1);
                 }
