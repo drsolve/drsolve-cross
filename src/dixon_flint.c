@@ -306,8 +306,7 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         #ifdef _OPENMP
         threads = omp_get_max_threads();
         #endif
-        printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
-               cpu_elapsed, wall_elapsed, threads);
+        //printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_elapsed, wall_elapsed, threads);
         
         if (!fq_nmod_is_zero(det, ctx)) {
             fq_mvpoly_add_term_fast(result, NULL, NULL, det);
@@ -379,8 +378,7 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         #ifdef _OPENMP
         threads = omp_get_max_threads();
         #endif
-        printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
-               cpu_elapsed, wall_elapsed, threads);
+        // printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_elapsed, wall_elapsed, threads);
         
     } else {
         clock_t cpu_start = clock();
@@ -426,8 +424,7 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         #ifdef _OPENMP
         threads = omp_get_max_threads();
         #endif
-        printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
-               cpu_elapsed, wall_elapsed, threads);
+        // printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_elapsed, wall_elapsed, threads);
     }
 
     if (g_field_equation_reduction) {
@@ -2114,8 +2111,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     #ifdef _OPENMP
     threads = omp_get_max_threads();
     #endif
-    printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
-           step1_cpu_elapsed, step1_wall_elapsed, threads);
+    // printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", step1_cpu_elapsed, step1_wall_elapsed, threads);
     
     fq_mvpoly_t **coeff_matrix;
     slong max_indices = d_poly.nterms > 0 ? d_poly.nterms : 1;
