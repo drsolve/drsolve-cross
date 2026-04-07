@@ -1801,6 +1801,16 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     clock_t end_time = clock();
     double computation_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     
+    // Check number of terms in the resultant
+    const slong MAX_DISPLAY_TERMS = 10;
+    if (have_best_recon) {
+        if (best_recon.nterms <= MAX_DISPLAY_TERMS && strcmp(best_result, "0") != 0) {
+            printf("Final Resultant = %s\n", best_result);
+        } else if (best_recon.nterms > MAX_DISPLAY_TERMS) {
+            printf("Final Resultant has %ld terms (not displayed)\n", best_recon.nterms);
+        }
+    }
+    
     if (output_filename) {
         save_result_to_file_internal(output_filename, poly_string, vars_string, best_result, computation_time);
     }

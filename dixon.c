@@ -28,7 +28,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.1.2"
+#define PROGRAM_VERSION "0.1.3"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -100,6 +100,14 @@ static void print_usage(const char *prog_name)
     printf("  Silent mode:\n");
     printf("    %s --silent [--solve|--comp|-c] <args>\n", prog_name);
     printf("    -> No console output; solution file is still generated\n");
+
+    printf("  Method selection:\n");
+    printf("    %s --method <method> <args>\n", prog_name);
+    printf("    -> Available methods: 1.Recursive; 2.Kronecker; 3.Interpolation\n");
+
+    printf("  Process count:\n");
+    printf("    %s --threads <num> <args>\n", prog_name);
+    printf("    -> Set number of threads for parallel computation\n");
 
     printf("FILE FORMAT (Basic Dixon / Complexity, multiline):\n");
     printf("  Line 1 : field size (prime or p^k; generator defaults to 't')\n");
