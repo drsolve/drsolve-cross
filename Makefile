@@ -98,8 +98,7 @@ ALL_CFLAGS = $(CFLAGS) $(INCLUDE_FLAGS) $(FLINT_FLAGS) $(PML_FLAGS)
 # ============================================================
 # External library sets
 # ============================================================
-EXTERNAL_LIBS = $(PML_LIBS) $(FLINT_LIBS) $(SYSTEM_LIBS)
-EXTERNAL_STATIC_PML_LIBS = $(PML_STATIC_LIBS) $(FLINT_LIBS) $(SYSTEM_LIBS)
+EXTERNAL_LIBS = $(PML_STATIC_LIBS) $(FLINT_LIBS) $(SYSTEM_LIBS)
 EXTERNAL_STATIC_ALL_LIBS = $(PML_STATIC_LIBS) $(FLINT_STATIC_LIBS) \
                            -Wl,-Bdynamic $(SYSTEM_LIBS) -Wl,--allow-multiple-definition
 
@@ -259,7 +258,7 @@ $(DIXON_TARGET)-lto: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS
 $(DIXON_TARGET)-dynamic: $(DIXON_SRC) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with dynamic dixon library..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< -L. -ldixon $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
-	@echo "Build complete: $(DIXON_TARGET) (dynamic dixon, dynamic FLINT/PML)"
+	@echo "Build complete: $(DIXON_TARGET) (dynamic dixon, bundled static PML, dynamic FLINT)"
 
 # ============================================================
 # Library targets
@@ -270,7 +269,7 @@ dynamic-lib: $(DIXON_SHARED_LIB)
 
 $(DIXON_SHARED_LIB): $(MATH_OBJECTS) $(PML_BUILD_PREREQS)
 	@echo "Building dynamic dixon library..."
-	$(CC) $(SHARED_LDFLAGS) -o $@ $^ $(EXTERNAL_LIBS) $(LDFLAGS)
+	$(CC) $(SHARED_LDFLAGS) -o $@ $(MATH_OBJECTS) $(EXTERNAL_LIBS) $(LDFLAGS)
 	@echo "Dynamic library built: $(DIXON_SHARED_LIB)"
 
 # Build static dixon library
@@ -285,22 +284,14 @@ $(DIXON_STATIC_LIB): $(MATH_OBJECTS)
 # Static linking variants
 # ============================================================
 
-# Build with static dixon library (but dynamic FLINT/PML)
+# Build with static dixon library (bundled static PML, dynamic FLINT)
 static: $(DIXON_TARGET)-static
 	@echo "Built dixon with static library"
 
 $(DIXON_TARGET)-static: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
-	@echo "Building $(DIXON_TARGET) with static dixon library (dynamic FLINT/PML)..."
+	@echo "Building $(DIXON_TARGET) with static dixon library (bundled static PML, dynamic FLINT)..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
-	@echo "Build complete: $(DIXON_TARGET) (static dixon, dynamic FLINT/PML)"
-
-# Build with static dixon + static PML (but dynamic FLINT)
-static-pml: static-lib $(DIXON_TARGET)-static-pml
-
-$(DIXON_TARGET)-static-pml: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
-	@echo "Building $(DIXON_TARGET) with static dixon + PML libraries (dynamic FLINT)..."
-	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) $(EXTERNAL_STATIC_PML_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
-	@echo "Build complete: $(DIXON_TARGET) (static dixon+PML, dynamic FLINT)"
+	@echo "Build complete: $(DIXON_TARGET) (static dixon, bundled static PML, dynamic FLINT)"
 
 # Build with all static libraries (dixon + PML + FLINT)
 static-all: static-lib $(DIXON_TARGET)-static-all
@@ -503,7 +494,7 @@ clean-attack:
 # ============================================================
 # Object file compilation (src/*.c -> build/*.o)
 # ============================================================
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR) $(PML_BUILD_PREREQS)
 	@echo "Compiling $<..."
 	$(CC) $(ALL_CFLAGS) -c -o $@ $<
 
@@ -620,7 +611,6 @@ endif
 		echo "NO"; \
 	fi
 	@echo "EXTERNAL_LIBS (dynamic): $(EXTERNAL_LIBS)"
-	@echo "EXTERNAL_STATIC_PML_LIBS: $(EXTERNAL_STATIC_PML_LIBS)"
 	@echo "EXTERNAL_STATIC_ALL_LIBS: $(EXTERNAL_STATIC_ALL_LIBS)"
 
 # Debug header file detection
@@ -813,8 +803,7 @@ help:
 	@echo "  make all             - Same as default"
 	@echo "  make lto             - Same as default - Build with Link Time Optimization"
 	@echo "  make dynamic         - Build dixon with dynamic dixon library"
-	@echo "  make static          - Build dixon with static dixon library (dynamic FLINT/PML)"
-	@echo "  make static-pml      - Build dixon with static dixon+PML libraries (dynamic FLINT)"
+	@echo "  make static          - Build dixon with static dixon library (bundled static PML, dynamic FLINT)"
 	@echo "  make static-all      - Build dixon with all static libraries (fully static)"
 	@echo "  make dynamic-lib     - Build dynamic dixon library only"
 	@echo "  make static-lib      - Build static dixon library only"
@@ -872,10 +861,9 @@ help:
 	@echo "  attack-static - Use pre-built static dixon library (legacy compatibility)"
 	@echo ""
 	@echo "Compilation strategy:"
-	@echo "  default - Build libraries first, then compile all sources with LTO for maximum inlining"
-	@echo "  dynamic - Traditional library-based compilation using pre-built library"
-	@echo "  static  - Static dixon + dynamic FLINT/PML (needs rpath)"
-	@echo "  static-pml  - Static dixon+PML + dynamic FLINT (needs rpath for FLINT)"
+	@echo "  default - Build bundled PML first, then dixon libraries, then compile all sources with LTO"
+	@echo "  dynamic - Traditional library-based compilation using pre-built dixon library"
+	@echo "  static  - Static dixon + bundled static PML + dynamic FLINT (needs rpath)"
 	@echo "  static-all  - Fully static (no runtime dependencies)"
 	@echo ""
 	@echo "Library structure:"
@@ -1109,7 +1097,7 @@ check-verbose: $(DIXON_TARGET)
 	echo "=== All verbose tests passed ==="; \
 	rm -f solution_*.dat comp_*.dat
 
-.PHONY: default all lto dynamic static static-pml static-all dynamic-lib static-lib \
+.PHONY: default all lto dynamic static static-all dynamic-lib static-lib \
         attack-programs attack-programs-verbose attack-static clean-attack \
         clean clean-build distclean test-paths test-attack info \
         debug-headers debug-libs debug-structure debug-attack help \

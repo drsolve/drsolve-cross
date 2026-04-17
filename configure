@@ -14,8 +14,6 @@
 #   --cc=COMPILER          Set C compiler (default: cc)
 #   --flint-include=PATH   Set FLINT include path
 #   --flint-lib=PATH       Set FLINT library path
-#   --pml-include=PATH     Set PML include path
-#   --pml-lib=PATH         Set PML library path
 #
 # Build options:
 #   --enable-static        Default build links all libraries statically
@@ -50,8 +48,9 @@ MANDIR=""
 
 FLINT_INCLUDE_PATH="${FLINT_INCLUDE_PATH:-$DEFAULT_PREFIX/include}"
 FLINT_LIB_PATH="${FLINT_LIB_PATH:-$DEFAULT_PREFIX/lib}"
-PML_INCLUDE_PATH="${PML_INCLUDE_PATH:-$DEFAULT_PREFIX/include}"
-PML_LIB_PATH="${PML_LIB_PATH:-$DEFAULT_PREFIX/lib}"
+PML_SOURCE_DIR="third_party/pml"
+PML_INCLUDE_PATH="$PML_SOURCE_DIR/src"
+PML_LIB_PATH="build/third_party/pml"
 
 case "$HOST_OS" in
     Darwin)
@@ -80,8 +79,6 @@ for arg in "$@"; do
         --cc=*)            CC="${arg#--cc=}" ;;
         --flint-include=*) FLINT_INCLUDE_PATH="${arg#--flint-include=}" ;;
         --flint-lib=*)     FLINT_LIB_PATH="${arg#--flint-lib=}" ;;
-        --pml-include=*)   PML_INCLUDE_PATH="${arg#--pml-include=}" ;;
-        --pml-lib=*)       PML_LIB_PATH="${arg#--pml-lib=}" ;;
         --enable-static)   ENABLE_STATIC="yes" ;;
         --disable-static)  ENABLE_STATIC="no" ;;
         --enable-asan)     ENABLE_ASAN="yes" ;;
@@ -175,7 +172,7 @@ build_include_search_paths() {
     for p in $(extract_flag_dirs "$CPPFLAGS $CFLAGS" I); do
         [ -n "$p" ] && _paths=$(append_space_list_unique "$_paths" "$p")
     done
-    for p in         "$FLINT_INCLUDE_PATH"         "$PML_INCLUDE_PATH"         "/usr/local/include"         "/opt/homebrew/include"         "/opt/local/include"         "/usr/include"
+    for p in         "$FLINT_INCLUDE_PATH"         "/usr/local/include"         "/opt/homebrew/include"         "/opt/local/include"         "/usr/include"
     do
         [ -n "$p" ] && [ -d "$p" ] && _paths=$(append_space_list_unique "$_paths" "$p")
     done
@@ -542,71 +539,60 @@ if [ ! -d "$FLINT_LIB_PATH" ]; then
     exit 1
 fi
 
-# --- PML headers ---
-# Try flat layout first (pml.h), then pml/ subdirectory layout (pml/pml.h).
-# All three headers must be consistently found under the same prefix.
-
-printf "checking for pml.h... "
-PML_HEADER_CHECK=$(test_header "pml.h")
-if [ "$PML_HEADER_CHECK" = "yes" ]; then
-    echo "yes"
-    PML_HEADER_PREFIX=""
-    # Record the directory that contains pml.h directly
-    PML_HEADER_DIR=$(find_header_dir "pml.h")
-else
-    echo "no"
-    printf "checking for pml/pml.h... "
-    PML_SUB_CHECK=$(test_header "pml/pml.h")
-    echo "$PML_SUB_CHECK"
-    if [ "$PML_SUB_CHECK" = "yes" ]; then
-        PML_HEADER_CHECK="yes"
-        PML_HEADER_PREFIX="pml/"
-        # The parent dir contains the pml/ subdirectory; headers inside it
-        # use bare names (e.g. #include <nmod_poly_mat_utils.h>), so we need
-        # to add <parent>/pml to the compiler include path.
-        _pml_parent=$(find_header_dir "pml/pml.h")
-        PML_HEADER_DIR="${_pml_parent}/pml"
-    else
-        PML_HEADER_PREFIX=""
-        PML_HEADER_DIR=""
-    fi
-fi
-
-printf "checking for ${PML_HEADER_PREFIX}nmod_poly_mat_utils.h... "
-NMOD_POLY_MAT_UTILS_CHECK=$(test_header "${PML_HEADER_PREFIX}nmod_poly_mat_utils.h")
-echo "$NMOD_POLY_MAT_UTILS_CHECK"
-
-printf "checking for ${PML_HEADER_PREFIX}nmod_poly_mat_extra.h... "
-NMOD_POLY_MAT_EXTRA_CHECK=$(test_header "${PML_HEADER_PREFIX}nmod_poly_mat_extra.h")
-echo "$NMOD_POLY_MAT_EXTRA_CHECK"
-
-# --- PML libraries ---
-printf "checking for shared PML library... "
-PML_DYNAMIC_LIB_CHECK=$(check_shared_lib "pml")
-PML_SO_PATH=$(find_shared_lib "pml")
-if [ "$PML_DYNAMIC_LIB_CHECK" = "yes" ]; then
-    echo "$PML_SO_PATH"
-else
-    echo "no"
-fi
-
-printf "checking for libpml.a... "
-PML_STATIC_LIB_CHECK=$(check_static_lib "pml")
-PML_A_PATH=$(find_static_lib "pml")
-if [ "$PML_STATIC_LIB_CHECK" = "yes" ]; then
-    echo "$PML_A_PATH"
-else
-    echo "no"
-fi
-
-# --- PML include directory ---
-printf "checking for PML include directory... "
+# --- Bundled PML ---
+printf "checking for bundled PML source directory... "
 PML_DIR_EXISTS="no"
-if [ -d "$PML_INCLUDE_PATH" ]; then
+if [ -d "$PML_SOURCE_DIR" ]; then
     PML_DIR_EXISTS="yes"
-    echo "$PML_INCLUDE_PATH"
+    echo "$PML_SOURCE_DIR"
 else
-    echo "not found at $PML_INCLUDE_PATH"
+    echo "not found"
+fi
+
+printf "checking for bundled PML header pml.h... "
+if [ -f "$PML_INCLUDE_PATH/pml.h" ]; then
+    PML_HEADER_CHECK="yes"
+    PML_HEADER_PREFIX=""
+    PML_HEADER_DIR="$PML_INCLUDE_PATH"
+    echo "yes"
+else
+    PML_HEADER_CHECK="no"
+    PML_HEADER_PREFIX=""
+    PML_HEADER_DIR=""
+    echo "no"
+fi
+
+printf "checking for bundled nmod_poly_mat_utils.h... "
+if [ -f "$PML_INCLUDE_PATH/nmod_poly_mat_utils.h" ]; then
+    NMOD_POLY_MAT_UTILS_CHECK="yes"
+    echo "yes"
+else
+    NMOD_POLY_MAT_UTILS_CHECK="no"
+    echo "no"
+fi
+
+printf "checking for bundled nmod_poly_mat_extra.h... "
+if [ -f "$PML_INCLUDE_PATH/nmod_poly_mat_extra.h" ]; then
+    NMOD_POLY_MAT_EXTRA_CHECK="yes"
+    echo "yes"
+else
+    NMOD_POLY_MAT_EXTRA_CHECK="no"
+    echo "no"
+fi
+
+printf "checking bundled PML link mode... "
+PML_DYNAMIC_LIB_CHECK="no"
+PML_SO_PATH=""
+echo "static only"
+
+printf "checking bundled PML static library output... "
+PML_A_PATH="$PML_LIB_PATH/libpml.a"
+if [ "$PML_DIR_EXISTS" = "yes" ]; then
+    PML_STATIC_LIB_CHECK="yes"
+    echo "$PML_A_PATH (will be built by make)"
+else
+    PML_STATIC_LIB_CHECK="no"
+    echo "unavailable"
 fi
 
 # --- System libraries ---
@@ -654,14 +640,14 @@ PML_AVAILABLE="no"
 if [ "$PML_HEADER_CHECK" = "yes" ] && \
    [ "$NMOD_POLY_MAT_UTILS_CHECK" = "yes" ] && \
    [ "$NMOD_POLY_MAT_EXTRA_CHECK" = "yes" ] && \
-   { [ "$PML_DYNAMIC_LIB_CHECK" = "yes" ] || [ "$PML_STATIC_LIB_CHECK" = "yes" ]; }; then
+   [ "$PML_STATIC_LIB_CHECK" = "yes" ]; then
     PML_AVAILABLE="yes"
 fi
 
 if [ "$PML_AVAILABLE" = "yes" ]; then
-    echo "*** PML library FOUND - will build with PML support ***"
+    echo "*** bundled PML source FOUND - will build with bundled static PML support ***"
 else
-    echo "*** PML library NOT FOUND - will build without PML support ***"
+    echo "*** bundled PML source NOT FOUND - will build without PML support ***"
 fi
 
 # ============================================================
@@ -669,47 +655,32 @@ fi
 # ============================================================
 # Include flags
 INCLUDE_FLAGS="-I./include"
+if [ "$PML_AVAILABLE" = "yes" ]; then
+    INCLUDE_FLAGS="-I$PML_INCLUDE_PATH $INCLUDE_FLAGS"
+fi
 for p in $(build_include_search_paths); do
     if [ -n "$p" ] && [ "$p" != "./include" ]; then
         INCLUDE_FLAGS="$INCLUDE_FLAGS -I$p"
     fi
 done
 
-# When PML uses the pml/ subdirectory layout, PML_HEADER_DIR points to
-# <parent>/pml — that directory must be on the include path so that
-# bare #include <nmod_poly_mat_utils.h> (etc.) resolves correctly.
-if [ -n "$PML_HEADER_DIR" ] && [ "$PML_HEADER_DIR" != "$PML_INCLUDE_PATH" ]; then
-    INCLUDE_FLAGS="$INCLUDE_FLAGS -I$PML_HEADER_DIR"
-fi
-
 # Preprocessor defines
 FLINT_FLAGS="-DHAVE_FLINT"
 PML_FLAGS=""
 if [ "$PML_AVAILABLE" = "yes" ]; then
-    PML_FLAGS="-DHAVE_PML"
+    PML_FLAGS="-DHAVE_PML -DPML_HAVE_MACHINE_VECTORS=0"
 fi
 
 # PML linking
 PML_LIBS=""
 PML_STATIC_LIBS=""
 if [ "$PML_AVAILABLE" = "yes" ]; then
-    if [ -n "$PML_SO_PATH" ]; then
-        PML_LIBS="$PML_SO_PATH"
-    else
-        PML_LIBS="-lpml"
-    fi
-    if [ -n "$PML_A_PATH" ]; then
-        PML_STATIC_LIBS="$PML_A_PATH"
-    else
-        PML_STATIC_LIBS="$PML_LIB_PATH/libpml.a"
-    fi
+    PML_LIBS="$PML_A_PATH"
+    PML_STATIC_LIBS="$PML_A_PATH"
 fi
 
 # RPATH
 RPATH_FLAGS="-Wl,-rpath,$FLINT_LIB_PATH -Wl,-rpath,."
-if [ "$PML_AVAILABLE" = "yes" ]; then
-    RPATH_FLAGS="$RPATH_FLAGS -Wl,-rpath,$PML_LIB_PATH"
-fi
 
 # ============================================================
 # Write config.mk
