@@ -332,6 +332,72 @@ int perm_parity(const slong *perm, slong n) {
     return parity;
 }
 
+#ifdef HAVE_PML
+static ulong dixonres_nmod_poly_mat_eval_det_at(const nmod_poly_mat_t mat, ulong point) {
+    nmod_mat_t eval_mat;
+    ulong det_eval;
+
+    nmod_mat_init(eval_mat, mat->r, mat->c, mat->modulus);
+    nmod_poly_mat_evaluate_nmod(eval_mat, mat, point);
+    det_eval = nmod_mat_det(eval_mat);
+    nmod_mat_clear(eval_mat);
+
+    return det_eval;
+}
+
+static int dixonres_nmod_poly_mat_det_generic_exact(nmod_poly_t det,
+                                                    const nmod_poly_mat_t mat) {
+    if (!nmod_poly_mat_det_generic(det, mat))
+        return 0;
+
+    if (nmod_poly_is_zero(det))
+        return 0;
+
+    {
+        const ulong modulus = mat->modulus;
+        const ulong max_trials = (modulus < UWORD(32)) ? modulus : UWORD(32);
+        ulong scale = UWORD(1);
+        int have_scale = 0;
+        slong good_points = 0;
+
+        for (ulong point = 0; point < max_trials; point++) {
+            const ulong det_poly = nmod_poly_evaluate_nmod(det, point);
+            const ulong det_eval = dixonres_nmod_poly_mat_eval_det_at(mat, point);
+
+            if (det_poly == UWORD(0)) {
+                if (det_eval != UWORD(0))
+                    return 0;
+                continue;
+            }
+
+            if (det_eval == UWORD(0))
+                return 0;
+
+            if (!have_scale) {
+                scale = nmod_mul(det_eval,
+                                 n_invmod(det_poly, modulus),
+                                 det->mod);
+                have_scale = 1;
+            } else if (nmod_mul(det_poly, scale, det->mod) != det_eval) {
+                return 0;
+            }
+
+            ++good_points;
+            if (good_points >= 2)
+                break;
+        }
+
+        if (!have_scale || good_points < 2)
+            return 0;
+
+        if (scale != UWORD(1))
+            nmod_poly_scalar_mul_nmod(det, det, scale);
+    }
+
+    return 1;
+}
+#endif
+
 /* ============================================================================
    MAIN ENTRY POINT - IMPLEMENTATION
    ============================================================================ */
@@ -353,7 +419,7 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
     /* Check if we're in a prime field (degree 1) */
     if (fq_nmod_ctx_degree(ctx) == 1) {
         /* Convert to nmod_poly_mat and use the optimized prime field version */
-        printf("Using optimized nmod_poly_mat_det_iter from PML library\n");
+        printf("Using generic nmod_poly_mat_det from PML library\n");
 
         nmod_poly_mat_t nmod_mat;
         nmod_poly_t nmod_det;
@@ -390,7 +456,9 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
         
         /* Call the optimized nmod version */
         clock_t nmod_start = clock();
-        nmod_poly_mat_det_iter(nmod_det, nmod_mat);
+        if (!dixonres_nmod_poly_mat_det_generic_exact(nmod_det, nmod_mat)) {
+            nmod_poly_mat_det_iter(nmod_det, nmod_mat);
+        }
         clock_t nmod_end = clock();
         
         /* Convert result back to fq_nmod_poly */

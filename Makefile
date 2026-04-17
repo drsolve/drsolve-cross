@@ -36,6 +36,49 @@ INCLUDE_DIR = include
 BUILD_DIR = build
 
 # ============================================================
+# Bundled PML (force use of third_party/pml over any system PML)
+# ============================================================
+PML_SOURCE_DIR ?= third_party/pml
+PML_BUILD_DIR ?= $(BUILD_DIR)/third_party/pml
+PML_OBJ_DIR ?= $(PML_BUILD_DIR)/obj
+PML_BUNDLED_LIB ?= $(PML_BUILD_DIR)/libpml.a
+PML_BUNDLED_AVAILABLE := $(if $(wildcard $(PML_SOURCE_DIR)/src/pml.h),yes,no)
+PML_ORIGIN := configure
+
+ifeq ($(PML_BUNDLED_AVAILABLE),yes)
+PML_ORIGIN := bundled-third_party
+PML_INCLUDE_PATH := $(PML_SOURCE_DIR)/src
+PML_LIB_PATH := $(PML_BUILD_DIR)
+PML_HEADER_CHECK := yes
+PML_HEADER_PREFIX :=
+PML_HEADER_DIR := $(PML_INCLUDE_PATH)
+NMOD_POLY_MAT_UTILS_CHECK := yes
+NMOD_POLY_MAT_EXTRA_CHECK := yes
+PML_DYNAMIC_LIB_CHECK := no
+PML_STATIC_LIB_CHECK := yes
+PML_SO_PATH :=
+PML_A_PATH := $(PML_BUNDLED_LIB)
+PML_DIR_EXISTS := yes
+PML_AVAILABLE := yes
+PML_FLAGS := -DHAVE_PML -DPML_HAVE_MACHINE_VECTORS=0
+PML_LIBS := $(PML_BUNDLED_LIB)
+PML_STATIC_LIBS := $(PML_BUNDLED_LIB)
+INCLUDE_FLAGS := $(filter-out -I%/pml -I$(PML_SOURCE_DIR)/src,$(INCLUDE_FLAGS))
+INCLUDE_FLAGS := -I$(PML_INCLUDE_PATH) $(INCLUDE_FLAGS)
+RPATH_FLAGS := -Wl,-rpath,.
+ifneq ($(strip $(FLINT_LIB_PATH)),)
+RPATH_FLAGS += -Wl,-rpath,$(FLINT_LIB_PATH)
+endif
+PML_SOURCES := $(shell find $(PML_SOURCE_DIR)/src \
+	\( -path '*/test/*' -o -path '*/profile/*' -o -path '*/timings/*' -o -path '*/tune/*' -o -path '*/mapml/*' -o -path '*/.ipynb_checkpoints/*' \) -prune -o \
+	-name '*.c' -print)
+PML_OBJECTS := $(patsubst $(PML_SOURCE_DIR)/src/%.c,$(PML_OBJ_DIR)/%.o,$(PML_SOURCES))
+PML_BUILD_PREREQS := $(PML_BUNDLED_LIB)
+else
+PML_BUILD_PREREQS :=
+endif
+
+# ============================================================
 # Install directories
 # Set by ./configure (--prefix, --bindir, etc.).
 # You can still override at install time: make install PREFIX=/custom
@@ -55,10 +98,9 @@ ALL_CFLAGS = $(CFLAGS) $(INCLUDE_FLAGS) $(FLINT_FLAGS) $(PML_FLAGS)
 # ============================================================
 # External library sets
 # ============================================================
-EXTERNAL_LIBS = $(FLINT_LIBS) $(PML_LIBS) $(SYSTEM_LIBS)
-EXTERNAL_STATIC_PML_LIBS = $(FLINT_LIBS) $(PML_STATIC_LIBS) $(SYSTEM_LIBS)
-EXTERNAL_STATIC_ALL_LIBS = $(PML_LIB_PATH:%=-L%) $(FLINT_LIB_PATH:%=-L%) \
-                           -Wl,-Bstatic -lpml -lflint \
+EXTERNAL_LIBS = $(PML_LIBS) $(FLINT_LIBS) $(SYSTEM_LIBS)
+EXTERNAL_STATIC_PML_LIBS = $(PML_STATIC_LIBS) $(FLINT_LIBS) $(SYSTEM_LIBS)
+EXTERNAL_STATIC_ALL_LIBS = $(PML_STATIC_LIBS) $(FLINT_STATIC_LIBS) \
                            -Wl,-Bdynamic $(SYSTEM_LIBS) -Wl,--allow-multiple-definition
 
 # ============================================================
@@ -118,6 +160,19 @@ $(BUILD_DIR):
 	@echo "Creating build directory..."
 	mkdir -p $(BUILD_DIR)
 
+ifeq ($(PML_BUNDLED_AVAILABLE),yes)
+$(PML_OBJ_DIR)/%.o: $(PML_SOURCE_DIR)/src/%.c | $(BUILD_DIR)
+	@echo "Compiling bundled PML source $<..."
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDE_FLAGS) $(FLINT_FLAGS) $(PML_FLAGS) -c -o $@ $<
+
+$(PML_BUNDLED_LIB): $(PML_OBJECTS) | $(BUILD_DIR)
+	@echo "Building bundled PML static library..."
+	@mkdir -p $(dir $@)
+	ar rcs $@ $^
+	@echo "Bundled PML library built: $@"
+endif
+
 # ============================================================
 # OS-specific flags for static linking with duplicate symbols
 # (FLINT and PML share some symbol names intentionally)
@@ -145,7 +200,7 @@ ifeq ($(DEFAULT_LINK_MODE),static-all)
 # Do NOT depend on $(DIXON_SHARED_LIB) — building a dylib against two
 # static archives that share symbols fails on macOS (Apple ld has no
 # --allow-multiple-definition).
-default: $(DIXON_STATIC_LIB)
+default: $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) fully static (configured by --enable-static)..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $(ALL_SOURCES) \
 		$(DIXON_STATIC_LIB) \
@@ -155,7 +210,7 @@ default: $(DIXON_STATIC_LIB)
 		$(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (fully static)"
 else
-default: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB)
+default: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with LTO (Link Time Optimization)..."
 	@echo "Libraries built, now compiling all sources together for maximum inlining..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $(ALL_SOURCES) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
@@ -194,14 +249,14 @@ ifeq ($(ENABLE_ASAN),yes)
 endif
 
 # LTO target - compile all sources together for maximum optimization (same as default now)
-$(DIXON_TARGET)-lto: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB)
+$(DIXON_TARGET)-lto: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with LTO (Link Time Optimization)..."
 	@echo "Libraries built, now compiling all sources together for maximum inlining..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $(ALL_SOURCES) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (LTO optimized)"
 
 # Traditional dynamic library target
-$(DIXON_TARGET)-dynamic: $(DIXON_SRC) $(DIXON_SHARED_LIB)
+$(DIXON_TARGET)-dynamic: $(DIXON_SRC) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with dynamic dixon library..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< -L. -ldixon $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (dynamic dixon, dynamic FLINT/PML)"
@@ -213,7 +268,7 @@ $(DIXON_TARGET)-dynamic: $(DIXON_SRC) $(DIXON_SHARED_LIB)
 # Build dynamic dixon library
 dynamic-lib: $(DIXON_SHARED_LIB)
 
-$(DIXON_SHARED_LIB): $(MATH_OBJECTS)
+$(DIXON_SHARED_LIB): $(MATH_OBJECTS) $(PML_BUILD_PREREQS)
 	@echo "Building dynamic dixon library..."
 	$(CC) $(SHARED_LDFLAGS) -o $@ $^ $(EXTERNAL_LIBS) $(LDFLAGS)
 	@echo "Dynamic library built: $(DIXON_SHARED_LIB)"
@@ -234,7 +289,7 @@ $(DIXON_STATIC_LIB): $(MATH_OBJECTS)
 static: $(DIXON_TARGET)-static
 	@echo "Built dixon with static library"
 
-$(DIXON_TARGET)-static: $(DIXON_SRC) $(DIXON_STATIC_LIB)
+$(DIXON_TARGET)-static: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with static dixon library (dynamic FLINT/PML)..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (static dixon, dynamic FLINT/PML)"
@@ -242,7 +297,7 @@ $(DIXON_TARGET)-static: $(DIXON_SRC) $(DIXON_STATIC_LIB)
 # Build with static dixon + static PML (but dynamic FLINT)
 static-pml: static-lib $(DIXON_TARGET)-static-pml
 
-$(DIXON_TARGET)-static-pml: $(DIXON_SRC) $(DIXON_STATIC_LIB)
+$(DIXON_TARGET)-static-pml: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with static dixon + PML libraries (dynamic FLINT)..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) $(EXTERNAL_STATIC_PML_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (static dixon+PML, dynamic FLINT)"
@@ -250,7 +305,7 @@ $(DIXON_TARGET)-static-pml: $(DIXON_SRC) $(DIXON_STATIC_LIB)
 # Build with all static libraries (dixon + PML + FLINT)
 static-all: static-lib $(DIXON_TARGET)-static-all
 
-$(DIXON_TARGET)-static-all: $(DIXON_SRC) $(DIXON_STATIC_LIB)
+$(DIXON_TARGET)-static-all: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with all static libraries..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) \
 		$(STATIC_LIBS_ORDERED) \
@@ -348,7 +403,7 @@ uninstall:
 # ============================================================
 
 # Attack programs compilation with verbose output (LTO with all sources)
-attack-programs-verbose:
+attack-programs-verbose: $(PML_BUILD_PREREQS)
 	@echo "Building Attack programs with LTO optimization (compiling with all sources)..."
 	@if [ -z "$(ATTACK_C_FILES)" ]; then \
 		echo "No C files found in $(ATTACK_DIR)"; \
@@ -391,7 +446,7 @@ attack-programs-verbose:
 	fi
 
 # Attack programs compilation (silent version, LTO with all sources)
-attack-programs:
+attack-programs: $(PML_BUILD_PREREQS)
 	@echo "Building Attack programs with LTO optimization..."
 	@if [ -z "$(ATTACK_C_FILES)" ]; then \
 		echo "No C files found in $(ATTACK_DIR)"; \
@@ -416,7 +471,7 @@ attack-programs:
 	fi
 
 # Attack programs with static dixon library (kept for compatibility)
-attack-static: $(DIXON_STATIC_LIB)
+attack-static: $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building Attack programs with static dixon library..."
 	@if [ -z "$(ATTACK_C_FILES)" ]; then \
 		echo "No C files found in $(ATTACK_DIR)"; \
@@ -523,6 +578,7 @@ endif
 	@echo "Library search paths: $(SYSTEM_LIB_PATHS)"
 	@echo ""
 	@echo "=== Library Status ==="
+	@echo "PML origin: $(PML_ORIGIN)"
 	@echo "FLINT headers found: $(FLINT_HEADER_CHECK)"
 	@echo "FLINT directory exists: $(FLINT_DIR_EXISTS) at $(FLINT_INCLUDE_PATH)"
 	@echo "PML headers found: $(PML_HEADER_CHECK)"
@@ -570,6 +626,8 @@ endif
 # Debug header file detection
 debug-headers:
 	@echo "=== Header File Detection Debug ==="
+	@echo ""
+	@echo "PML origin: $(PML_ORIGIN)"
 	@echo ""
 	@echo "=== Compiler Search Paths ==="
 	@echo "Getting GCC include search paths..."
@@ -625,7 +683,8 @@ debug-libs:
 	@echo "Detected paths: $(SYSTEM_LIB_PATHS)"
 	@echo ""
 	@echo "=== PML Library Search ==="
-	@echo "Searching for PML libraries in all system paths..."
+	@echo "PML origin: $(PML_ORIGIN)"
+	@echo "Searching for PML libraries..."
 	@echo -n "Dynamic libraries (libpml.so*): "
 	@found=no; for path in $(SYSTEM_LIB_PATHS); do \
 		if [ -n "$$path" ] && [ -d "$$path" ]; then \
@@ -823,13 +882,12 @@ help:
 	@echo "  Dixon library: $(words $(MATH_SOURCES)) math source files"
 	@echo "  Main program: dixon.c links against dixon library OR compiles with all sources"
 	@echo "  Attack programs: Each .c in ../Attack compiles with all dixon sources (LTO optimization)"
-	@echo "  External deps: FLINT (required), PML (optional - detected by ./configure)"
+	@echo "  External deps: FLINT (required), PML (bundled from third_party/pml when present)"
 	@echo ""
 	@echo "PML Detection:"
-	@echo "  PML support requires ALL of: pml.h, nmod_poly_mat_utils.h, nmod_poly_mat_extra.h"
-	@echo "  PLUS at least one library file: libpml.so OR libpml.a"
-	@echo "  If any requirement is missing, PML support is disabled automatically"
-	@echo "  Re-run ./configure to re-detect, then 'make test-paths' to verify"
+	@echo "  PML is forced to use the bundled third_party/pml copy when it exists"
+	@echo "  The bundled library is built as $(PML_BUNDLED_LIB)"
+	@echo "  Re-run ./configure for FLINT detection, then 'make test-paths' to verify"
 
 # ============================================================
 # Aliases for convenience

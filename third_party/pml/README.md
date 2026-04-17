@@ -1,6 +1,6 @@
-# PML - FLINT Extras (Windows Compatibility Fork)
+# PML - FLINT Extras (bundled for DixonRes)
 
-This repository contains a modified version of the PML library (FLINT extras), with minor adjustments to support Windows compilation. The original library can be found at: <https://github.com/vneiger/pml>
+This directory contains the bundled PML library (FLINT extras) used by DixonRes. The original upstream project can be found at: <https://github.com/vneiger/pml>
 
 DixonRes utilizes the PML library to accelerate univariate polynomial matrix determinant computation over prime fields.
 
@@ -12,30 +12,18 @@ PML is a supplementary library for FLINT (Fast Library for Number Theory) that p
 - FFT-based operations
 - Additional modular arithmetic utilities
 
-## Modifications for Windows Compatibility
+## DixonRes-specific modifications
 
-The following changes have been made to enable compilation on Windows:
+The main functional change in this bundled copy is in `src/nmod_poly_mat_extra/nmod_poly_mat_det.c`:
+- added `nmod_poly_mat_det_generic`
+- added `nmod_poly_mat_det_generic_knowing_degree`
+- kept determinant computation usable from DixonRes for generic polynomial matrices over prime fields
 
-### 1. Machine Vectors Disabled (machine_vectors.h)
-Completely disabled machine vector operations (AVX2, AVX512) to avoid compilation issues on Windows:
-- All vector type definitions and operations are commented out
-- `PML_HAVE_MACHINE_VECTORS`, `PML_HAVE_AVX2`, and `PML_HAVE_AVX512` are undefined
-
-### 2. Macro Redefinition Protections (config.h)
-Added `#ifndef` guards to diagnostic and optimization macros to prevent conflicts with FLINT's header files:
-- `DIAGNOSTIC_PUSH`, `DIAGNOSTIC_POP`
-- `PUSH_OPTIONS`, `POP_OPTIONS`
-- `OPTIMIZE_O2`, `OPTIMIZE_OSIZE`, `OPTIMIZE_UNROLL_LOOPS`
-
-### 3. Macro Guards in pml.h
-Added `#ifndef` guards for feature detection macros to avoid conflicts with FLINT:
-- `PML_HAVE_MACHINE_VECTORS`
-- `PML_HAVE_AVX2`
-- `PML_HAVE_AVX512`
+There are also a few small compatibility-oriented header/config adjustments so the bundled copy builds cleanly inside DixonRes, but those are secondary to the determinant changes above.
 
 ## Building
 
-This modified version is designed to be built via CMake as part of the DixonRes project. For standalone compilation, please refer to the original PML documentation.
+This bundled copy is intended to be built as part of the DixonRes project. For standalone compilation, please refer to the original PML documentation.
 
 ## License
 

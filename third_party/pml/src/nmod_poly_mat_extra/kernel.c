@@ -274,6 +274,8 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     for (i = 0; i < n2; i++) {
         degP2[i]=degP2[i]-ks;  // used below for the recursive calls
+        if (degP2[i] < 0)
+            degP2[i] = 0;
     }
 
 

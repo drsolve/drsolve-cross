@@ -9,7 +9,7 @@ project(DixonRes
 # ============================================================
 # Build options
 # ============================================================
-option(DIXONRES_ENABLE_PML       "Use PML library if found"                ON)
+option(DIXONRES_ENABLE_PML       "Use bundled third_party/pml when available" ON)
 option(DIXONRES_ENABLE_OPENMP    "Enable OpenMP if available"              ON)
 option(DIXONRES_ENABLE_LTO       "Enable Link Time Optimization (-flto)"   ON)
 option(DIXONRES_ENABLE_ASAN      "Enable AddressSanitizer"                 OFF)
@@ -384,12 +384,87 @@ endif()
 # Find PML or build from source  (optional)
 # ============================================================
 set(PML_AVAILABLE FALSE)
+set(PML_STATUS "disabled")
 
 if(DIXONRES_ENABLE_PML)
   set(PML_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/pml")
-  
-  # For Linux: first try to find pre-installed PML library
-  if(NOT DIXONRES_WINDOWS)
+
+  if(EXISTS "${PML_SOURCE_DIR}/src/pml.h")
+    message(STATUS "PML: using bundled source from ${PML_SOURCE_DIR}")
+
+    # Collect PML source files (exclude test, profile, timing, and mapml)
+    file(GLOB_RECURSE PML_SOURCES
+      "${PML_SOURCE_DIR}/src/fmpz_extra/*.c"
+      "${PML_SOURCE_DIR}/src/fmpz_mat_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod32_vec/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/*.c"
+      "${PML_SOURCE_DIR}/src/nmod_vec_extra/*.c"
+      "${PML_SOURCE_DIR}/src/sagemath_extra/*.c"
+    )
+
+    # Filter out test, profile, and timing files
+    set(PML_FILTERED_SOURCES "")
+    foreach(_src ${PML_SOURCES})
+      if(NOT _src MATCHES "/test/" AND NOT _src MATCHES "/profile/" AND NOT _src MATCHES "/timings/")
+        list(APPEND PML_FILTERED_SOURCES ${_src})
+      endif()
+    endforeach()
+
+    # Create PML library target
+    add_library(pml STATIC ${PML_FILTERED_SOURCES})
+
+    # PML include directories
+    target_include_directories(pml PUBLIC
+      "${PML_SOURCE_DIR}/src"
+    )
+
+    # Link PML with FLINT, GMP, MPFR, and pthread
+    target_link_libraries(pml PUBLIC FLINT::FLINT ${GMP_LIBRARY} ${MPFR_LIBRARY})
+    if(NOT DIXONRES_WINDOWS)
+      target_link_libraries(pml PUBLIC pthread)
+    endif()
+
+    # PML compile definitions - avoid conflicting with FLINT's macros
+    target_compile_definitions(pml PUBLIC
+      HAVE_PML
+      PACKAGE_NAME="PML"
+      PACKAGE_VERSION="0.0.5-dev"
+      PACKAGE_STRING="PML 0.0.5-dev"
+      PACKAGE_BUGREPORT="https://github.com/vneiger/pml/issues/"
+      STDC_HEADERS=1
+      FLINT_UNROLL_LOOPS=1
+      PML_USES_PTHREAD=1
+      PML_USES_TLS=1
+      PML_WANT_GMP_INTERNALS=1
+      PML_WANT_PRETTY_TESTS=1
+      PML_HAVE_MACHINE_VECTORS=0
+    )
+
+    # Platform-specific definitions
+    if(DIXONRES_WINDOWS)
+      target_compile_definitions(pml PUBLIC HAVE_WINDOWS_H=1)
+    else()
+      target_compile_definitions(pml PUBLIC
+        HAVE_ALLOCA_H=1
+        HAVE_DLFCN_H=1
+        HAVE_MALLOC_H=1
+        HAVE_SYS_PARAM_H=1
+        HAVE_UNISTD_H=1
+        HAVE_ALIGNED_ALLOC=1
+      )
+    endif()
+
+    # Create alias target
+    add_library(PML::PML ALIAS pml)
+    set(PML_AVAILABLE TRUE)
+    set(PML_STATUS "bundled: ${PML_SOURCE_DIR}")
+  else()
+    message(STATUS "PML: bundled source not found under ${PML_SOURCE_DIR}; trying system installation...")
+
     find_path(PML_INCLUDE_DIR
       NAMES pml.h pml/pml.h
       HINTS "${PML_ROOT}/include"
@@ -406,7 +481,6 @@ if(DIXONRES_ENABLE_PML)
     endif()
 
     if(PML_INCLUDE_DIR AND PML_LIBRARY)
-      # Determine correct include sub-path for nmod_poly_mat_utils.h
       set(_pml_extra_inc "")
       if(EXISTS "${PML_INCLUDE_DIR}/nmod_poly_mat_utils.h")
         set(_pml_extra_inc "")
@@ -428,7 +502,8 @@ if(DIXONRES_ENABLE_PML)
 
     if(PML_INCLUDE_DIR AND PML_LIBRARY)
       set(PML_AVAILABLE TRUE)
-      message(STATUS "PML: ${PML_LIBRARY}")
+      set(PML_STATUS "${PML_LIBRARY}")
+      message(STATUS "PML: using installed library ${PML_LIBRARY}")
 
       add_library(PML::PML UNKNOWN IMPORTED GLOBAL)
       set_target_properties(PML::PML PROPERTIES
@@ -441,86 +516,8 @@ if(DIXONRES_ENABLE_PML)
           INTERFACE_INCLUDE_DIRECTORIES "${_pml_extra_inc}")
       endif()
     else()
-      message(STATUS "PML: pre-installed library not found, trying to build from source...")
+      message(STATUS "PML: not found (optional) -- building without PML support")
     endif()
-  endif()
-
-  # If not found on Linux, or for Windows, build from source
-  if(NOT PML_AVAILABLE AND EXISTS "${PML_SOURCE_DIR}/src/pml.h")
-    message(STATUS "Building PML from source...")
-    
-    # Collect PML source files (exclude test, profile, timing, and mapml)
-    file(GLOB_RECURSE PML_SOURCES
-      "${PML_SOURCE_DIR}/src/fmpz_extra/*.c"
-      "${PML_SOURCE_DIR}/src/fmpz_mat_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod32_vec/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_mat_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_poly_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_vec_extra/*.c"
-      "${PML_SOURCE_DIR}/src/sagemath_extra/*.c"
-    )
-    
-    # Filter out test, profile, and timing files
-    set(PML_FILTERED_SOURCES "")
-    foreach(_src ${PML_SOURCES})
-      if(NOT _src MATCHES "/test/" AND NOT _src MATCHES "/profile/" AND NOT _src MATCHES "/timings/")
-        list(APPEND PML_FILTERED_SOURCES ${_src})
-      endif()
-    endforeach()
-    
-    # Create PML library target
-    add_library(pml STATIC ${PML_FILTERED_SOURCES})
-    
-    # PML include directories
-    target_include_directories(pml PUBLIC
-      "${PML_SOURCE_DIR}/src"
-    )
-    
-    # Link PML with FLINT, GMP, MPFR, and pthread
-    target_link_libraries(pml PUBLIC FLINT::FLINT ${GMP_LIBRARY} ${MPFR_LIBRARY})
-    if(NOT DIXONRES_WINDOWS)
-      target_link_libraries(pml PUBLIC pthread)
-    endif()
-    
-    # PML compile definitions - avoid conflicting with FLINT's macros
-    target_compile_definitions(pml PUBLIC
-      HAVE_PML
-      PACKAGE_NAME="PML"
-      PACKAGE_VERSION="0.0.5-dev"
-      PACKAGE_STRING="PML 0.0.5-dev"
-      PACKAGE_BUGREPORT="https://github.com/vneiger/pml/issues/"
-      STDC_HEADERS=1
-      FLINT_UNROLL_LOOPS=1
-      PML_USES_PTHREAD=1
-      PML_USES_TLS=1
-      PML_WANT_GMP_INTERNALS=1
-      PML_WANT_PRETTY_TESTS=1
-      PML_HAVE_MACHINE_VECTORS=0
-    )
-    
-    # Platform-specific definitions
-    if(DIXONRES_WINDOWS)
-      target_compile_definitions(pml PUBLIC HAVE_WINDOWS_H=1)
-    else()
-      target_compile_definitions(pml PUBLIC
-        HAVE_ALLOCA_H=1
-        HAVE_DLFCN_H=1
-        HAVE_MALLOC_H=1
-        HAVE_SYS_PARAM_H=1
-        HAVE_UNISTD_H=1
-        HAVE_ALIGNED_ALLOC=1
-      )
-    endif()
-    
-    # Create alias target
-    add_library(PML::PML ALIAS pml)
-    set(PML_AVAILABLE TRUE)
-    message(STATUS "PML: building from source")
-  elseif(NOT PML_AVAILABLE)
-    message(STATUS "PML: not found (optional) -- building without PML support")
   endif()
 endif()
 
@@ -554,10 +551,11 @@ endif()
 # ============================================================
 # Common link-library list  (shared between all targets)
 # ============================================================
-set(_dixon_deps FLINT::FLINT)
+set(_dixon_deps)
 if(PML_AVAILABLE)
   list(APPEND _dixon_deps PML::PML)
 endif()
+list(APPEND _dixon_deps FLINT::FLINT)
 if(OpenMP_C_FOUND)
   list(APPEND _dixon_deps OpenMP::OpenMP_C)
 endif()
@@ -693,7 +691,7 @@ else()
     set(_rpath_dirs "${CMAKE_BINARY_DIR}/lib;\$ORIGIN/../lib")
     get_filename_component(_flint_lib_dir "${FLINT_LIBRARY}" DIRECTORY)
     list(APPEND _rpath_dirs "${_flint_lib_dir}")
-    if(PML_AVAILABLE)
+    if(PML_AVAILABLE AND PML_LIBRARY)
       get_filename_component(_pml_lib_dir "${PML_LIBRARY}" DIRECTORY)
       list(APPEND _rpath_dirs "${_pml_lib_dir}")
     endif()
@@ -911,7 +909,7 @@ message(STATUS "  Build type      : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Compiler        : ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
 message(STATUS "  FLINT           : ${FLINT_LIBRARY}")
 if(PML_AVAILABLE)
-  message(STATUS "  PML             : ${PML_LIBRARY}")
+  message(STATUS "  PML             : ${PML_STATUS}")
 else()
   message(STATUS "  PML             : disabled")
 endif()

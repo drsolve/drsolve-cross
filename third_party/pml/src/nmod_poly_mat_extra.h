@@ -76,6 +76,18 @@ apply_perm_to_vector(slong *res, const slong *initial_vect,
 /* TODO move in suitable header */
 void nmod_poly_mat_det_iter(nmod_poly_t det, nmod_poly_mat_t mat);
 
+/* Kernel-basis determinant recursion mirroring
+   ntl-extras::determinant_generic_knowing_degree.
+   Returns 1 iff the recursive computation succeeds and the output degree matches
+   the provided degree. On success, det is the determinant up to a nonzero
+   constant factor. */
+int nmod_poly_mat_det_generic(nmod_poly_t det,
+                              const nmod_poly_mat_t mat);
+
+int nmod_poly_mat_det_generic_knowing_degree(nmod_poly_t det,
+                                             const nmod_poly_mat_t mat,
+                                             slong degree);
+
 // TODO implem + doc
 //slong nmod_poly_mat_linsolve_mulders_storjohann(nmod_poly_mat_t mat);
 

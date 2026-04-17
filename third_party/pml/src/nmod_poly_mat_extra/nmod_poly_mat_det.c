@@ -13,6 +13,203 @@
 #include <flint/nmod_vec.h>
 #include "nmod_poly_mat_utils.h" // for permute_rows_by_sorting_vec
 #include "nmod_poly_mat_forms.h"
+#include "nmod_poly_mat_kernel.h"
+
+#ifndef NMOD_POLY_MAT_DET_GENERIC_BASECASE
+#define NMOD_POLY_MAT_DET_GENERIC_BASECASE 8
+#endif
+
+static slong
+_nmod_poly_mat_det_permutation_sign_from_block_order(const slong * first,
+                                                     slong first_len,
+                                                     const slong * second,
+                                                     slong second_len)
+{
+    slong inv_parity = 0;
+
+    for (slong i = 0; i < first_len; i++)
+        for (slong j = 0; j < second_len; j++)
+            inv_parity ^= (second[j] < first[i]);
+
+    return inv_parity ? -1 : 1;
+}
+
+static void
+_nmod_poly_mat_det_extract_rows(nmod_poly_mat_t sub,
+                                const nmod_poly_mat_t mat,
+                                const slong * rows,
+                                slong nb_rows)
+{
+    for (slong i = 0; i < nb_rows; i++)
+        for (slong j = 0; j < mat->c; j++)
+            nmod_poly_set(nmod_poly_mat_entry(sub, i, j),
+                          nmod_poly_mat_entry(mat, rows[i], j));
+}
+
+static void
+_nmod_poly_mat_det_extract_columns(nmod_poly_mat_t sub,
+                                   const nmod_poly_mat_t mat,
+                                   const slong * cols,
+                                   slong nb_cols)
+{
+    for (slong i = 0; i < mat->r; i++)
+        for (slong j = 0; j < nb_cols; j++)
+            nmod_poly_set(nmod_poly_mat_entry(sub, i, j),
+                          nmod_poly_mat_entry(mat, i, cols[j]));
+}
+
+static void
+_nmod_poly_mat_det_transpose_kernel_basis_rows(nmod_poly_mat_t kerbas,
+                                               const nmod_poly_mat_t kercols,
+                                               slong ker_dim)
+{
+    for (slong i = 0; i < ker_dim; i++)
+        for (slong j = 0; j < kercols->r; j++)
+            nmod_poly_set(nmod_poly_mat_entry(kerbas, i, j),
+                          nmod_poly_mat_entry(kercols, j, i));
+}
+
+static int
+_nmod_poly_mat_det_generic_recursive(nmod_poly_t det,
+                                     const nmod_poly_mat_t pmat)
+{
+    const slong dim = pmat->r;
+
+    if (pmat->r != pmat->c)
+        return 0;
+
+    if (dim == 0)
+    {
+        nmod_poly_one(det);
+        return 1;
+    }
+
+    if (dim <= NMOD_POLY_MAT_DET_GENERIC_BASECASE)
+    {
+        nmod_poly_mat_det(det, pmat);
+        return 1;
+    }
+
+    const slong cdim1 = dim >> 1;
+    const slong cdim2 = dim - cdim1;
+    int ok = 0;
+
+    nmod_poly_mat_t pmat_l;
+    nmod_poly_mat_t pmat_r;
+    nmod_poly_mat_t pmat_l_t;
+    nmod_poly_mat_t kercols;
+    nmod_poly_mat_t kerbas;
+    nmod_poly_mat_t leading_block;
+    nmod_poly_mat_t schur_input;
+    nmod_poly_mat_t schur;
+
+    nmod_poly_mat_init(pmat_l, dim, cdim1, pmat->modulus);
+    nmod_poly_mat_init(pmat_r, dim, cdim2, pmat->modulus);
+    nmod_poly_mat_init(pmat_l_t, cdim1, dim, pmat->modulus);
+    nmod_poly_mat_init(kercols, dim, dim, pmat->modulus);
+    nmod_poly_mat_init(kerbas, cdim2, dim, pmat->modulus);
+    nmod_poly_mat_init(leading_block, cdim1, cdim1, pmat->modulus);
+    nmod_poly_mat_init(schur_input, cdim2, cdim2, pmat->modulus);
+    nmod_poly_mat_init(schur, cdim2, cdim2, pmat->modulus);
+
+    slong * kerdeg = FLINT_ARRAY_ALLOC(dim, slong);
+    slong * pivind = FLINT_ARRAY_ALLOC(cdim2, slong);
+    slong * comp_rows = FLINT_ARRAY_ALLOC(cdim1, slong);
+    slong * shift = FLINT_ARRAY_ALLOC(dim, slong);
+    char * is_pivot_row = FLINT_ARRAY_ALLOC(dim, char);
+
+    nmod_poly_t det_leading, det_schur, det_kernel_pivots, num, rem;
+    nmod_poly_init(det_leading, pmat->modulus);
+    nmod_poly_init(det_schur, pmat->modulus);
+    nmod_poly_init(det_kernel_pivots, pmat->modulus);
+    nmod_poly_init(num, pmat->modulus);
+    nmod_poly_init(rem, pmat->modulus);
+
+    for (slong i = 0; i < dim; i++)
+    {
+        for (slong j = 0; j < cdim1; j++)
+            nmod_poly_set(nmod_poly_mat_entry(pmat_l, i, j),
+                          nmod_poly_mat_entry(pmat, i, j));
+        for (slong j = 0; j < cdim2; j++)
+            nmod_poly_set(nmod_poly_mat_entry(pmat_r, i, j),
+                          nmod_poly_mat_entry(pmat, i, j + cdim1));
+        is_pivot_row[i] = 0;
+    }
+
+    nmod_poly_mat_row_degree(shift, pmat_l, NULL);
+    for (slong i = 0; i < dim; i++)
+        if (shift[i] < 0)
+            shift[i] = 0;
+
+    nmod_poly_mat_transpose(pmat_l_t, pmat_l);
+    slong ker_dim = nmod_poly_mat_kernel_zls(kercols, kerdeg, pmat_l_t, shift, 2.0);
+    if (ker_dim != cdim2)
+        goto cleanup;
+
+    _nmod_poly_mat_det_transpose_kernel_basis_rows(kerbas, kercols, cdim2);
+    if (nmod_poly_mat_ordered_weak_popov_iter(kerbas, shift, NULL, pivind, NULL, ROW_LOWER) != cdim2)
+        goto cleanup;
+
+    for (slong i = 0; i < cdim2; i++)
+    {
+        if (pivind[i] < 0 || pivind[i] >= dim || is_pivot_row[pivind[i]])
+            goto cleanup;
+        is_pivot_row[pivind[i]] = 1;
+    }
+
+    {
+        slong idx = 0;
+        for (slong i = 0; i < dim; i++)
+            if (!is_pivot_row[i])
+                comp_rows[idx++] = i;
+        if (idx != cdim1)
+            goto cleanup;
+    }
+
+    _nmod_poly_mat_det_extract_rows(leading_block, pmat_l, comp_rows, cdim1);
+    _nmod_poly_mat_det_extract_columns(schur_input, kerbas, pivind, cdim2);
+    nmod_poly_mat_mul(schur, kerbas, pmat_r);
+
+    if (!_nmod_poly_mat_det_generic_recursive(det_leading, leading_block))
+        goto cleanup;
+    if (!_nmod_poly_mat_det_generic_recursive(det_schur, schur))
+        goto cleanup;
+    if (!_nmod_poly_mat_det_generic_recursive(det_kernel_pivots, schur_input))
+        goto cleanup;
+    if (nmod_poly_is_zero(det_kernel_pivots))
+        goto cleanup;
+
+    nmod_poly_mul(num, det_leading, det_schur);
+    if (_nmod_poly_mat_det_permutation_sign_from_block_order(comp_rows, cdim1, pivind, cdim2) < 0)
+        nmod_poly_neg(num, num);
+
+    nmod_poly_divrem(det, rem, num, det_kernel_pivots);
+    ok = nmod_poly_is_zero(rem);
+
+cleanup:
+    nmod_poly_clear(rem);
+    nmod_poly_clear(num);
+    nmod_poly_clear(det_kernel_pivots);
+    nmod_poly_clear(det_schur);
+    nmod_poly_clear(det_leading);
+
+    flint_free(is_pivot_row);
+    flint_free(shift);
+    flint_free(comp_rows);
+    flint_free(pivind);
+    flint_free(kerdeg);
+
+    nmod_poly_mat_clear(schur);
+    nmod_poly_mat_clear(schur_input);
+    nmod_poly_mat_clear(leading_block);
+    nmod_poly_mat_clear(kerbas);
+    nmod_poly_mat_clear(kercols);
+    nmod_poly_mat_clear(pmat_l_t);
+    nmod_poly_mat_clear(pmat_r);
+    nmod_poly_mat_clear(pmat_l);
+
+    return ok;
+}
 
 // Mulders-Storjohann determinant algorithm
 // matrix must be square, not tested
@@ -78,4 +275,18 @@ void nmod_poly_mat_det_iter(nmod_poly_t det, nmod_poly_mat_t mat)
     for (slong i = 1; i < view->r; i++)
         nmod_poly_mul(det, det, nmod_poly_mat_entry(view, i, i));
     nmod_poly_mat_window_clear(view);
+}
+
+int nmod_poly_mat_det_generic(nmod_poly_t det,
+                              const nmod_poly_mat_t mat)
+{
+    return _nmod_poly_mat_det_generic_recursive(det, mat);
+}
+
+int nmod_poly_mat_det_generic_knowing_degree(nmod_poly_t det,
+                                             const nmod_poly_mat_t mat,
+                                             slong degree)
+{
+    const int ok = _nmod_poly_mat_det_generic_recursive(det, mat);
+    return ok && (degree == nmod_poly_degree(det));
 }
