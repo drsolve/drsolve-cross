@@ -43,19 +43,7 @@ jobs:
             --disable-shared
           make -j$(nproc)
           make install
-
-      - name: Build PML (static)
-        run: |
-          git clone https://github.com/vneiger/pml.git
-          cd pml/flint-extras
-          ./bootstrap.sh
-          ./configure \
-            --prefix="$INSTALL_PREFIX" \
-            --enable-static \
-            --disable-shared
-          make -j$(nproc)
-          make install
-
+          
       - name: Configure (CMake, static)
         run: |
           cmake -B build \
@@ -158,18 +146,6 @@ jobs:
             --disable-shared \
             --with-gmp="$BREW" \
             --with-mpfr="$BREW"
-          make -j$(sysctl -n hw.ncpu)
-          make install
-
-      - name: Build PML (static)
-        run: |
-          git clone https://github.com/vneiger/pml.git
-          cd pml/flint-extras
-          ./bootstrap.sh
-          ./configure \
-            --prefix="$INSTALL_PREFIX" \
-            --enable-static \
-            --disable-shared
           make -j$(sysctl -n hw.ncpu)
           make install
 
