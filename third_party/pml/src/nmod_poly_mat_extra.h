@@ -81,8 +81,17 @@ void nmod_poly_mat_det_iter(nmod_poly_t det, nmod_poly_mat_t mat);
    Returns 1 iff the recursive computation succeeds and the output degree matches
    the provided degree. On success, det is the determinant up to a nonzero
    constant factor. */
+int nmod_poly_mat_det_generic_with_opts(nmod_poly_t det,
+                                        const nmod_poly_mat_t mat,
+                                        int use_parallel);
+
 int nmod_poly_mat_det_generic(nmod_poly_t det,
                               const nmod_poly_mat_t mat);
+
+int nmod_poly_mat_det_generic_knowing_degree_with_opts(nmod_poly_t det,
+                                                       const nmod_poly_mat_t mat,
+                                                       slong degree,
+                                                       int use_parallel);
 
 int nmod_poly_mat_det_generic_knowing_degree(nmod_poly_t det,
                                              const nmod_poly_mat_t mat,
