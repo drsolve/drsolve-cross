@@ -108,9 +108,16 @@ int perm_parity(const slong *perm, slong n);
    MAIN ENTRY POINT - DECLARATION
    ============================================================================ */
 
+void fq_nmod_poly_mat_det_set_threads(int num_threads);
+
+void fq_nmod_poly_mat_det_iter_with_opts(fq_nmod_poly_t det,
+                                         fq_nmod_poly_mat_t mat,
+                                         const fq_nmod_ctx_t ctx,
+                                         int use_parallel);
+
 void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
-                              fq_nmod_poly_mat_t mat,
-                              const fq_nmod_ctx_t ctx);
+                               fq_nmod_poly_mat_t mat,
+                               const fq_nmod_ctx_t ctx);
 
 #ifdef __cplusplus
 }

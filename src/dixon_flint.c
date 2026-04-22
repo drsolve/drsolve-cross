@@ -8,8 +8,26 @@
 #include "dixon_flint.h"
 #include <sys/time.h>
 
-// Global method selection variable definition
-det_method_t dixon_global_method = -1;
+// Global method selection variable definitions
+det_method_t dixon_global_method_step1 = -1;
+det_method_t dixon_global_method_step4 = -1;
+det_method_t dixon_global_method = -1; // deprecated compatibility alias
+
+static const char *dixon_det_method_name(det_method_t method)
+{
+    switch (method) {
+        case DET_METHOD_RECURSIVE:
+            return "recursive expansion";
+        case DET_METHOD_KRONECKER:
+            return "Kronecker substitution";
+        case DET_METHOD_INTERPOLATION:
+            return "interpolation";
+        case DET_METHOD_HUANG:
+            return "Huang interpolation";
+        default:
+            return "default";
+    }
+}
 
 static void init_evaluation_parameters(fq_nmod_t *param_vals, slong npars,
                                       const fq_nmod_ctx_t ctx,
@@ -1802,9 +1820,25 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
 
 // Compute determinant of cancellation matrix
 void compute_fq_cancel_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **modified_M_mvpoly,
-                                 slong nvars, slong npars, det_method_t method) {
+                                  slong nvars, slong npars, det_method_t method) {
     clock_t start = clock();
-    compute_fq_det_recursive(result, modified_M_mvpoly, nvars + 1);
+    switch (method) {
+        case DET_METHOD_INTERPOLATION:
+            fq_compute_det_by_interpolation_optimized(result, modified_M_mvpoly,
+                                                      nvars + 1, nvars, npars,
+                                                      modified_M_mvpoly[0][0].ctx, NULL);
+            break;
+        case DET_METHOD_KRONECKER:
+            compute_fq_det_kronecker(result, modified_M_mvpoly, nvars + 1);
+            break;
+        case DET_METHOD_HUANG:
+            compute_fq_det_huang_interpolation(result, modified_M_mvpoly, nvars + 1);
+            break;
+        case DET_METHOD_RECURSIVE:
+        default:
+            compute_fq_det_recursive(result, modified_M_mvpoly, nvars + 1);
+            break;
+    }
     clock_t end = clock();
     (void) start;
     (void) end;
@@ -1823,7 +1857,6 @@ static slong dixon_binomial(slong n, slong k) {
     }
     return result;
 }
-
 
 static void dixon_add_generic_monomials(fq_mvpoly_t *poly,
                                         slong nvars,
@@ -1987,8 +2020,15 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     perform_fq_matrix_row_operations_mvpoly(&modified_M_mvpoly, &M_mvpoly, nvars, npars);
     
     fq_mvpoly_t d_poly;
-    printf("Computing cancellation matrix determinant using recursive expansion...\n");
-    compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, DET_METHOD_RECURSIVE);
+    det_method_t step1_method = DET_METHOD_RECURSIVE;
+    if (dixon_global_method_step1 != -1) {
+        step1_method = dixon_global_method_step1;
+        printf("Step 1 method override active: %d (%s)\n",
+               dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
+    }
+    printf("Computing cancellation matrix determinant using %s...\n",
+           dixon_det_method_name(step1_method));
+    compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
     if (d_poly.nterms <= 100) {
         printf("Dixon polynomial: %ld terms\n", d_poly.nterms);
@@ -2040,9 +2080,10 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
             coeff_method = DET_METHOD_KRONECKER;
         }
         //coeff_method = DET_METHOD_INTERPOLATION;
-        if (dixon_global_method != -1) {
-            coeff_method = dixon_global_method;
-            printf("Method overridden by global variable: %d\n", dixon_global_method);
+        if (dixon_global_method_step4 != -1) {
+            coeff_method = dixon_global_method_step4;
+            printf("Step 4 method override active: %d (%s)\n",
+                   dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
         }
         
         compute_fq_coefficient_matrix_det(result, coeff_matrix, matrix_size,
@@ -2094,8 +2135,15 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     perform_fq_matrix_row_operations_mvpoly(&modified_M_mvpoly, &M_mvpoly, nvars, npars);
 
     fq_mvpoly_t d_poly;
-    printf("Computing cancellation matrix determinant using recursive expansion...\n");
-    compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, DET_METHOD_RECURSIVE);
+    det_method_t step1_method = DET_METHOD_RECURSIVE;
+    if (dixon_global_method_step1 != -1) {
+        step1_method = dixon_global_method_step1;
+        printf("Step 1 method override active: %d (%s)\n",
+               dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
+    }
+    printf("Computing cancellation matrix determinant using %s...\n",
+           dixon_det_method_name(step1_method));
+    compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
     if (d_poly.nterms <= 100) {
         printf("Dixon polynomial: %ld terms\n", d_poly.nterms);
@@ -2139,9 +2187,10 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         } else {
             coeff_method = DET_METHOD_KRONECKER;
         }
-        if (dixon_global_method != -1) {
-            coeff_method = dixon_global_method;
-            printf("Method overridden by global variable: %d\n", dixon_global_method);
+        if (dixon_global_method_step4 != -1) {
+            coeff_method = dixon_global_method_step4;
+            printf("Step 4 method override active: %d (%s)\n",
+                   dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
         }
         
         compute_fq_coefficient_matrix_det(result, coeff_matrix, matrix_size,

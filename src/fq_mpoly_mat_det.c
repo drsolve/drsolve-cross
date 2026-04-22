@@ -1811,13 +1811,12 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
         }
     }
     
-    // Call Huang's algorithm
-    nmod_mpoly_t det_nmod, actual_det_nmod;
+    // Call Sparse.pdf-style determinant probing
+    nmod_mpoly_t det_nmod;
     nmod_mpoly_init(det_nmod, nmod_ctx);
-    nmod_mpoly_init(actual_det_nmod, nmod_ctx);
     
     timing_info_t huang_start = start_timing();
-    ComputePolyMatrixDet(det_nmod, actual_det_nmod, &huang_mat, nvars + npars, p, nmod_ctx);
+    ComputePolyMatrixDet(det_nmod, &huang_mat, nvars + npars, p, nmod_ctx);
     timing_info_t huang_elapsed = end_timing(huang_start);
     print_timing("Huang interpolation", huang_elapsed);
     
@@ -1829,7 +1828,6 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
     // Cleanup
     poly_mat_clear(&huang_mat, nmod_ctx);
     nmod_mpoly_clear(det_nmod, nmod_ctx);
-    nmod_mpoly_clear(actual_det_nmod, nmod_ctx);
     nmod_mpoly_ctx_clear(nmod_ctx);
     
     timing_info_t total_elapsed = end_timing(total_start);

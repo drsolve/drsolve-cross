@@ -28,7 +28,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.1.3"
+#define PROGRAM_VERSION "0.1.5"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -103,7 +103,9 @@ static void print_usage(const char *prog_name)
 
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
-    printf("    -> Available methods: 0.Recursive; 1.Kronecker; 2.Interpolation\n");
+    printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
+    printf("    -> Available methods: 0.Recursive; 1.Kronecker; 2.Interpolation; 3.Huang\n");
+    printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
 
     printf("  Process count:\n");
     printf("    %s --threads <num> <args>\n", prog_name);
@@ -154,6 +156,17 @@ static const char *display_prog_name(const char *argv0)
     const char *env_name = getenv("DIXON_DISPLAY_NAME");
     if (env_name && env_name[0] != '\0') return env_name;
     return argv0;
+}
+
+static const char *det_method_name_cli(int method)
+{
+    switch (method) {
+        case 0: return "Recursive expansion";
+        case 1: return "Kronecker substitution";
+        case 2: return "Interpolation";
+        case 3: return "Huang interpolation";
+        default: return "Default";
+    }
 }
 
 static int check_prime_power(const fmpz_t n, fmpz_t prime, ulong *power)
@@ -1716,7 +1729,8 @@ int main(int argc, char *argv[])
     int    field_eq_mode = 0; /* --field-equation */
     int    arg_offset  = 0;
     double omega       = DIXON_OMEGA;   /* default, overridden by --omega */
-    int    det_method  = -1;  /* determinant method, -1 means use default */
+    int    det_method_step1 = -1;  /* determinant method override for step 1 */
+    int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
 
     for (int i = 1; i < argc; i++) {
@@ -1753,9 +1767,32 @@ int main(int argc, char *argv[])
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
             if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
-                det_method = (int)val;
+                det_method_step1 = (int)val;
+                det_method_step4 = (int)val;
             } else {
                 fprintf(stderr, "Warning: invalid --method value '%s', "
+                                "must be 0-3. Using default.\n", argv[i + 1]);
+            }
+            arg_offset += 2;
+            i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "--step1") == 0) && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
+                det_method_step1 = (int)val;
+            } else {
+                fprintf(stderr, "Warning: invalid --step1 value '%s', "
+                                "must be 0-3. Using default.\n", argv[i + 1]);
+            }
+            arg_offset += 2;
+            i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "--step4") == 0) && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
+                det_method_step4 = (int)val;
+            } else {
+                fprintf(stderr, "Warning: invalid --step4 value '%s', "
                                 "must be 0-3. Using default.\n", argv[i + 1]);
             }
             arg_offset += 2;
@@ -2230,21 +2267,28 @@ int main(int argc, char *argv[])
     /* ======================================================
      * Set determinant method and thread count
      * ====================================================== */
-    if (det_method != -1) {
-        dixon_global_method = (det_method_t)det_method;
+    dixon_global_method_step1 = -1;
+    dixon_global_method_step4 = -1;
+    dixon_global_method = -1;
+    if (det_method_step1 != -1) {
+        dixon_global_method_step1 = (det_method_t)det_method_step1;
+        dixon_global_method = dixon_global_method_step1;
         if (!silent_mode) {
-            printf("Determinant method: ");
-            switch (det_method) {
-                case 0: printf("Recursive expansion\n"); break;
-                case 1: printf("Kronecker substitution\n"); break;
-                case 2: printf("Interpolation\n"); break;
-                case 3: printf("Huang interpolation\n"); break;
-                default: printf("Default\n");
-            }
+            printf("Step 1 determinant method: %s\n",
+                   det_method_name_cli(det_method_step1));
+        }
+    }
+    if (det_method_step4 != -1) {
+        dixon_global_method_step4 = (det_method_t)det_method_step4;
+        dixon_global_method = dixon_global_method_step4;
+        if (!silent_mode) {
+            printf("Step 4 determinant method: %s\n",
+                   det_method_name_cli(det_method_step4));
         }
     }
     if (num_threads != -1) {
         fq_interpolation_set_threads(num_threads);
+        fq_nmod_poly_mat_det_set_threads(num_threads);
         if (!silent_mode) {
             printf("Using %d threads\n", num_threads);
         }
