@@ -47,6 +47,41 @@ static void rational_solver_progress(const char *fmt, ...) {
 
 static char *rational_arb_to_string(const arb_t value, slong digits) {
     char *buffer = NULL;
+#ifdef _WIN32
+    FILE *mem = tmpfile();
+    long length;
+    size_t read_size;
+
+    if (!mem) {
+        return NULL;
+    }
+
+    arb_fprintd(mem, value, digits);
+    fflush(mem);
+    if (fseek(mem, 0, SEEK_END) != 0) {
+        fclose(mem);
+        return NULL;
+    }
+    length = ftell(mem);
+    if (length < 0) {
+        fclose(mem);
+        return NULL;
+    }
+    if (fseek(mem, 0, SEEK_SET) != 0) {
+        fclose(mem);
+        return NULL;
+    }
+
+    buffer = (char *) malloc((size_t) length + 1);
+    if (!buffer) {
+        fclose(mem);
+        return NULL;
+    }
+
+    read_size = fread(buffer, 1, (size_t) length, mem);
+    buffer[read_size] = '\0';
+    fclose(mem);
+#else
     size_t size = 0;
     FILE *mem = open_memstream(&buffer, &size);
     if (!mem) {
@@ -55,6 +90,7 @@ static char *rational_arb_to_string(const arb_t value, slong digits) {
 
     arb_fprintd(mem, value, digits);
     fclose(mem);
+#endif
     return buffer;
 }
 
