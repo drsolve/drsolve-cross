@@ -1,0 +1,60 @@
+/* Define if the compiler supports and should use thread-local storage */
+#define FLINT_USES_TLS 1
+
+/* Define if the library should be thread-safe, no matter whether FLINT_USES_TLS is used */
+#define FLINT_REENTRANT 0
+
+/* Define if -DCMAKE_BUILD_TYPE=Debug was given, to enable some ASSERT()s */
+#define FLINT_WANT_ASSERT 0
+
+/* Define if you cpu_set_t in sched.h */
+#define FLINT_USES_CPUSET 0
+
+#define FLINT_USES_PTHREAD 1
+
+#define FLINT_USES_BLAS 1
+
+#define FLINT_USES_FENV 1
+
+#define FLINT_HAVE_FFT_SMALL 1
+
+#define FLINT_KNOW_STRONG_ORDER 1
+
+#define FLINT_BITS 64
+#define FLINT_LONG_LONG 1
+
+/* #undef FLINT_STATIC_BUILD */
+
+/* NOTE: Here we assume this is how it works. */
+#if defined(_MSC_VER) || defined(__MINGW32__) || defined(__MINGW64__)
+# define HAVE__ALIGNED_MALLOC 1
+#else
+# define HAVE_ALIGNED_ALLOC 1
+#endif
+
+#ifdef _MSC_VER
+# if defined(FLINT_STATIC_BUILD)
+#  define FLINT_DLL
+# elif defined(FLINT_BUILD_DLL)
+#  define FLINT_DLL __declspec(dllexport)
+# else
+#  define FLINT_DLL __declspec(dllimport)
+# endif
+#endif
+
+#define DIAGNOSTIC_PUSH
+#define DIAGNOSTIC_POP
+#define DIAGNOSTIC_IGNORE_INCOMPATIBLE_FUNCTION_POINTER_TYPES
+#define DIAGNOSTIC_IGNORE_DISCARDED_QUALIFIERS
+#define DIAGNOSTIC_IGNORE_FORMAT
+#define DIAGNOSTIC_IGNORE_DANGLING_POINTER
+#define DIAGNOSTIC_IGNORE_CAST_FUNCTION_TYPE
+#define DIAGNOSTIC_IGNORE_OVERLENGTH_STRINGS
+#define DIAGNOSTIC_IGNORE_UNUSED_VARIABLE
+#define DIAGNOSTIC_IGNORE_MAYBE_UNINITIALIZED
+
+#define PUSH_OPTIONS
+#define POP_OPTIONS
+#define OPTIMIZE_O2
+#define OPTIMIZE_OSIZE
+#define OPTIMIZE_UNROLL_LOOPS
