@@ -180,7 +180,7 @@ int main(void)
     char error_message[512];
 
     if (!get_module_dir(root_dir, sizeof(root_dir))) {
-        fprintf(stderr, "Failed to resolve the dixon.exe directory.\n");
+        fprintf(stderr, "Failed to resolve the drsolve.exe directory.\n");
         return 1;
     }
 
@@ -189,7 +189,7 @@ int main(void)
         return 1;
     }
 
-    if (!build_path(real_cli, sizeof(real_cli), root_dir, "bin\\dixon_cli_real.exe")) {
+    if (!build_path(real_cli, sizeof(real_cli), root_dir, "bin\\drsolve_cli_real.exe")) {
         fprintf(stderr, "The internal CLI path is too long.\n");
         return 1;
     }
@@ -199,7 +199,7 @@ int main(void)
         return 1;
     }
 
-    SetEnvironmentVariableA("DIXON_DISPLAY_NAME", "dixon.exe");
+    SetEnvironmentVariableA("DIXON_DISPLAY_NAME", "drsolve.exe");
 
     needed = strlen(real_cli) + strlen(tail) + 4;
     command_line = (char *) malloc(needed);

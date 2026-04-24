@@ -1,24 +1,24 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(DixonRes
-  VERSION 0.1.3
-  DESCRIPTION "Dixon Resultant & Polynomial System Solver"
+project(drsolve
+  VERSION 0.2.0
+  DESCRIPTION "DRsolve: Dixon Resultant & Polynomial System Solver"
   LANGUAGES C
 )
 
 # ============================================================
 # Build options
 # ============================================================
-option(DIXONRES_ENABLE_PML       "Use bundled third_party/pml when available" ON)
-option(DIXONRES_ENABLE_OPENMP    "Enable OpenMP if available"              ON)
-option(DIXONRES_ENABLE_LTO       "Enable Link Time Optimization (-flto)"   ON)
-option(DIXONRES_ENABLE_ASAN      "Enable AddressSanitizer"                 OFF)
-option(DIXONRES_STATIC           "Link FLINT/PML statically into binary"   OFF)
-option(DIXONRES_BUILD_SHARED_LIB "Build libdixon as a shared library"      ON)
-option(DIXONRES_BUILD_STATIC_LIB "Build libdixon as a static library"      ON)
-option(DIXONRES_BUILD_GUI        "Build Windows GUI targets (Windows only)" ON)
-option(DIXONRES_BUILD_ATTACK     "Build programs in ../Attack if present"  ON)
-option(DIXONRES_USE_BUNDLED_DEPS "Use bundled third-party dependencies (cross-compile only)" ON)
+option(DRSOLVE_ENABLE_PML       "Use bundled third_party/pml when available" ON)
+option(DRSOLVE_ENABLE_OPENMP    "Enable OpenMP if available"              ON)
+option(DRSOLVE_ENABLE_LTO       "Enable Link Time Optimization (-flto)"   ON)
+option(DRSOLVE_ENABLE_ASAN      "Enable AddressSanitizer"                 OFF)
+option(DRSOLVE_STATIC           "Link FLINT/PML statically into binary"   OFF)
+option(DRSOLVE_BUILD_SHARED_LIB "Build libdrsolve as a shared library"      ON)
+option(DRSOLVE_BUILD_STATIC_LIB "Build libdrsolve as a static library"      ON)
+option(DRSOLVE_BUILD_GUI        "Build Windows GUI targets (Windows only)" ON)
+option(DRSOLVE_BUILD_ATTACK     "Build programs in ../Attack if present"  ON)
+option(DRSOLVE_USE_BUNDLED_DEPS "Use bundled third-party dependencies (cross-compile only)" ON)
 
 # Hint paths exposed to the user  (override via -DFLINT_ROOT=... etc.)
 set(FLINT_ROOT ""   CACHE PATH "Root directory of FLINT installation")
@@ -48,28 +48,28 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
 # Platform detection
 # ============================================================
 if(WIN32 OR MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  set(DIXONRES_WINDOWS TRUE)
+  set(DRSOLVE_WINDOWS TRUE)
 else()
-  set(DIXONRES_WINDOWS FALSE)
+  set(DRSOLVE_WINDOWS FALSE)
 endif()
 
 # Detect if we're cross-compiling vs native Windows build
-if(DIXONRES_WINDOWS AND CMAKE_CROSSCOMPILING)
-  set(DIXONRES_WINDOWS_CROSS TRUE)
+if(DRSOLVE_WINDOWS AND CMAKE_CROSSCOMPILING)
+  set(DRSOLVE_WINDOWS_CROSS TRUE)
   message(STATUS "Windows: cross-compiling from ${CMAKE_HOST_SYSTEM_NAME}")
-elseif(DIXONRES_WINDOWS)
-  set(DIXONRES_WINDOWS_NATIVE TRUE)
+elseif(DRSOLVE_WINDOWS)
+  set(DRSOLVE_WINDOWS_NATIVE TRUE)
   message(STATUS "Windows: native build (MSYS2/MINGW64)")
 else()
-  set(DIXONRES_WINDOWS_CROSS FALSE)
-  set(DIXONRES_WINDOWS_NATIVE FALSE)
+  set(DRSOLVE_WINDOWS_CROSS FALSE)
+  set(DRSOLVE_WINDOWS_NATIVE FALSE)
 endif()
 
 # When cross-compiling for Windows from Linux/macOS:
 #   - Optionally use bundled third_party/ directory, OR
 #   - Use system-installed cross-compiler libraries
 # Native Windows builds (MSYS2) should use pacman-installed packages.
-if(DIXONRES_WINDOWS_CROSS AND DIXONRES_USE_BUNDLED_DEPS AND NOT FLINT_ROOT)
+if(DRSOLVE_WINDOWS_CROSS AND DRSOLVE_USE_BUNDLED_DEPS AND NOT FLINT_ROOT)
   if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/mingw/include/flint/flint.h")
     set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/mingw")
   else()
@@ -81,7 +81,7 @@ endif()
 # ============================================================
 # Fetch MSYS2 packages for cross-compilation (when not using bundled deps)
 # ============================================================
-if(DIXONRES_WINDOWS_CROSS AND NOT DIXONRES_USE_BUNDLED_DEPS)
+if(DRSOLVE_WINDOWS_CROSS AND NOT DRSOLVE_USE_BUNDLED_DEPS)
   include(FetchMSYS2Package)
   
   message(STATUS "Fetching MSYS2 packages for cross-compilation...")
@@ -208,13 +208,13 @@ set(CMAKE_C_EXTENSIONS ON)     # GNU extensions used by FLINT headers
 # ============================================================
 # LTO
 # ============================================================
-if(DIXONRES_ENABLE_LTO)
+if(DRSOLVE_ENABLE_LTO)
   check_ipo_supported(RESULT _ipo_ok OUTPUT _ipo_msg)
   if(_ipo_ok)
     # Applied per-target below
     message(STATUS "LTO: supported")
   else()
-    set(DIXONRES_ENABLE_LTO OFF)
+    set(DRSOLVE_ENABLE_LTO OFF)
     message(STATUS "LTO: not supported (${_ipo_msg})")
   endif()
 endif()
@@ -235,7 +235,7 @@ endif()
 # ============================================================
 # AddressSanitizer
 # ============================================================
-if(DIXONRES_ENABLE_ASAN)
+if(DRSOLVE_ENABLE_ASAN)
   check_c_compiler_flag(-fsanitize=address _asan_ok)
   if(_asan_ok)
     add_compile_options(-fsanitize=address)
@@ -243,7 +243,7 @@ if(DIXONRES_ENABLE_ASAN)
     message(STATUS "ASan: enabled")
   else()
     message(WARNING "ASan requested but -fsanitize=address is not supported; disabling.")
-    set(DIXONRES_ENABLE_ASAN OFF)
+    set(DRSOLVE_ENABLE_ASAN OFF)
   endif()
 endif()
 
@@ -256,7 +256,7 @@ set(_flint_include_hints
 set(_flint_lib_hints
   "${FLINT_ROOT}/lib"
 )
-if(DIXONRES_WINDOWS)
+if(DRSOLVE_WINDOWS)
   list(PREPEND _flint_include_hints
     "${CMAKE_SOURCE_DIR}/third_party/mingw/include"
   )
@@ -300,7 +300,7 @@ if(FLINT_FOUND AND TARGET FLINT::flint)
   endif()
 else()
   # 2. Manual detection
-  if(DIXONRES_WINDOWS AND FLINT_INCLUDE_DIR)
+  if(DRSOLVE_WINDOWS AND FLINT_INCLUDE_DIR)
     if(NOT EXISTS "${FLINT_INCLUDE_DIR}/flint/flint.h" OR NOT EXISTS "${FLINT_INCLUDE_DIR}/gmp.h")
       unset(FLINT_INCLUDE_DIR CACHE)
     endif()
@@ -311,7 +311,7 @@ else()
     HINTS ${_flint_include_hints}
   )
 
-  if(DIXONRES_STATIC)
+  if(DRSOLVE_STATIC)
     find_library(FLINT_LIBRARY
       NAMES libflint.a
       HINTS ${_flint_lib_hints}
@@ -364,7 +364,7 @@ endif()
 # ============================================================
 # Find OpenBLAS  (Windows only, optional on others)
 # ============================================================
-if(DIXONRES_WINDOWS)
+if(DRSOLVE_WINDOWS)
   set(_openblas_hints "")
   if(DEFINED mingw-w64-x86_64-openblas_SOURCE_DIR)
     list(APPEND _openblas_hints "${mingw-w64-x86_64-openblas_SOURCE_DIR}/mingw64/lib")
@@ -386,7 +386,7 @@ endif()
 set(PML_AVAILABLE FALSE)
 set(PML_STATUS "disabled")
 
-if(DIXONRES_ENABLE_PML)
+if(DRSOLVE_ENABLE_PML)
   set(PML_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/pml")
 
   if(EXISTS "${PML_SOURCE_DIR}/src/pml.h")
@@ -424,7 +424,7 @@ if(DIXONRES_ENABLE_PML)
 
     # Link PML with FLINT, GMP, MPFR, and pthread
     target_link_libraries(pml PUBLIC FLINT::FLINT ${GMP_LIBRARY} ${MPFR_LIBRARY})
-    if(NOT DIXONRES_WINDOWS)
+    if(NOT DRSOLVE_WINDOWS)
       target_link_libraries(pml PUBLIC pthread)
     endif()
 
@@ -445,7 +445,7 @@ if(DIXONRES_ENABLE_PML)
     )
 
     # Platform-specific definitions
-    if(DIXONRES_WINDOWS)
+    if(DRSOLVE_WINDOWS)
       target_compile_definitions(pml PUBLIC HAVE_WINDOWS_H=1)
     else()
       target_compile_definitions(pml PUBLIC
@@ -472,7 +472,7 @@ if(DIXONRES_ENABLE_PML)
             /opt/homebrew/include
     )
 
-    if(DIXONRES_STATIC)
+    if(DRSOLVE_STATIC)
       find_library(PML_LIBRARY NAMES libpml.a
         HINTS "${PML_ROOT}/lib" /usr/local/lib /opt/homebrew/lib)
     else()
@@ -524,7 +524,7 @@ endif()
 # ============================================================
 # Find OpenMP
 # ============================================================
-if(DIXONRES_ENABLE_OPENMP)
+if(DRSOLVE_ENABLE_OPENMP)
   find_package(OpenMP COMPONENTS C)
   if(OpenMP_C_FOUND)
     message(STATUS "OpenMP: ${OpenMP_C_FLAGS}")
@@ -539,7 +539,7 @@ endif()
 set(_sys_libs "")
 if(APPLE)
   list(APPEND _sys_libs ${MPFR_LIBRARY} ${GMP_LIBRARY} m)
-elseif(DIXONRES_WINDOWS)
+elseif(DRSOLVE_WINDOWS)
   list(APPEND _sys_libs ${MPFR_LIBRARY} ${GMP_LIBRARY} m pthread)
   if(OPENBLAS_LIBRARY)
     list(APPEND _sys_libs ${OPENBLAS_LIBRARY})
@@ -551,15 +551,15 @@ endif()
 # ============================================================
 # Common link-library list  (shared between all targets)
 # ============================================================
-set(_dixon_deps)
+set(_drsolve_deps)
 if(PML_AVAILABLE)
-  list(APPEND _dixon_deps PML::PML)
+  list(APPEND _drsolve_deps PML::PML)
 endif()
-list(APPEND _dixon_deps FLINT::FLINT)
+list(APPEND _drsolve_deps FLINT::FLINT)
 if(OpenMP_C_FOUND)
-  list(APPEND _dixon_deps OpenMP::OpenMP_C)
+  list(APPEND _drsolve_deps OpenMP::OpenMP_C)
 endif()
-list(APPEND _dixon_deps ${_sys_libs})
+list(APPEND _drsolve_deps ${_sys_libs})
 
 # ============================================================
 # Math source list  (shared between library and exe targets)
@@ -590,56 +590,56 @@ set(MATH_SOURCES
   src/unified_mpoly_resultant.c
 )
 
-# Convenience function: apply standard settings to a dixon target
-function(dixon_target_common _tgt)
+# Convenience function: apply standard settings to a drsolve target
+function(drsolve_target_common _tgt)
   target_include_directories(${_tgt} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/dixon>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/drsolve>
   )
-  target_link_libraries(${_tgt} PUBLIC ${_dixon_deps})
+  target_link_libraries(${_tgt} PUBLIC ${_drsolve_deps})
   target_compile_options(${_tgt} PRIVATE
     $<$<CONFIG:Release>:-O3>
     $<$<CONFIG:Debug>:-O0 -g>
   )
-  if(DIXONRES_ENABLE_LTO)
+  if(DRSOLVE_ENABLE_LTO)
     set_property(TARGET ${_tgt} PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
   endif()
 endfunction()
 
 # ============================================================
-# Static library: libdixon.a  (libdixon-1.a on Windows)
+# Static library: libdrsolve.a  (libdrsolve-1.a on Windows)
 # ============================================================
-if(DIXONRES_BUILD_STATIC_LIB OR DIXONRES_STATIC)
-  add_library(dixon_static STATIC ${MATH_SOURCES})
-  dixon_target_common(dixon_static)
-  if(DIXONRES_WINDOWS)
-    set_target_properties(dixon_static PROPERTIES OUTPUT_NAME "libdixon-1")
+if(DRSOLVE_BUILD_STATIC_LIB OR DRSOLVE_STATIC)
+  add_library(drsolve_static STATIC ${MATH_SOURCES})
+  drsolve_target_common(drsolve_static)
+  if(DRSOLVE_WINDOWS)
+    set_target_properties(drsolve_static PROPERTIES OUTPUT_NAME "libdrsolve-1")
   else()
-    set_target_properties(dixon_static PROPERTIES OUTPUT_NAME "dixon")
+    set_target_properties(drsolve_static PROPERTIES OUTPUT_NAME "drsolve")
   endif()
-  set_target_properties(dixon_static PROPERTIES
+  set_target_properties(drsolve_static PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
   )
 endif()
 
 # ============================================================
-# Shared library: libdixon.so / .dylib / libdixon-1.dll
+# Shared library: libdrsolve.so / .dylib / libdrsolve-1.dll
 # ============================================================
-if(DIXONRES_BUILD_SHARED_LIB AND NOT DIXONRES_STATIC)
-  add_library(dixon_shared SHARED ${MATH_SOURCES})
-  dixon_target_common(dixon_shared)
+if(DRSOLVE_BUILD_SHARED_LIB AND NOT DRSOLVE_STATIC)
+  add_library(drsolve_shared SHARED ${MATH_SOURCES})
+  drsolve_target_common(drsolve_shared)
 
-  if(DIXONRES_WINDOWS)
+  if(DRSOLVE_WINDOWS)
     # Windows DLL with import library
-    set_target_properties(dixon_shared PROPERTIES
-      OUTPUT_NAME            "libdixon-1"
+    set_target_properties(drsolve_shared PROPERTIES
+      OUTPUT_NAME            "libdrsolve-1"
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/dll"
       ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"   # .dll.a import lib
       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
     )
   else()
-    set_target_properties(dixon_shared PROPERTIES
-      OUTPUT_NAME            "dixon"
+    set_target_properties(drsolve_shared PROPERTIES
+      OUTPUT_NAME            "drsolve"
       LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
       VERSION                "${PROJECT_VERSION}"
       SOVERSION              "1"
@@ -648,7 +648,7 @@ if(DIXONRES_BUILD_SHARED_LIB AND NOT DIXONRES_STATIC)
 
   # macOS: set install name so binaries find the dylib at runtime
   if(APPLE)
-    set_target_properties(dixon_shared PROPERTIES
+    set_target_properties(drsolve_shared PROPERTIES
       INSTALL_NAME_DIR "@rpath"
       BUILD_WITH_INSTALL_RPATH FALSE
     )
@@ -656,9 +656,9 @@ if(DIXONRES_BUILD_SHARED_LIB AND NOT DIXONRES_STATIC)
 endif()
 
 # ============================================================
-# Main executable: dixon
-# On Windows it lives in bin/ as dixon_cli_real.exe;
-# the top-level dixon.exe is a thin launcher (built below).
+# Main executable: drsolve
+# On Windows it lives in bin/ as drsolve_cli_real.exe;
+# the top-level drsolve.exe is a thin launcher (built below).
 # ============================================================
 # The original Makefile compiles all sources together in one
 # translation unit for maximum inlining ("unity" compilation).
@@ -666,22 +666,22 @@ endif()
 # We replicate the unity approach via a separate object library
 # that is linked privately into the executable.
 
-add_executable(dixon_exe dixon.c ${MATH_SOURCES})
-dixon_target_common(dixon_exe)
+add_executable(drsolve_exe drsolve.c ${MATH_SOURCES})
+drsolve_target_common(drsolve_exe)
 
-if(DIXONRES_WINDOWS)
-  set_target_properties(dixon_exe PROPERTIES
-    OUTPUT_NAME              "dixon_cli_real"
+if(DRSOLVE_WINDOWS)
+  set_target_properties(drsolve_exe PROPERTIES
+    OUTPUT_NAME              "drsolve_cli_real"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
   )
 else()
-  set_target_properties(dixon_exe PROPERTIES
-    OUTPUT_NAME "dixon"
+  set_target_properties(drsolve_exe PROPERTIES
+    OUTPUT_NAME "drsolve"
   )
 
   # RPATH: find shared libs relative to binary and from install prefix
   if(APPLE)
-    set_target_properties(dixon_exe PROPERTIES
+    set_target_properties(drsolve_exe PROPERTIES
       INSTALL_RPATH "@loader_path/../lib"
       BUILD_WITH_INSTALL_RPATH FALSE
       BUILD_RPATH "${CMAKE_BINARY_DIR}/lib"
@@ -696,7 +696,7 @@ else()
       list(APPEND _rpath_dirs "${_pml_lib_dir}")
     endif()
     string(REPLACE ";" ":" _rpath_str "${_rpath_dirs}")
-    set_target_properties(dixon_exe PROPERTIES
+    set_target_properties(drsolve_exe PROPERTIES
       INSTALL_RPATH           "\$ORIGIN/../lib"
       BUILD_RPATH             "${_rpath_str}"
       BUILD_WITH_INSTALL_RPATH FALSE
@@ -706,9 +706,9 @@ endif()
 
 # Static-link mode: add linker flags for duplicate-symbol tolerance
 # (FLINT and PML share some symbol names intentionally)
-if(DIXONRES_STATIC)
+if(DRSOLVE_STATIC)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_link_options(dixon_exe PRIVATE
+    target_link_options(drsolve_exe PRIVATE
       -Wl,--allow-multiple-definition
       -no-pie
     )
@@ -718,27 +718,27 @@ if(DIXONRES_STATIC)
 endif()
 
 # ============================================================
-# Windows: launcher (dixon.exe) and GUI (dixon_win_gui.exe)
+# Windows: launcher (drsolve.exe) and GUI (drsolve_win_gui.exe)
 # ============================================================
-if(DIXONRES_WINDOWS AND DIXONRES_BUILD_GUI)
+if(DRSOLVE_WINDOWS AND DRSOLVE_BUILD_GUI)
 
-  # Thin launcher: sets DLL path then spawns bin/dixon_cli_real.exe
-  add_executable(dixon_launcher win_gui/dixon_launcher.c)
-  target_compile_definitions(dixon_launcher PRIVATE _WIN32_WINNT=0x0601)
-  set_target_properties(dixon_launcher PROPERTIES
-    OUTPUT_NAME              "dixon"
+  # Thin launcher: sets DLL path then spawns bin/drsolve_cli_real.exe
+  add_executable(drsolve_launcher win_gui/dixon_launcher.c)
+  target_compile_definitions(drsolve_launcher PRIVATE _WIN32_WINNT=0x0601)
+  set_target_properties(drsolve_launcher PROPERTIES
+    OUTPUT_NAME              "drsolve"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   )
 
   # Windows GUI frontend
-  add_executable(dixon_win_gui WIN32
+  add_executable(drsolve_win_gui WIN32
     win_gui/dixon_gui.c
     win_gui/dixon_wrapper.c
   )
-  target_compile_definitions(dixon_win_gui PRIVATE _WIN32_WINNT=0x0601)
-  target_link_libraries(dixon_win_gui PRIVATE comctl32 comdlg32 shlwapi)
-  set_target_properties(dixon_win_gui PROPERTIES
-    OUTPUT_NAME              "dixon_win_gui"
+  target_compile_definitions(drsolve_win_gui PRIVATE _WIN32_WINNT=0x0601)
+  target_link_libraries(drsolve_win_gui PRIVATE comctl32 comdlg32 shlwapi)
+  set_target_properties(drsolve_win_gui PROPERTIES
+    OUTPUT_NAME              "drsolve_win_gui"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   )
 
@@ -746,15 +746,15 @@ if(DIXONRES_WINDOWS AND DIXONRES_BUILD_GUI)
   # - For native MSYS2 builds: don't copy (deps come from pacman)
   # - For cross-compile with bundled deps: copy from runtime/
   # - For cross-compile without bundled deps: DLLs are copied via copy_msys2_dlls target
-  if(DIXONRES_USE_BUNDLED_DEPS)
+  if(DRSOLVE_USE_BUNDLED_DEPS)
     file(GLOB _runtime_dlls "${CMAKE_SOURCE_DIR}/runtime/*.dll")
     if(_runtime_dlls)
-      add_custom_command(TARGET dixon_exe POST_BUILD
+      add_custom_command(TARGET drsolve_exe POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/dll"
         COMMENT "Copying bundled runtime DLLs → dll/"
         VERBATIM
       )
-      add_custom_command(TARGET dixon_exe POST_BUILD
+      add_custom_command(TARGET drsolve_exe POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${_runtime_dlls} "${CMAKE_BINARY_DIR}/dll/"
         COMMENT "Copying runtime DLLs..."
@@ -762,8 +762,8 @@ if(DIXONRES_WINDOWS AND DIXONRES_BUILD_GUI)
       )
     endif()
   elseif(TARGET copy_msys2_dlls)
-    # Make sure copy_msys2_dlls runs before building dixon_exe
-    add_dependencies(dixon_exe copy_msys2_dlls)
+    # Make sure copy_msys2_dlls runs before building drsolve_exe
+    add_dependencies(drsolve_exe copy_msys2_dlls)
     message(STATUS "Using MSYS2-fetched DLLs (via copy_msys2_dlls)")
   else()
     message(STATUS "Native/cross build: runtime DLLs will be provided by system/toolchain")
@@ -773,7 +773,7 @@ endif()
 # ============================================================
 # Attack programs  (optional, ../Attack directory)
 # ============================================================
-if(DIXONRES_BUILD_ATTACK)
+if(DRSOLVE_BUILD_ATTACK)
   cmake_path(GET CMAKE_SOURCE_DIR PARENT_PATH _attack_parent)
   set(_attack_dir "${_attack_parent}/Attack")
   if(EXISTS "${_attack_dir}" AND IS_DIRECTORY "${_attack_dir}")
@@ -787,7 +787,7 @@ if(DIXONRES_BUILD_ATTACK)
       cmake_path(GET _src PARENT_PATH _adir)
       set(_tgt "attack_${_aname}")
       add_executable(${_tgt} EXCLUDE_FROM_ALL ${_src} ${MATH_SOURCES})
-      dixon_target_common(${_tgt})
+      drsolve_target_common(${_tgt})
       set_target_properties(${_tgt} PROPERTIES
         OUTPUT_NAME              "${_aname}"
         RUNTIME_OUTPUT_DIRECTORY "${_adir}"
@@ -804,20 +804,20 @@ endif()
 # ============================================================
 
 # Executable
-install(TARGETS dixon_exe
+install(TARGETS drsolve_exe
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 # Static library
-if(DIXONRES_BUILD_STATIC_LIB OR DIXONRES_STATIC)
-  install(TARGETS dixon_static
+if(DRSOLVE_BUILD_STATIC_LIB OR DRSOLVE_STATIC)
+  install(TARGETS drsolve_static
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
   )
 endif()
 
 # Shared library
-if(DIXONRES_BUILD_SHARED_LIB AND NOT DIXONRES_STATIC)
-  install(TARGETS dixon_shared
+if(DRSOLVE_BUILD_SHARED_LIB AND NOT DRSOLVE_STATIC)
+  install(TARGETS drsolve_shared
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}   # Windows DLL → bin/
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}   # Windows import lib → lib/
@@ -834,7 +834,7 @@ endif()
 
 # Headers
 install(DIRECTORY include/
-  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dixon
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/drsolve
   FILES_MATCHING PATTERN "*.h"
 )
 
@@ -846,56 +846,56 @@ enable_testing()
 # Helper to register a test and route output files to a tmp dir
 set(_test_wd "${CMAKE_BINARY_DIR}")
 
-add_test(NAME dixon_help
-  COMMAND dixon_exe --help
+add_test(NAME drsolve_help
+  COMMAND drsolve_exe --help
   WORKING_DIRECTORY ${_test_wd}
 )
-set_tests_properties(dixon_help PROPERTIES PASS_REGULAR_EXPRESSION ".")
+set_tests_properties(drsolve_help PROPERTIES PASS_REGULAR_EXPRESSION ".")
 
-add_test(NAME dixon_basic
-  COMMAND dixon_exe "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
+add_test(NAME drsolve_basic
+  COMMAND drsolve_exe "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_basic_rational
-  COMMAND dixon_exe "x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z" "x,y" 0
+add_test(NAME drsolve_basic_rational
+  COMMAND drsolve_exe "x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z" "x,y" 0
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_solve
-  COMMAND dixon_exe --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257
+add_test(NAME drsolve_solve
+  COMMAND drsolve_exe --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_solve_linear
-  COMMAND dixon_exe --solve "x+y-3, x-y+1" 257
+add_test(NAME drsolve_solve_linear
+  COMMAND drsolve_exe --solve "x+y-3, x-y+1" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_comp
-  COMMAND dixon_exe --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
+add_test(NAME drsolve_comp
+  COMMAND drsolve_exe --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_comp_short
-  COMMAND dixon_exe -c "x^2+y^2+1, x*y+z, x+y+z^2" "x,y" 257
+add_test(NAME drsolve_comp_short
+  COMMAND drsolve_exe -c "x^2+y^2+1, x*y+z, x+y+z^2" "x,y" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_comp_omega
-  COMMAND dixon_exe --comp --omega 2.373
+add_test(NAME drsolve_comp_omega
+  COMMAND drsolve_exe --comp --omega 2.373
     "x^4+y^4+z^4+w^4+1, x^3*y+z+1, x+y^3+z^2+w, x*y*z*w+1"
     "x,y,z" 65537
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_random
-  COMMAND dixon_exe --random "[3,3,2]" 257
+add_test(NAME drsolve_random
+  COMMAND drsolve_exe --random "[3,3,2]" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_random_solve
-  COMMAND dixon_exe -r --solve "[2]*3" 257
+add_test(NAME drsolve_random_solve
+  COMMAND drsolve_exe -r --solve "[2]*3" 257
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_random_comp
-  COMMAND dixon_exe -r --comp "[3,2]*2" 65537
+add_test(NAME drsolve_random_comp
+  COMMAND drsolve_exe -r --comp "[3,2]*2" 65537
   WORKING_DIRECTORY ${_test_wd}
 )
-add_test(NAME dixon_extension_field
-  COMMAND dixon_exe --silent "x+y^2+t, x*y+t*y+1" "x" "2^8"
+add_test(NAME drsolve_extension_field
+  COMMAND drsolve_exe --silent "x+y^2+t, x*y+t*y+1" "x" "2^8"
   WORKING_DIRECTORY ${_test_wd}
 )
 
@@ -903,7 +903,7 @@ add_test(NAME dixon_extension_field
 # Configuration summary
 # ============================================================
 message(STATUS "")
-message(STATUS "=== DixonRes ${PROJECT_VERSION} — Build Configuration ===")
+message(STATUS "=== DRsolve ${PROJECT_VERSION} — Build Configuration ===")
 message(STATUS "  Platform        : ${CMAKE_SYSTEM_NAME} (${CMAKE_SYSTEM_PROCESSOR})")
 message(STATUS "  Build type      : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  Compiler        : ${CMAKE_C_COMPILER_ID} ${CMAKE_C_COMPILER_VERSION}")
@@ -918,8 +918,8 @@ if(OpenMP_C_FOUND)
 else()
   message(STATUS "  OpenMP          : not found")
 endif()
-message(STATUS "  LTO             : ${DIXONRES_ENABLE_LTO}")
-message(STATUS "  ASan            : ${DIXONRES_ENABLE_ASAN}")
-message(STATUS "  Static linking  : ${DIXONRES_STATIC}")
+message(STATUS "  LTO             : ${DRSOLVE_ENABLE_LTO}")
+message(STATUS "  ASan            : ${DRSOLVE_ENABLE_ASAN}")
+message(STATUS "  Static linking  : ${DRSOLVE_STATIC}")
 message(STATUS "  Install prefix  : ${CMAKE_INSTALL_PREFIX}")
 message(STATUS "==============================================")

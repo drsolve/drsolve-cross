@@ -1,8 +1,8 @@
-# Building DixonRes with CMake
+# Building DRsolve with CMake
 
 CMake ≥ 3.16 is required.  
-The build system produces a shared library (`libdixon.so` / `.dylib` / `-1.dll`),
-a static library (`libdixon.a` / `-1.a`), and the `dixon` CLI executable.
+The build system produces a shared library (`libdrsolve.so` / `.dylib` / `-1.dll`),
+a static library (`libdrsolve.a` / `-1.a`), and the `drsolve` CLI executable.
 
 ---
 
@@ -25,16 +25,16 @@ sudo cmake --install build           # installs to /usr/local
 | `CMAKE_INSTALL_PREFIX` | `/usr/local` | Install prefix |
 | `FLINT_ROOT` | *(auto)* | Root of FLINT installation (contains `include/` and `lib/`) |
 | `PML_ROOT` | *(auto)* | Root of PML installation |
-| `DIXONRES_ENABLE_PML` | `ON` | Use PML if found |
-| `DIXONRES_ENABLE_OPENMP` | `ON` | Use OpenMP if available |
-| `DIXONRES_ENABLE_LTO` | `ON` | Link-time optimisation |
-| `DIXONRES_ENABLE_ASAN` | `OFF` | AddressSanitizer |
-| `DIXONRES_STATIC` | `OFF` | Link FLINT/PML statically into `dixon` |
-| `DIXONRES_BUILD_SHARED_LIB` | `ON` | Build `libdixon.so` / `.dylib` |
-| `DIXONRES_BUILD_STATIC_LIB` | `ON` | Build `libdixon.a` |
-| `DIXONRES_BUILD_GUI` | `ON` | Build Windows GUI targets |
-| `DIXONRES_BUILD_ATTACK` | `ON` | Build `../Attack/*.c` programs |
-| `DIXONRES_USE_BUNDLED_DEPS` | `ON` | Use bundled third-party dependencies (cross-compile only) |
+| `DRSOLVE_ENABLE_PML` | `ON` | Use PML if found |
+| `DRSOLVE_ENABLE_OPENMP` | `ON` | Use OpenMP if available |
+| `DRSOLVE_ENABLE_LTO` | `ON` | Link-time optimisation |
+| `DRSOLVE_ENABLE_ASAN` | `OFF` | AddressSanitizer |
+| `DRSOLVE_STATIC` | `OFF` | Link FLINT/PML statically into `drsolve` |
+| `DRSOLVE_BUILD_SHARED_LIB` | `ON` | Build `libdrsolve.so` / `.dylib` |
+| `DRSOLVE_BUILD_STATIC_LIB` | `ON` | Build `libdrsolve.a` |
+| `DRSOLVE_BUILD_GUI` | `ON` | Build Windows GUI targets |
+| `DRSOLVE_BUILD_ATTACK` | `ON` | Build `../Attack/*.c` programs |
+| `DRSOLVE_USE_BUNDLED_DEPS` | `ON` | Use bundled third-party dependencies (cross-compile only) |
 
 Examples:
 
@@ -43,16 +43,16 @@ Examples:
 cmake -B build -DFLINT_ROOT=$HOME/.local
 
 # Fully static binary (no .so deps at runtime)
-cmake -B build -DDIXONRES_STATIC=ON
+cmake -B build -DDRSOLVE_STATIC=ON
 
 # Debug build with AddressSanitizer
-cmake -B build -DCMAKE_BUILD_TYPE=Debug -DDIXONRES_ENABLE_ASAN=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DDRSOLVE_ENABLE_ASAN=ON
 
 # Shared library only (skip static library)
-cmake -B build -DDIXONRES_BUILD_STATIC_LIB=OFF
+cmake -B build -DDRSOLVE_BUILD_STATIC_LIB=OFF
 
 # Install to custom prefix
-cmake -B build -DCMAKE_INSTALL_PREFIX=/opt/dixonres
+cmake -B build -DCMAKE_INSTALL_PREFIX=/opt/drsolve
 cmake --build build && cmake --install build
 ```
 
@@ -64,25 +64,25 @@ cmake --build build && cmake --install build
 
 ```
 build/
-  dixon                      ← CLI executable
+  drsolve                    ← CLI executable
   lib/
-    libdixon.so.1.0.0        ← shared library (Linux)
-    libdixon.so → .so.1      ← symlinks
-    libdixon.dylib           ← shared library (macOS)
-    libdixon.a               ← static library
+    libdrsolve.so.1.0.0        ← shared library (Linux)
+    libdrsolve.so → .so.1    ← symlinks
+    libdrsolve.dylib           ← shared library (macOS)
+    libdrsolve.a               ← static library
 ```
 
 ### Windows
 
 ```
 build-win/
-  dixon.exe                  ← launcher (double-click or from Explorer)
-  dixon_win_gui.exe          ← GUI frontend
-  bin/dixon_cli_real.exe     ← actual CLI
-  dll/libdixon-1.dll         ← Dixon shared library
+  drsolve.exe                  ← launcher (double-click or from Explorer)
+  drsolve_win_gui.exe          ← GUI frontend
+  bin/drsolve_cli_real.exe     ← actual CLI
+  dll/libdrsolve-1.dll         ← Dixon shared library
   dll/*.dll                  ← runtime DLL dependencies
-  lib/libdixon-1.a           ← static archive
-  lib/libdixon-1.dll.a       ← import library
+  lib/libdrsolve-1.a           ← static archive
+  lib/libdrsolve-1.dll.a       ← import library
 ```
 
 ---
@@ -117,7 +117,7 @@ during the build:
 ```bash
 cmake -B build-win \
       -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake" \
-      -DDIXONRES_USE_BUNDLED_DEPS=OFF
+      -DDRSOLVE_USE_BUNDLED_DEPS=OFF
 cmake --build build-win -j$(nproc)
 ```
 
@@ -148,7 +148,7 @@ If you have MinGW-w64 libraries installed system-wide via your package manager:
 ```bash
 cmake -B build-win \
       -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake" \
-      -DDIXONRES_USE_BUNDLED_DEPS=OFF
+      -DDRSOLVE_USE_BUNDLED_DEPS=OFF
 cmake --build build-win -j$(nproc)
 ```
 

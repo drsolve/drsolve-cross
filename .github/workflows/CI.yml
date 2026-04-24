@@ -48,7 +48,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DDIXONRES_STATIC=ON \
+            -DDRSOLVE_STATIC=ON \
             -DFLINT_ROOT="$INSTALL_PREFIX" \
             -DPML_ROOT="$INSTALL_PREFIX"
 
@@ -60,9 +60,9 @@ jobs:
 
       - name: Verify static linkage
         run: |
-          echo "=== ldd build/dixon ==="
-          ldd ./build/dixon || true
-          if ldd ./build/dixon 2>/dev/null | grep -E 'libflint|libpml'; then
+          echo "=== ldd build/drsolve ==="
+          ldd ./build/drsolve || true
+          if ldd ./build/drsolve 2>/dev/null | grep -E 'libflint|libpml'; then
             echo "ERROR: binary dynamically linked against FLINT or PML"
             exit 1
           fi
@@ -72,13 +72,13 @@ jobs:
         run: |
           ARCH=$(uname -m)
           TAG="${{ github.ref_name }}"
-          strip ./build/dixon
-          ARTIFACT_NAME="dixon-${TAG}-linux-${ARCH}"
+          strip ./build/drsolve
+          ARTIFACT_NAME="drsolve-${TAG}-linux-${ARCH}"
           mkdir -p dist
-          cp ./build/dixon "dist/dixon"
-          cp ./dixon_sage_interface.sage "dist/"
+          cp ./build/drsolve "dist/drsolve"
+          cp ./drsolve_sage_interface.sage "dist/"
           cat > dist/build-info-linux.txt <<EOF
-          Binary   : dixon
+          Binary   : drsolve
           Built on : $(date -u +"%Y-%m-%d %H:%M UTC")
           OS       : $(lsb_release -ds 2>/dev/null || uname -sr)
           Arch     : ${ARCH}
@@ -102,8 +102,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/dixon
-            dist/dixon_sage_interface.sage
+            dist/drsolve
+            dist/drsolve_sage_interface.sage
             dist/build-info-linux.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -219,7 +219,7 @@ jobs:
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
-            -DDIXONRES_STATIC=ON \
+            -DDRSOLVE_STATIC=ON \
             -DFLINT_ROOT="$INSTALL_PREFIX" \
             -DPML_ROOT="$INSTALL_PREFIX"
 
@@ -231,9 +231,9 @@ jobs:
 
       - name: Verify static linkage
         run: |
-          echo "=== otool -L build/dixon ==="
-          otool -L ./build/dixon
-          if otool -L ./build/dixon | grep -E 'libflint|libpml'; then
+          echo "=== otool -L build/drsolve ==="
+          otool -L ./build/drsolve
+          if otool -L ./build/drsolve | grep -E 'libflint|libpml'; then
             echo "ERROR: binary dynamically linked against FLINT or PML"
             exit 1
           fi
@@ -244,13 +244,13 @@ jobs:
           MACOS_VER=$(sw_vers -productVersion | cut -d. -f1-2)
           ARCH=$(uname -m)
           TAG="${{ github.ref_name }}"
-          strip ./build/dixon
-          ARTIFACT_NAME="dixon-${TAG}-macos${MACOS_VER}-${ARCH}"
+          strip ./build/drsolve
+          ARTIFACT_NAME="drsolve-${TAG}-macos${MACOS_VER}-${ARCH}"
           mkdir -p dist
-          cp ./build/dixon "dist/dixon"
-          cp ./dixon_sage_interface.sage "dist/"
+          cp ./build/drsolve "dist/drsolve"
+          cp ./drsolve_sage_interface.sage "dist/"
           cat > dist/build-info-macos.txt <<EOF
-          Binary   : dixon
+          Binary   : drsolve
           Built on : $(date -u +"%Y-%m-%d %H:%M UTC")
           macOS    : $(sw_vers -productVersion)
           Arch     : ${ARCH}
@@ -274,8 +274,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/dixon
-            dist/dixon_sage_interface.sage
+            dist/drsolve
+            dist/drsolve_sage_interface.sage
             dist/build-info-macos.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -304,7 +304,7 @@ jobs:
         run: |
           cmake -B build-win \
             -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake" \
-            -DDIXONRES_USE_BUNDLED_DEPS=OFF
+            -DDRSOLVE_USE_BUNDLED_DEPS=OFF
       - name: Build
         run: cmake --build build-win -j$(nproc)
 
@@ -312,18 +312,18 @@ jobs:
         run: |
           echo "=== build-win layout ==="
           find build-win -name "*.exe" -o -name "*.dll" | sort
-          test -f build-win/dixon.exe            || test -f build-win/bin/dixon_cli_real.exe
+          test -f build-win/drsolve.exe            || test -f build-win/bin/drsolve_cli_real.exe
           echo "OK: Windows build succeeded"
 
       - name: Upload Windows build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dixon-windows-x86_64
+          name: drsolve-windows-x86_64
           path: |
-            build-win/dixon.exe
-            build-win/dixon_win_gui.exe
-            build-win/bin/dixon_cli_real.exe
+            build-win/drsolve.exe
+            build-win/drsolve_win_gui.exe
+            build-win/bin/drsolve_cli_real.exe
             build-win/dll/
-            build-win/lib/libdixon-1.a
-            build-win/lib/libdixon-1.dll.a
+            build-win/lib/libdrsolve-1.a
+            build-win/lib/libdrsolve-1.dll.a
           retention-days: 30

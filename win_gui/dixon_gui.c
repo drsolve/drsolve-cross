@@ -8,7 +8,7 @@
 
 #include "dixon_wrapper.h"
 
-#define APP_TITLE "Dixon Windows GUI"
+#define APP_TITLE "DRsolve Windows GUI"
 #define TAB_COUNT 5
 
 #define ID_TAB 100
@@ -20,6 +20,8 @@
 #define ID_STATUS 107
 #define ID_OUTPUT 108
 #define ID_OUTPUT_RESULT 109
+#define ID_STEP1_METHOD 110
+#define ID_STEP4_METHOD 111
 
 #define ID_SOLVE_POLYS 200
 #define ID_SOLVE_FIELD 201
@@ -75,6 +77,10 @@ static HWND g_output_result;
 static HWND g_path_edit;
 static HWND g_run_button;
 static HWND g_save_button;
+static HWND g_step1_label;
+static HWND g_step1_combo;
+static HWND g_step4_label;
+static HWND g_step4_combo;
 static HWND g_input_group;
 static HWND g_output_group;
 static HFONT g_ui_font;
@@ -90,6 +96,23 @@ static void show_active_tab(void);
 static int max_int(int a, int b)
 {
     return a > b ? a : b;
+}
+
+static void populate_method_combo(HWND combo)
+{
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "Default");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "0 - Recursive");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "1 - Kronecker+HNF");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "2 - Interpolation");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "3 - Sparse interpolation");
+    SendMessageA(combo, CB_SETCURSEL, 0, 0);
+}
+
+static int get_method_combo_value(HWND combo)
+{
+    int index = (int) SendMessageA(combo, CB_GETCURSEL, 0, 0);
+    if (index == CB_ERR || index <= 0) return -1;
+    return index - 1;
 }
 
 static void set_status(const char *text)
@@ -632,10 +655,12 @@ static void layout_main_window(HWND hwnd)
     int height;
     int margin = 12;
     int path_y = 18;
+    int method_y = 58;
     int row_h = 28;
     int browse_w = 112;
     int label_w = 62;
-    int input_h = 420;
+    int combo_w = 220;
+    int input_h = 390;
     int button_y;
     int output_y;
     int output_h;
@@ -647,12 +672,12 @@ static void layout_main_window(HWND hwnd)
     height = rc.bottom - rc.top;
     content_width = width - margin * 2;
 
-    if (height < 760) input_h = 376;
-    if (height < 680) input_h = 336;
-    if (height > 920) input_h = 456;
+    if (height < 760) input_h = 350;
+    if (height < 680) input_h = 310;
+    if (height > 920) input_h = 430;
 
-    if (input_h > height - 250) input_h = height - 250;
-    if (input_h < 260) input_h = 260;
+    if (input_h > height - 286) input_h = height - 286;
+    if (input_h < 230) input_h = 230;
 
     MoveWindow(g_path_label, margin, path_y + 4, label_w, 20, TRUE);
     MoveWindow(g_path_edit, margin + label_w + 8, path_y,
@@ -661,11 +686,16 @@ static void layout_main_window(HWND hwnd)
     MoveWindow(GetDlgItem(hwnd, ID_PATH_BROWSE), width - margin - browse_w, path_y - 1,
                browse_w, row_h + 2, TRUE);
 
-    MoveWindow(g_input_group, margin, 58, content_width, input_h, TRUE);
+    MoveWindow(g_step1_label, margin, method_y + 4, 90, 20, TRUE);
+    MoveWindow(g_step1_combo, margin + 94, method_y, combo_w, 240, TRUE);
+    MoveWindow(g_step4_label, margin + 94 + combo_w + 18, method_y + 4, 90, 20, TRUE);
+    MoveWindow(g_step4_combo, margin + 94 + combo_w + 112, method_y, combo_w, 240, TRUE);
+
+    MoveWindow(g_input_group, margin, 98, content_width, input_h, TRUE);
     MoveWindow(g_tab, 12, 30, content_width - 24, input_h - 42, TRUE);
     layout_tab_pages();
 
-    button_y = 58 + input_h + 14;
+    button_y = 98 + input_h + 14;
     MoveWindow(g_run_button, margin, button_y, 112, 30, TRUE);
     MoveWindow(GetDlgItem(hwnd, ID_CLEAR), margin + 124, button_y, 112, 30, TRUE);
     MoveWindow(g_save_button, margin + 248, button_y, 120, 30, TRUE);
@@ -705,14 +735,14 @@ static void browse_for_dixon(void)
 
     if (GetOpenFileNameA(&ofn)) {
         set_edit_text(g_path_edit, path);
-        set_status("Using selected dixon.exe");
+        set_status("Using selected drsolve.exe");
     }
 }
 
 static void save_output(void)
 {
     OPENFILENAMEA ofn;
-    char path[MAX_PATH] = "dixon_win_output.txt";
+    char path[MAX_PATH] = "drsolve_win_output.txt";
     char *left_text;
     char *right_text;
     char *text;
@@ -813,6 +843,8 @@ static void begin_request(void)
 
     path = get_edit_text(g_path_edit);
     result->request.dixon_path = path;
+    result->request.step1_method = get_method_combo_value(g_step1_combo);
+    result->request.step4_method = get_method_combo_value(g_step4_combo);
 
     switch (current) {
         case 0:
@@ -874,7 +906,7 @@ static void begin_request(void)
     g_is_running = 1;
     EnableWindow(g_run_button, FALSE);
     EnableWindow(g_save_button, FALSE);
-    set_status("Running dixon.exe...");
+    set_status("Running drsolve.exe...");
 }
 
 static void finish_request(worker_result_t *result)
@@ -885,12 +917,12 @@ static void finish_request(worker_result_t *result)
         if (result->response.exit_code == 0) {
             set_status("Finished successfully");
         } else {
-            set_status("dixon.exe returned a non-zero exit code");
+            set_status("drsolve.exe returned a non-zero exit code");
         }
     } else {
         set_edit_text(g_output, result->error);
         set_edit_text(g_output_result, "");
-        set_status("Failed to run dixon.exe");
+        set_status("Failed to run drsolve.exe");
     }
 
     if (g_worker_thread) {
@@ -935,6 +967,12 @@ static LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM
             g_path_label = create_label(hwnd, "CLI Path", 0, 0, 10, 10);
             g_path_edit = create_edit(hwnd, ID_PATH_EDIT, ES_LEFT | WS_TABSTOP, 0, 0, 10, 10, "");
             create_button(hwnd, ID_PATH_BROWSE, "Browse...", 0, 0, 10, 10);
+            g_step1_label = create_label(hwnd, "Step 1", 0, 0, 10, 10);
+            g_step1_combo = create_combobox(hwnd, ID_STEP1_METHOD, 0, 0, 10, 120);
+            populate_method_combo(g_step1_combo);
+            g_step4_label = create_label(hwnd, "Step 4", 0, 0, 10, 10);
+            g_step4_combo = create_combobox(hwnd, ID_STEP4_METHOD, 0, 0, 10, 120);
+            populate_method_combo(g_step4_combo);
 
             g_input_group = create_groupbox(hwnd, "Mode && Parameters");
             g_tab = CreateWindowExA(0, WC_TABCONTROLA, "",
@@ -1042,7 +1080,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line, 
     ZeroMemory(&wc, sizeof(wc));
     wc.lpfnWndProc = main_wnd_proc;
     wc.hInstance = instance;
-    wc.lpszClassName = "DixonWinGuiMainWindow";
+    wc.lpszClassName = "DRsolveWinGuiMainWindow";
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH) (COLOR_WINDOW + 1);
     wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);

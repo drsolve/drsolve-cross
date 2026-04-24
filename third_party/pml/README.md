@@ -1,8 +1,8 @@
-# PML - FLINT Extras (bundled for DixonRes)
+# PML - FLINT Extras (bundled for DRsolve)
 
-This directory contains the bundled PML library (FLINT extras) used by DixonRes. The original upstream project can be found at: <https://github.com/vneiger/pml>
+This directory contains the bundled PML library (FLINT extras) used by DRsolve. The original upstream project can be found at: <https://github.com/vneiger/pml>
 
-DixonRes utilizes the PML library to accelerate univariate polynomial matrix determinant computation over prime fields.
+DRsolve utilizes the PML library to accelerate univariate polynomial matrix determinant computation over prime fields.
 
 ## About PML
 
@@ -12,18 +12,18 @@ PML is a supplementary library for FLINT (Fast Library for Number Theory) that p
 - FFT-based operations
 - Additional modular arithmetic utilities
 
-## DixonRes-specific modifications
+## DRsolve-specific modifications
 
 The main functional change in this bundled copy is in `src/nmod_poly_mat_extra/nmod_poly_mat_det.c`:
 - added `nmod_poly_mat_det_generic`
 - added `nmod_poly_mat_det_generic_knowing_degree`
-- kept determinant computation usable from DixonRes for generic polynomial matrices over prime fields
+- kept determinant computation usable from DRsolve for generic polynomial matrices over prime fields
 
-There are also a few small compatibility-oriented header/config adjustments so the bundled copy builds cleanly inside DixonRes, but those are secondary to the determinant changes above.
+There are also a few small compatibility-oriented header/config adjustments so the bundled copy builds cleanly inside DRsolve, but those are secondary to the determinant changes above.
 
 ## Building
 
-This bundled copy is intended to be built as part of the DixonRes project. For standalone compilation, please refer to the original PML documentation.
+This bundled copy is intended to be built as part of the DRsolve project. For standalone compilation, please refer to the original PML documentation.
 
 ## License
 

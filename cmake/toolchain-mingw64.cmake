@@ -1,6 +1,6 @@
 # cmake/toolchain-mingw64.cmake
 #
-# CMake toolchain for cross-compiling DixonRes on Linux/macOS
+# CMake toolchain for cross-compiling DRsolve on Linux/macOS
 # targeting 64-bit Windows using the MinGW-w64 toolchain.
 #
 # Usage:
@@ -49,7 +49,7 @@ set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
 
 # The project bundles Windows third-party deps in third_party/
 # These paths are set automatically by CMakeLists.txt when
-# DIXONRES_WINDOWS is true and the user has not set explicit roots.
+# DRSOLVE_WINDOWS is true and the user has not set explicit roots.
 # Override here if needed:
 #
 #   set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/mingw")
