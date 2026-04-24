@@ -150,7 +150,7 @@ slong exp_to_kronecker_index(const slong *exp, const slong *degs, slong n);
 // Convert Kronecker index to exponent vector
 void kronecker_index_to_exp(slong index, slong *exp, const slong *degs, slong n);
 
-// Convert fq_mvpoly to univariate via Kronecker substitution
+// Convert fq_mvpoly to univariate via Kronecker+HNF
 void fq_mvpoly_to_kronecker_full(fq_nmod_poly_t out, const fq_mvpoly_t *p, 
                                 const slong *var_degs, const slong *par_degs);
 

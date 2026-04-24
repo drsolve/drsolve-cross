@@ -996,7 +996,7 @@ void analyze_fq_matrix_mvpoly(fq_mvpoly_t **matrix, slong nrows, slong ncols,
 }
 
 
-// ============ Kronecker substitution helpers ============
+// ============ Kronecker+HNF helpers ============
 
 slong exp_to_kronecker_index(const slong *exp, const slong *degs, slong n) {
     slong index = 0;

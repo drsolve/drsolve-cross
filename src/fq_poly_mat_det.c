@@ -1,9 +1,6 @@
 /* fq_poly_mat_det.c - Fixed Matrix determinant implementation */
 
 #include "fq_poly_mat_det.h"
-#ifdef _OPENMP
-#include <omp.h>
-#endif
 
 /* ============================================================================
    GLOBAL VARIABLES FOR PROGRESS TRACKING
@@ -12,25 +9,6 @@
 int _is_first_step = 0;
 int _show_progress = 0;
 int g_show_progress = 0;
-static int g_fq_nmod_poly_mat_det_threads = -1;
-
-static int fq_nmod_poly_mat_det_effective_threads(void) {
-#ifdef _OPENMP
-    if (g_fq_nmod_poly_mat_det_threads > 0)
-        return g_fq_nmod_poly_mat_det_threads;
-
-    {
-        const int max_threads = omp_get_max_threads();
-        return FLINT_MAX(1, (max_threads + 1) / 2);
-    }
-#else
-    return 1;
-#endif
-}
-
-void fq_nmod_poly_mat_det_set_threads(int num_threads) {
-    g_fq_nmod_poly_mat_det_threads = num_threads;
-}
 
 /* ============================================================================
    UNIFIED POLYNOMIAL MATRIX OPERATIONS - IMPLEMENTATIONS
@@ -368,9 +346,8 @@ static ulong dixonres_nmod_poly_mat_eval_det_at(const nmod_poly_mat_t mat, ulong
 }
 
 static int dixonres_nmod_poly_mat_det_generic_exact(nmod_poly_t det,
-                                                    const nmod_poly_mat_t mat,
-                                                    int use_parallel) {
-    if (!nmod_poly_mat_det_generic_with_opts(det, mat, use_parallel))
+                                                    const nmod_poly_mat_t mat) {
+    if (!nmod_poly_mat_det_generic(det, mat))
         return 0;
 
     if (nmod_poly_is_zero(det))
@@ -425,10 +402,9 @@ static int dixonres_nmod_poly_mat_det_generic_exact(nmod_poly_t det,
    MAIN ENTRY POINT - IMPLEMENTATION
    ============================================================================ */
 
-void fq_nmod_poly_mat_det_iter_with_opts(fq_nmod_poly_t det,
-                                         fq_nmod_poly_mat_t mat,
-                                         const fq_nmod_ctx_t ctx,
-                                         int use_parallel) {
+void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
+                              fq_nmod_poly_mat_t mat,
+                              const fq_nmod_ctx_t ctx) {
     if (mat->r == 0) {
         fq_nmod_poly_one(det, ctx);
         return;
@@ -443,7 +419,7 @@ void fq_nmod_poly_mat_det_iter_with_opts(fq_nmod_poly_t det,
     /* Check if we're in a prime field (degree 1) */
     if (fq_nmod_ctx_degree(ctx) == 1) {
         /* Convert to nmod_poly_mat and use the optimized prime field version */
-        printf("Using generic nmod_poly_mat_det from PML library\n");
+        printf("Using fast HNF from PML library\n");
 
         nmod_poly_mat_t nmod_mat;
         nmod_poly_t nmod_det;
@@ -480,22 +456,9 @@ void fq_nmod_poly_mat_det_iter_with_opts(fq_nmod_poly_t det,
         
         /* Call the optimized nmod version */
         clock_t nmod_start = clock();
-        #ifdef _OPENMP
-        const int effective_threads = use_parallel ? fq_nmod_poly_mat_det_effective_threads() : 1;
-        const int previous_threads = omp_get_max_threads();
-        if (effective_threads != previous_threads)
-            omp_set_num_threads(effective_threads);
-        #endif
-
-        if (!dixonres_nmod_poly_mat_det_generic_exact(nmod_det, nmod_mat, use_parallel)) {
+        if (!dixonres_nmod_poly_mat_det_generic_exact(nmod_det, nmod_mat)) {
             nmod_poly_mat_det_iter(nmod_det, nmod_mat);
         }
-
-        #ifdef _OPENMP
-        if (effective_threads != previous_threads)
-            omp_set_num_threads(previous_threads);
-        #endif
-
         clock_t nmod_end = clock();
         
         /* Convert result back to fq_nmod_poly */
@@ -665,11 +628,4 @@ void fq_nmod_poly_mat_det_iter_with_opts(fq_nmod_poly_t det,
         printf("\r                                                                          \r");
         printf("  Time: %.2f seconds\n", total_time);
     }
-}
-
-void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
-                               fq_nmod_poly_mat_t mat,
-                               const fq_nmod_ctx_t ctx) {
-    const int use_parallel = (fq_nmod_poly_mat_det_effective_threads() > 1);
-    fq_nmod_poly_mat_det_iter_with_opts(det, mat, ctx, use_parallel);
 }

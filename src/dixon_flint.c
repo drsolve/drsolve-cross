@@ -19,11 +19,11 @@ static const char *dixon_det_method_name(det_method_t method)
         case DET_METHOD_RECURSIVE:
             return "recursive expansion";
         case DET_METHOD_KRONECKER:
-            return "Kronecker substitution";
+            return "Kronecker+HNF";
         case DET_METHOD_INTERPOLATION:
             return "interpolation";
         case DET_METHOD_HUANG:
-            return "Huang interpolation";
+            return "sparse interpolation";
         default:
             return "default";
     }
@@ -365,7 +365,7 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
             fq_nmod_poly_t det_poly;
             fq_nmod_poly_init(det_poly, ctx);
             
-            printf("Method: Mulders-Storjohann\n");
+            printf("Method: HNF\n");
             
             fq_nmod_poly_mat_det_iter(det_poly, poly_mat, ctx);
             
@@ -416,13 +416,13 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
                 break;
                 
             case DET_METHOD_KRONECKER:
-                printf("Method: Kronecker substitution\n");
+                printf("Method: Kronecker+HNF\n");
                 
                 compute_fq_det_kronecker(result, coeff_matrix, size);
                 break;
 
             case DET_METHOD_HUANG:
-                printf("Method: Huang interpolation\n");
+                printf("Method: sparse interpolation\n");
                 
                 compute_fq_det_huang_interpolation(result, coeff_matrix, size);
                 break;

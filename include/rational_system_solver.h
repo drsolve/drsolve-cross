@@ -25,6 +25,13 @@ typedef struct rational_solutions {
     fmpq_t ***solution_sets;    
     slong *solutions_per_var;   
     slong num_solution_sets;    
+    arb_t **solution_residuals;
+    arb_t ***real_solution_sets;
+    slong *real_solutions_per_var;
+    slong num_real_solution_sets;
+    arb_t **real_solution_residuals;
+    slong real_solution_precision;
+    char *real_root_summary;
     slong num_equations;        
     int is_valid;               
     int has_no_solutions;       
@@ -77,6 +84,8 @@ int rational_extract_and_sort_variables(char **poly_strings, slong num_polys,
 
 fmpq_t* rational_solve_univariate_equation_all_roots(const char *poly_str, const char *var_name,
                                                       slong *num_roots_out);
+arb_t* rational_solve_univariate_equation_all_real_roots(const char *poly_str, const char *var_name,
+                                                          slong *num_roots_out, slong prec);
 char* rational_substitute_variable_in_polynomial(const char *poly_str, const char *var_name,
                                                   const fmpq_t value);
 char* rational_eliminate_variable_dixon_with_selection(char **poly_strings, slong num_polys, 

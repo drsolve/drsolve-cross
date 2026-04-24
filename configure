@@ -7,7 +7,7 @@
 #   --exec-prefix=PATH     Executable-related prefix (default: PREFIX)
 #   --bindir=PATH          User executables (default: EXEC_PREFIX/bin)
 #   --libdir=PATH          Libraries (default: EXEC_PREFIX/lib)
-#   --includedir=PATH      Header files (default: PREFIX/include/dixon)
+#   --includedir=PATH      Header files (default: PREFIX/include/drsolve)
 #   --mandir=PATH          Man pages (default: PREFIX/share/man/man1)
 #
 # Library locations:
@@ -103,7 +103,7 @@ done
 [ -z "$EXEC_PREFIX" ] && EXEC_PREFIX="$PREFIX"
 [ -z "$BINDIR" ]      && BINDIR="$EXEC_PREFIX/bin"
 [ -z "$LIBDIR" ]      && LIBDIR="$EXEC_PREFIX/lib"
-[ -z "$INCLUDEDIR" ]  && INCLUDEDIR="$PREFIX/include/dixon"
+[ -z "$INCLUDEDIR" ]  && INCLUDEDIR="$PREFIX/include/drsolve"
 [ -z "$MANDIR" ]      && MANDIR="$PREFIX/share/man/man1"
 
 # Derive default link mode from --enable-static

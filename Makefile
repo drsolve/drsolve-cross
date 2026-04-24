@@ -132,17 +132,17 @@ MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
 MATH_OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(MATH_SOURCES))
 
 # Main source file (in current directory)
-DIXON_SRC = dixon.c
+DIXON_SRC = drsolve.c
 
 # All source files (for LTO compilation)
 ALL_SOURCES = $(DIXON_SRC) $(MATH_SOURCES)
 
 # Library names (in current directory)
-DIXON_STATIC_LIB = libdixon.a
-DIXON_SHARED_LIB = libdixon.$(SHARED_LIB_EXT)
+DIXON_STATIC_LIB = libdrsolve.a
+DIXON_SHARED_LIB = libdrsolve.$(SHARED_LIB_EXT)
 
 # Output executable (in current directory)
-DIXON_TARGET = dixon
+DIXON_TARGET = drsolve
 
 # ============================================================
 # Attack programs directory and files
@@ -195,7 +195,7 @@ endif
 # You can also override directly: make static-all
 # ============================================================
 ifeq ($(DEFAULT_LINK_MODE),static-all)
-# Static-all: only libdixon.a needed as prereq.
+# Static-all: only libdrsolve.a needed as prereq.
 # Do NOT depend on $(DIXON_SHARED_LIB) — building a dylib against two
 # static archives that share symbols fails on macOS (Apple ld has no
 # --allow-multiple-definition).
@@ -236,7 +236,7 @@ endif
 
 # Also build libraries with LTO for better performance
 all: default
-	@echo "Built dixon executable, libraries, and attack programs"
+	@echo "Built drsolve executable, libraries, and attack programs"
 	@echo "  Link mode: $(DEFAULT_LINK_MODE)"
 ifeq ($(PML_AVAILABLE),yes)
 	@echo "  PML support: ENABLED"
@@ -256,27 +256,27 @@ $(DIXON_TARGET)-lto: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS
 
 # Traditional dynamic library target
 $(DIXON_TARGET)-dynamic: $(DIXON_SRC) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
-	@echo "Building $(DIXON_TARGET) with dynamic dixon library..."
-	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< -L. -ldixon $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
-	@echo "Build complete: $(DIXON_TARGET) (dynamic dixon, bundled static PML, dynamic FLINT)"
+	@echo "Building $(DIXON_TARGET) with dynamic drsolve library..."
+	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< -L. -ldrsolve $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
+	@echo "Build complete: $(DIXON_TARGET) (dynamic drsolve, bundled static PML, dynamic FLINT)"
 
 # ============================================================
 # Library targets
 # ============================================================
 
-# Build dynamic dixon library
+# Build dynamic drsolve library
 dynamic-lib: $(DIXON_SHARED_LIB)
 
 $(DIXON_SHARED_LIB): $(MATH_OBJECTS) $(PML_BUILD_PREREQS)
-	@echo "Building dynamic dixon library..."
+	@echo "Building dynamic drsolve library..."
 	$(CC) $(SHARED_LDFLAGS) -o $@ $(MATH_OBJECTS) $(EXTERNAL_LIBS) $(LDFLAGS)
 	@echo "Dynamic library built: $(DIXON_SHARED_LIB)"
 
-# Build static dixon library
+# Build static drsolve library
 static-lib: $(DIXON_STATIC_LIB)
 
 $(DIXON_STATIC_LIB): $(MATH_OBJECTS)
-	@echo "Building static dixon library..."
+	@echo "Building static drsolve library..."
 	ar rcs $@ $^
 	@echo "Static library built: $(DIXON_STATIC_LIB)"
 
@@ -284,16 +284,16 @@ $(DIXON_STATIC_LIB): $(MATH_OBJECTS)
 # Static linking variants
 # ============================================================
 
-# Build with static dixon library (bundled static PML, dynamic FLINT)
+# Build with static drsolve library (bundled static PML, dynamic FLINT)
 static: $(DIXON_TARGET)-static
-	@echo "Built dixon with static library"
+	@echo "Built drsolve with static library"
 
 $(DIXON_TARGET)-static: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
-	@echo "Building $(DIXON_TARGET) with static dixon library (bundled static PML, dynamic FLINT)..."
+	@echo "Building $(DIXON_TARGET) with static drsolve library (bundled static PML, dynamic FLINT)..."
 	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
-	@echo "Build complete: $(DIXON_TARGET) (static dixon, bundled static PML, dynamic FLINT)"
+	@echo "Build complete: $(DIXON_TARGET) (static drsolve, bundled static PML, dynamic FLINT)"
 
-# Build with all static libraries (dixon + PML + FLINT)
+# Build with all static libraries (drsolve + PML + FLINT)
 static-all: static-lib $(DIXON_TARGET)-static-all
 
 $(DIXON_TARGET)-static-all: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
@@ -327,7 +327,7 @@ install: $(DIXON_TARGET) $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB)
 	@echo ""
 	@echo "--- Installing shared library: $(DIXON_SHARED_LIB) -> $(DESTDIR)$(LIBDIR)/ ---"
 	$(INSTALL_DATA) $(DIXON_SHARED_LIB) "$(DESTDIR)$(LIBDIR)/$(DIXON_SHARED_LIB)"
-	@# Create versioned symlink (libdixon.so.1 -> libdixon.so) if ldconfig available
+	@# Create versioned symlink (libdrsolve.so.1 -> libdrsolve.so) if ldconfig available
 	@if command -v ldconfig >/dev/null 2>&1; then \
 		echo "Running ldconfig to update shared library cache..."; \
 		ldconfig "$(DESTDIR)$(LIBDIR)" 2>/dev/null || true; \
@@ -461,9 +461,9 @@ attack-programs: $(PML_BUILD_PREREQS)
 		echo "Attack programs compilation complete"; \
 	fi
 
-# Attack programs with static dixon library (kept for compatibility)
+# Attack programs with static drsolve library (kept for compatibility)
 attack-static: $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
-	@echo "Building Attack programs with static dixon library..."
+	@echo "Building Attack programs with static drsolve library..."
 	@if [ -z "$(ATTACK_C_FILES)" ]; then \
 		echo "No C files found in $(ATTACK_DIR)"; \
 	else \
@@ -471,11 +471,11 @@ attack-static: $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 		for cfile in $(ATTACK_C_FILES); do \
 			if [ -f "$$cfile" ]; then \
 				executable="$${cfile%.c}"; \
-				echo "Compiling $$cfile -> $$executable (static dixon)"; \
+				echo "Compiling $$cfile -> $$executable (static drsolve)"; \
 				$(CC) $(ALL_CFLAGS) -o "$$executable" "$$cfile" $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS) || echo "Failed to compile $$cfile"; \
 			fi; \
 		done; \
-		echo "Attack programs compilation complete (static dixon)"; \
+		echo "Attack programs compilation complete (static drsolve)"; \
 	fi
 
 # Clean attack programs
@@ -502,7 +502,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR) $(PML_BUILD_PREREQS)
 # Clean
 # ============================================================
 clean: clean-attack
-	rm -f $(DIXON_TARGET) $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB)
+	rm -f $(DIXON_TARGET) $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) dixon libdixon.a libdixon.so libdixon.dylib
 	rm -rf $(BUILD_DIR)
 	@echo "Cleaned all build artifacts"
 
@@ -730,7 +730,7 @@ debug-attack:
 	@echo "ATTACK_EXECUTABLES: $(ATTACK_EXECUTABLES)"
 	@echo ""
 	@echo "=== Test Compilation Check ==="
-	@echo "Current directory dixon library status:"
+	@echo "Current directory drsolve library status:"
 	@if [ -f "$(DIXON_STATIC_LIB)" ]; then \
 		echo "  $(DIXON_STATIC_LIB): EXISTS"; \
 	else \
@@ -799,17 +799,17 @@ debug-structure:
 # ============================================================
 help:
 	@echo "Available targets:"
-	@echo "  make (default)       - Build libraries first, then dixon with LTO (all sources compiled together)"
+	@echo "  make (default)       - Build libraries first, then drsolve with LTO (all sources compiled together)"
 	@echo "  make all             - Same as default"
 	@echo "  make lto             - Same as default - Build with Link Time Optimization"
-	@echo "  make dynamic         - Build dixon with dynamic dixon library"
-	@echo "  make static          - Build dixon with static dixon library (bundled static PML, dynamic FLINT)"
-	@echo "  make static-all      - Build dixon with all static libraries (fully static)"
-	@echo "  make dynamic-lib     - Build dynamic dixon library only"
-	@echo "  make static-lib      - Build static dixon library only"
+	@echo "  make dynamic         - Build drsolve with dynamic drsolve library"
+	@echo "  make static          - Build drsolve with static drsolve library (bundled static PML, dynamic FLINT)"
+	@echo "  make static-all      - Build drsolve with all static libraries (fully static)"
+	@echo "  make dynamic-lib     - Build dynamic drsolve library only"
+	@echo "  make static-lib      - Build static drsolve library only"
 	@echo "  make attack-programs - Build all C programs in ../Attack directory (LTO with all sources)"
 	@echo "  make attack-programs-verbose - Build Attack programs with detailed output (LTO)"
-	@echo "  make attack-static   - Build all C programs in ../Attack directory (using static dixon library)"
+	@echo "  make attack-static   - Build all C programs in ../Attack directory (using static drsolve library)"
 	@echo "  make clean-attack    - Clean all compiled Attack programs"
 	@echo "  make test-paths      - Test library path detection"
 	@echo "  make test-attack     - Test Attack directory detection"
@@ -848,28 +848,28 @@ help:
 	@echo "  ./               - Executables and libraries"
 	@echo ""
 	@echo "Attack programs workflow:"
-	@echo "  1. Run 'make' to build dixon libraries AND all Attack programs automatically"
+	@echo "  1. Run 'make' to build drsolve libraries AND all Attack programs automatically"
 	@echo "  2. Or run 'make attack-programs' to build only Attack programs with LTO optimization"
 	@echo "  3. Or run 'make attack-programs-verbose' for detailed compilation output"
-	@echo "  4. Or run 'make attack-static' to build with static dixon library (legacy)"
+	@echo "  4. Or run 'make attack-static' to build with static drsolve library (legacy)"
 	@echo "  5. Each .c file in ../Attack becomes an executable with the same name"
 	@echo "  6. Use 'make debug-attack' to check compilation status"
 	@echo "  7. .ipynb_checkpoints directories are automatically excluded"
 	@echo ""
 	@echo "Attack programs compilation strategy:"
-	@echo "  default - Compile Attack programs with all dixon sources using LTO (best performance)"
-	@echo "  attack-static - Use pre-built static dixon library (legacy compatibility)"
+	@echo "  default - Compile Attack programs with all drsolve sources using LTO (best performance)"
+	@echo "  attack-static - Use pre-built static drsolve library (legacy compatibility)"
 	@echo ""
 	@echo "Compilation strategy:"
-	@echo "  default - Build bundled PML first, then dixon libraries, then compile all sources with LTO"
-	@echo "  dynamic - Traditional library-based compilation using pre-built dixon library"
-	@echo "  static  - Static dixon + bundled static PML + dynamic FLINT (needs rpath)"
+	@echo "  default - Build bundled PML first, then drsolve libraries, then compile all sources with LTO"
+	@echo "  dynamic - Traditional library-based compilation using pre-built drsolve library"
+	@echo "  static  - Static drsolve + bundled static PML + dynamic FLINT (needs rpath)"
 	@echo "  static-all  - Fully static (no runtime dependencies)"
 	@echo ""
 	@echo "Library structure:"
-	@echo "  Dixon library: $(words $(MATH_SOURCES)) math source files"
-	@echo "  Main program: dixon.c links against dixon library OR compiles with all sources"
-	@echo "  Attack programs: Each .c in ../Attack compiles with all dixon sources (LTO optimization)"
+	@echo "  drsolve library: $(words $(MATH_SOURCES)) math source files"
+	@echo "  Main program: drsolve.c links against drsolve library OR compiles with all sources"
+	@echo "  Attack programs: Each .c in ../Attack compiles with all drsolve sources (LTO optimization)"
 	@echo "  External deps: FLINT (required), PML (bundled from third_party/pml when present)"
 	@echo ""
 	@echo "PML Detection:"
@@ -1019,7 +1019,7 @@ check: $(DIXON_TARGET)
 	echo "--- File input ---"; \
 	\
 	printf "  %-60s" "File: basic Dixon from generated file"; \
-	printf "257\nx+y+z, x*y+y*z+z*x, x*y*z+1\nx,y\n" > /tmp/dixon_check_test.dat; \
+	printf "x,y\n257\nx+y+z, x*y+y*z+z*x, x*y*z+1\n" > /tmp/dixon_check_test.dat; \
 	if ./$(DIXON_TARGET) /tmp/dixon_check_test.dat >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
@@ -1030,7 +1030,7 @@ check: $(DIXON_TARGET)
 	\
 	printf "  %-60s" "File: solver from generated file"; \
 	printf "257\nx^2+y^2-5\nx+y-3\n" > /tmp/dixon_check_solver.dat; \
-	if ./$(DIXON_TARGET) --solve /tmp/dixon_check_solver.dat >/dev/null 2>&1; then \
+	if ./$(DIXON_TARGET) /tmp/dixon_check_solver.dat >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \

@@ -1,6 +1,6 @@
 /*
  * Optimized polynomial matrix determinant computation for small matrices
- * Supports multiple algorithms including recursive, interpolation, and Kronecker substitution
+ * Supports multiple algorithms including recursive, interpolation, and Kronecker+HNF
  * Enhanced with prime field optimization using nmod_mpoly
  */
 
@@ -28,9 +28,9 @@
 // Algorithm selection options
 #define DET_ALGORITHM_RECURSIVE       0  // Original recursive expansion algorithm
 #define DET_ALGORITHM_INTERPOLATION   1  // Multivariate interpolation algorithm
-#define DET_ALGORITHM_KRONECKER       2  // Kronecker substitution to univariate
+#define DET_ALGORITHM_KRONECKER       2  // Kronecker+HNF to univariate
 #define DET_ALGORITHM_POLY_RECURSIVE  3  // Convert to fq_nmod_poly and use recursive
-#define DET_ALGORITHM_HUANG           4  // Huang's sparse interpolation (only for SPARSE polynomials over PRIME fields)
+#define DET_ALGORITHM_HUANG           4  // sparse interpolation (only for SPARSE polynomials over PRIME fields)
 
 // Default algorithm selection 
 #ifndef DET_ALGORITHM
@@ -101,13 +101,13 @@ void compute_det_poly_recursive_helper(fq_nmod_poly_t det,
 // Main function for polynomial recursive algorithm
 void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
 
-// ============= Kronecker Substitution Implementation =============
+// ============= Kronecker+HNF Implementation =============
 
-// Compute bounds for Kronecker substitution
+// Compute bounds for Kronecker+HNF
 void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix, 
                              slong size, slong nvars, slong npars);
 
-// Convert multivariate polynomial to univariate using Kronecker substitution
+// Convert multivariate polynomial to univariate using Kronecker+HNF
 void mvpoly_to_univariate_kronecker(fq_nmod_poly_t uni_poly,
                                    const fq_mvpoly_t *mv_poly,
                                    const slong *substitution_powers,
@@ -121,7 +121,7 @@ void univariate_to_mvpoly_kronecker(fq_mvpoly_t *mv_poly,
                                    slong nvars, slong npars,
                                    const fq_nmod_ctx_t ctx);
 
-// Compute determinant using Kronecker substitution
+// Compute determinant using Kronecker+HNF
 void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
 
 // ============= Prime Field Conversion Functions =============
@@ -207,7 +207,7 @@ void compute_fq_nmod_mpoly_det_parallel_optimized(fq_nmod_mpoly_t det_result,
                                                   fq_nmod_mpoly_ctx_t mpoly_ctx,
                                                   slong depth);
 
-// Huang sparse interpolation determinant
+// sparse interpolation determinant
 void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
 
 // Direct recursive algorithm

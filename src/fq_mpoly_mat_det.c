@@ -325,7 +325,7 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
         return;
     }
     
-    // Multivariate case: use Kronecker substitution
+    // Multivariate case: use Kronecker+HNF
     
     // Step 1: Compute variable bounds (same as in Kronecker algorithm)
     timing_info_t bounds_start = start_timing();
@@ -400,7 +400,7 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
     printf("============================================\n");
 }
 
-// ============= Kronecker Substitution Implementation =============
+// ============= Kronecker+HNF Implementation =============
 
 // Compute the Kronecker bound for a multivariate polynomial matrix
 void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix, 
@@ -472,7 +472,7 @@ void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix,
     }
 }
 
-// Convert multivariate polynomial to univariate using Kronecker substitution
+// Convert multivariate polynomial to univariate using Kronecker+HNF
 void mvpoly_to_univariate_kronecker(fq_nmod_poly_t uni_poly,
                                    const fq_mvpoly_t *mv_poly,
                                    const slong *substitution_powers,
@@ -565,7 +565,7 @@ void univariate_to_mvpoly_kronecker(fq_mvpoly_t *mv_poly,
     }
 }
 
-// Compute determinant using Kronecker substitution
+// Compute determinant using Kronecker+HNF
 void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
     if (size <= 0) {
         fq_mvpoly_init(result, matrix[0][0].nvars, matrix[0][0].npars, matrix[0][0].ctx);
@@ -579,7 +579,7 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     slong npars = matrix[0][0].npars;
     slong total_vars = nvars + npars;
     
-    DET_PRINT("Computing %ldx%ld determinant via Kronecker substitution\n", size, size);
+    DET_PRINT("Computing %ldx%ld determinant via Kronecker+HNF\n", size, size);
     DET_PRINT("Variables: %ld, Parameters: %ld\n", nvars, npars);
     
     // Step 1: Compute variable bounds
@@ -655,7 +655,7 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     
     timing_info_t total_elapsed = end_timing(total_start);
     
-    printf("\n=== Kronecker Substitution Time Statistics ===\n");
+    printf("\n=== Kronecker+HNF Time Statistics ===\n");
     print_timing("Compute bounds", bounds_elapsed);
     print_timing("Convert to univariate", convert_elapsed);
     print_timing("Univariate determinant", det_elapsed);
@@ -1778,12 +1778,12 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
     /*
     // Check if we're in a prime field
     if (!is_prime_field(ctx)) {
-        printf("ERROR: Huang interpolation requires prime field\n");
+        printf("ERROR: sparse interpolation requires prime field\n");
         compute_fq_det_recursive(result, matrix, size);
         return;
     }
     */
-    DET_PRINT("Computing %ldx%ld determinant via Huang sparse interpolation\n", size, size);
+    DET_PRINT("Computing %ldx%ld determinant via sparse interpolation\n", size, size);
     DET_PRINT("Variables: %ld, Parameters: %ld\n", nvars, npars);
     
     // Get the prime
@@ -1818,7 +1818,7 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
     timing_info_t huang_start = start_timing();
     ComputePolyMatrixDet(det_nmod, &huang_mat, nvars + npars, p, nmod_ctx);
     timing_info_t huang_elapsed = end_timing(huang_start);
-    print_timing("Huang interpolation", huang_elapsed);
+    print_timing("sparse interpolation", huang_elapsed);
     
     // Convert result back to fq_mvpoly
     nmod_mpoly_to_fq_mvpoly(result, det_nmod, nvars, npars, nmod_ctx, ctx);
@@ -1831,7 +1831,7 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
     nmod_mpoly_ctx_clear(nmod_ctx);
     
     timing_info_t total_elapsed = end_timing(total_start);
-    print_timing("Total Huang method", total_elapsed);
+    print_timing("Total sparse interpolation method", total_elapsed);
 }
 
 /* Main function extracted from the #else branch */
@@ -2246,7 +2246,7 @@ void compute_fq_det_recursive_flint(fq_mvpoly_t *result, fq_mvpoly_t **matrix, s
     }
     #elif DET_ALGORITHM == DET_ALGORITHM_KRONECKER
     {
-        printf("Using Kronecker substitution algorithm\n");
+        printf("Using Kronecker+HNF algorithm\n");
         compute_fq_det_kronecker(result, matrix, size);
         return;
     }

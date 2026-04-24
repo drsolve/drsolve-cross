@@ -47,9 +47,9 @@
 // Method enumeration for determinant computation
 typedef enum {
     DET_METHOD_RECURSIVE = 0,     // Recursive expansion method
-    DET_METHOD_KRONECKER = 1,     // Kronecker substitution method
+    DET_METHOD_KRONECKER = 1,     // Kronecker+HNF method
     DET_METHOD_INTERPOLATION = 2, // Interpolation method
-    DET_METHOD_HUANG = 3          // Huang's interpolation method
+    DET_METHOD_HUANG = 3          // sparse interpolation method
 } det_method_t;
 
 // Global method selection variables
