@@ -32,7 +32,15 @@ jobs:
           echo "PKG_CONFIG_PATH=$INSTALL_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
           mkdir -p "$INSTALL_PREFIX"
 
+      - name: Restore FLINT static install cache
+        id: linux-flint-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.INSTALL_PREFIX }}
+          key: linux-flint-3.5-static-${{ runner.arch }}-v1
+
       - name: Build FLINT 3.5.0 (static)
+        if: steps.linux-flint-cache.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 --branch flint-3.5 https://github.com/flintlib/flint.git
           cd flint
@@ -43,6 +51,13 @@ jobs:
             --disable-shared
           make -j$(nproc)
           make install
+
+      - name: Save FLINT static install cache
+        if: steps.linux-flint-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.INSTALL_PREFIX }}
+          key: linux-flint-3.5-static-${{ runner.arch }}-v1
           
       - name: Configure (CMake, static)
         run: |
@@ -134,11 +149,26 @@ jobs:
           echo "PKG_CONFIG_PATH=$INSTALL_PREFIX/lib/pkgconfig:$BREW/lib/pkgconfig"    >> $GITHUB_ENV
           mkdir -p "$INSTALL_PREFIX"
 
+      - name: Restore FLINT static install cache
+        id: flint-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.INSTALL_PREFIX }}
+          key: macos-flint-3.5-static-renamed-${{ runner.arch }}-v1
+
       - name: Build FLINT 3.5.0 (static)
+        if: steps.flint-cache.outputs.cache-hit != 'true'
         run: |
           BREW=$(brew --prefix)
           git clone --depth=1 --branch flint-3.5 https://github.com/flintlib/flint.git
           cd flint
+          find . -type f \( -name '*.c' -o -name '*.h' \) -print0 | xargs -0 perl -pi -e '
+            s/\bnmod_mat_left_nullspace\b/flint_nmod_mat_left_nullspace/g;
+            s/\bnmod_mat_nullspace\b/flint_nmod_mat_nullspace/g;
+            s/\bfmpz_mat_nullspace\b/flint_fmpz_mat_nullspace/g;
+            s/\bfmpz_mat_rank\b/flint_fmpz_mat_rank/g;
+            s/\bfmpz_mat_solve\b/flint_fmpz_mat_solve/g;
+          '
           ./bootstrap.sh
           ./configure \
             --prefix="$INSTALL_PREFIX" \
@@ -149,67 +179,37 @@ jobs:
           make -j$(sysctl -n hw.ncpu)
           make install
 
-      # macOS: localize FLINT symbols that conflict with PML via nmedit
-      # (Apple ld lacks --allow-multiple-definition)
-      - name: Resolve FLINT/PML duplicate symbols via gobjcopy (macOS)
+      - name: Save FLINT static install cache
+        if: steps.flint-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.INSTALL_PREFIX }}
+          key: macos-flint-3.5-static-renamed-${{ runner.arch }}-v1
+
+      - name: Verify renamed FLINT symbols
         run: |
-          # 1. Setup paths
-          # Homebrew installs binutils as 'gobjcopy' to avoid conflict with system tools
-          OBJCOPY=$(brew --prefix binutils)/bin/gobjcopy
           FLINT_A="$INSTALL_PREFIX/lib/libflint.a"
-          WORK_DIR="${{ github.workspace }}/flint_fix_work"
-          OBJ_DIR="$WORK_DIR/objs"
-          RENAME_MAP="$WORK_DIR/rename_map.txt"
-          
-          mkdir -p "$OBJ_DIR"
-
-          # 2. Create the rename map
-          # Syntax: <old_symbol> <new_symbol>
-          cat <<EOF > "$RENAME_MAP"
-          _nmod_mat_left_nullspace _nmod_mat_left_nullspace_FLINT_INTERNAL
-          _nmod_mat_nullspace _nmod_mat_nullspace_FLINT_INTERNAL
-          _fmpz_mat_nullspace _fmpz_mat_nullspace_FLINT_INTERNAL
-          _fmpz_mat_rank _fmpz_mat_rank_FLINT_INTERNAL
-          _fmpz_mat_solve _fmpz_mat_solve_FLINT_INTERNAL
-          EOF
-
-          echo "Step 1: Extracting libflint.a objects uniquely..."
-          cd "$OBJ_DIR"
-          ar -t "$FLINT_A" | grep '\.o$' | awk '{print $0, NR}' | while read -r obj idx; do
-            ar -p "$FLINT_A" "$obj" > "${idx}_${obj}"
-          done
-
-          echo "Step 2: Renaming symbols using gobjcopy..."
-          for obj in *.o; do
-            # Only run objcopy if the object contains symbols from our map
-            # This speeds up the process significantly
-            if nm -gjU "$obj" | grep -E "(_nmod_mat|_fmpz_mat)" > /dev/null; then
-              echo "Renaming symbols in $obj..."
-              $OBJCOPY --redefine-syms="$RENAME_MAP" "$obj"
+          for sym in \
+            _nmod_mat_left_nullspace \
+            _nmod_mat_nullspace \
+            _fmpz_mat_nullspace \
+            _fmpz_mat_rank \
+            _fmpz_mat_solve; do
+            sym_lines="$(nm -g "$FLINT_A" | grep -w "$sym" | grep -v ' U ' || true)"
+            if [ -n "$sym_lines" ]; then
+              echo "Error: original conflicting symbol $sym is still exported by FLINT."
+              echo "$sym_lines"
+              exit 1
             fi
           done
-
-          echo "Step 3: Rebuilding libflint.a..."
-          rm -f "$FLINT_A"
-          libtool -static -o "$FLINT_A" *.o
-          ranlib "$FLINT_A"
-
-          echo "Step 4: Final Verification..."
-          # Check for original names. We expect 0 hits.
-          CONFLICT_COUNT=$(nm -gj "$FLINT_A" | grep -E '^(_nmod_mat_left_nullspace|_nmod_mat_nullspace|_fmpz_mat_nullspace|_fmpz_mat_rank|_fmpz_mat_solve)$' | wc -l | xargs)
-          
-          if [ "$CONFLICT_COUNT" -ne "0" ]; then
-             echo "Error: $CONFLICT_COUNT conflict symbols still remain in FLINT."
-             exit 1
-          else
-             echo "Success: Conflicting symbols renamed. Ready to link with PML."
-          fi
+          echo "Success: FLINT no longer exports the original conflicting symbols."
 
       - name: Configure (CMake, static)
         run: |
           cmake -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DDRSOLVE_STATIC=ON \
+            -DCMAKE_C_FLAGS="-Dnmod_mat_nullspace=flint_nmod_mat_nullspace -Dfmpz_mat_nullspace=flint_fmpz_mat_nullspace -Dfmpz_mat_rank=flint_fmpz_mat_rank -Dfmpz_mat_solve=flint_fmpz_mat_solve" \
             -DFLINT_ROOT="$INSTALL_PREFIX" \
             -DPML_ROOT="$INSTALL_PREFIX"
 
@@ -295,6 +295,7 @@ jobs:
           cmake -B build-win \
             -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake" \
             -DDRSOLVE_USE_BUNDLED_DEPS=OFF
+
       - name: Build
         run: cmake --build build-win -j$(nproc)
 
