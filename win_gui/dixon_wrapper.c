@@ -173,6 +173,16 @@ static int append_arg(string_builder_t *sb, const char *arg)
     return append_quoted_arg(sb, arg);
 }
 
+static int append_optional_int_arg(string_builder_t *sb, const char *flag, int value)
+{
+    char buffer[32];
+
+    if (value < 0) return 1;
+    if (!append_arg(sb, flag)) return 0;
+    snprintf(buffer, sizeof(buffer), "%d", value);
+    return append_arg(sb, buffer);
+}
+
 static const char *skip_first_arg(const char *command_line)
 {
     const char *p = command_line;
@@ -204,7 +214,7 @@ static char *make_display_command_line(const char *actual_command_line)
     string_builder_t sb = {0};
     const char *tail = skip_first_arg(actual_command_line);
 
-    if (!sb_append(&sb, "./dixon.exe")) {
+    if (!sb_append(&sb, "./drsolve.exe")) {
         sb_free(&sb);
         return NULL;
     }
@@ -368,7 +378,7 @@ int dixon_gui_find_default_cli(char *buffer, size_t buffer_size)
         path[0] = '\0';
     }
 
-    if (snprintf(buffer, buffer_size, "%sdixon.exe", path) >= (int) buffer_size) {
+    if (snprintf(buffer, buffer_size, "%sdrsolve.exe", path) >= (int) buffer_size) {
         return 0;
     }
 
@@ -390,7 +400,7 @@ static int validate_request(const dixon_gui_request_t *request,
     attrs = GetFileAttributesA(resolved_path);
     if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) {
         set_error(error_message, error_message_size,
-                  "Cannot find dixon.exe. Put it next to the GUI or choose it manually.");
+                  "Cannot find drsolve.exe. Put it next to the GUI or choose it manually.");
         return 0;
     }
 
@@ -627,7 +637,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
     } else {
         if (!dixon_gui_find_default_cli(default_path, sizeof(default_path))) {
             set_error(error_message, error_message_size,
-                      "Failed to resolve the default dixon.exe path.");
+                      "Failed to resolve the default drsolve.exe path.");
             goto cleanup;
         }
         path_to_use = default_path;
@@ -683,7 +693,18 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
 
     if (!append_arg(&command, path_to_use)) {
         set_error(error_message, error_message_size,
-                  "Out of memory while appending the dixon.exe path to the command line.");
+                  "Out of memory while appending the drsolve.exe path to the command line.");
+        goto cleanup;
+    }
+
+    if (!append_optional_int_arg(&command, "--step1", request->step1_method)) {
+        set_error(error_message, error_message_size,
+                  "Out of memory while appending the --step1 option to the command line.");
+        goto cleanup;
+    }
+    if (!append_optional_int_arg(&command, "--step4", request->step4_method)) {
+        set_error(error_message, error_message_size,
+                  "Out of memory while appending the --step4 option to the command line.");
         goto cleanup;
     }
 
@@ -807,7 +828,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
     }
 
     if (snprintf(working_dir, sizeof(working_dir), "%s", path_to_use) >= (int) sizeof(working_dir)) {
-        set_error(error_message, error_message_size, "The dixon.exe path is too long.");
+        set_error(error_message, error_message_size, "The drsolve.exe path is too long.");
         goto cleanup;
     }
     last_slash = strrchr(working_dir, '\\');
@@ -867,7 +888,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
             &si,
             &pi)) {
         set_win32_error(error_message, error_message_size,
-                        "Failed to start dixon.exe", GetLastError());
+                        "Failed to start drsolve.exe", GetLastError());
         goto cleanup;
     }
 
@@ -879,7 +900,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
         if (wait_status == WAIT_OBJECT_0) break;
         if (wait_status != WAIT_TIMEOUT) {
             set_win32_error(error_message, error_message_size,
-                            "Failed while waiting for dixon.exe", GetLastError());
+                            "Failed while waiting for drsolve.exe", GetLastError());
             goto cleanup;
         }
 
@@ -893,7 +914,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
                 TerminateProcess(pi.hProcess, 125);
                 WaitForSingleObject(pi.hProcess, 5000);
                 set_error(error_message, error_message_size,
-                          "dixon.exe did not produce any output within 30 seconds. If Windows security is holding the program, run dixon.exe manually once, allow it to start, then retry from the GUI.");
+                          "drsolve.exe did not produce any output within 30 seconds. If Windows security is holding the program, run drsolve.exe manually once, allow it to start, then retry from the GUI.");
                 goto cleanup;
             }
         }
@@ -901,7 +922,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
 
     if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
         set_win32_error(error_message, error_message_size,
-                        "Failed to obtain dixon.exe exit code", GetLastError());
+                        "Failed to obtain drsolve.exe exit code", GetLastError());
         goto cleanup;
     }
     response->exit_code = (int) exit_code;
