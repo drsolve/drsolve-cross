@@ -1,4 +1,4 @@
-#ifndef _GNU_SOURCE
+﻿#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 
@@ -45,42 +45,43 @@ static void rational_solver_progress(const char *fmt, ...) {
     va_end(args);
 }
 
+#ifdef _WIN32
+static void win_trace(const char *fmt, ...)
+{
+    (void) fmt;
+}
+
+static int win_trace_depth = 0;
+#endif
+
 static char *rational_arb_to_string(const arb_t value, slong digits) {
     char *buffer = NULL;
 #ifdef _WIN32
-    FILE *mem = tmpfile();
-    long length;
-    size_t read_size;
+    char *raw = arb_get_str(value, digits, 0);
+    size_t start = 0;
+    size_t end;
+    size_t len;
 
-    if (!mem) {
-        return NULL;
-    }
-
-    arb_fprintd(mem, value, digits);
-    fflush(mem);
-    if (fseek(mem, 0, SEEK_END) != 0) {
-        fclose(mem);
-        return NULL;
-    }
-    length = ftell(mem);
-    if (length < 0) {
-        fclose(mem);
-        return NULL;
-    }
-    if (fseek(mem, 0, SEEK_SET) != 0) {
-        fclose(mem);
+    if (!raw) {
         return NULL;
     }
 
-    buffer = (char *) malloc((size_t) length + 1);
+    end = strlen(raw);
+    if (end >= 2 && raw[0] == '[' && raw[end - 1] == ']') {
+        start = 1;
+        end--;
+    }
+
+    len = end - start;
+    buffer = (char *) malloc(len + 1);
     if (!buffer) {
-        fclose(mem);
+        flint_free(raw);
         return NULL;
     }
 
-    read_size = fread(buffer, 1, (size_t) length, mem);
-    buffer[read_size] = '\0';
-    fclose(mem);
+    memcpy(buffer, raw + start, len);
+    buffer[len] = '\0';
+    flint_free(raw);
 #else
     size_t size = 0;
     FILE *mem = open_memstream(&buffer, &size);
@@ -409,12 +410,7 @@ static double rational_fmpq_to_double(const fmpq_t value) {
 }
 
 static double rational_arb_to_double(const arb_t value) {
-    char *buffer = rational_arb_to_string(value, 40);
-    double result = buffer ? strtod(buffer, NULL) : 0.0;
-    if (buffer) {
-        free(buffer);
-    }
-    return result;
+    return arf_get_d(arb_midref(value), ARF_RND_NEAR);
 }
 
 static int rational_solution_vectors_close(const double *lhs, const double *rhs, slong n, double tol) {
@@ -515,7 +511,7 @@ static void rational_set_real_root_summary(rational_solutions_t *sols,
                  num_roots, var_name);
     }
 
-    strcat(summary, " Real roots ≈ {");
+    strcat(summary, " Real roots ~= {");
     for (slong i = 0; i < num_roots; i++) {
         char *root_str = rational_arb_to_string(roots[i], RATIONAL_REAL_ROOT_DIGITS);
         if (i > 0) {
@@ -2115,9 +2111,91 @@ static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, s
 char* rational_eliminate_variable_dixon_with_selection(char **poly_strings, slong num_polys, 
                                                         const char **elim_vars, slong num_elim_vars,
                                                         rational_equation_combination_t *combination) {
+#ifdef _WIN32
+    win_trace("enter rational_eliminate_variable_dixon_with_selection eqs=%ld elim_vars=%ld",
+              combination ? combination->num_equations : -1, num_elim_vars);
+#endif
     printf("  Entering rational_eliminate_variable_dixon_with_selection...\n");
     printf("    combination->num_equations = %ld, num_elim_vars = %ld\n", combination->num_equations, num_elim_vars);
     fflush(stdout);
+
+#ifdef _WIN32
+    if (combination->num_equations == 3 && num_elim_vars == 2) {
+        const slong pair_map[3][2] = {{0, 1}, {0, 2}, {1, 2}};
+        char *pair_resultants[3] = {NULL, NULL, NULL};
+        slong num_pair_resultants = 0;
+        const char *first_elim = elim_vars[num_elim_vars - 1];
+        const char *second_elim = elim_vars[0];
+
+        win_trace("pairwise fallback start eqs=%ld first_elim=%s second_elim=%s",
+                  combination->num_equations,
+                  first_elim ? first_elim : "(null)",
+                  second_elim ? second_elim : "(null)");
+
+        for (slong pair_idx = 0; pair_idx < 3; pair_idx++) {
+            slong eq_a = combination->equation_indices[pair_map[pair_idx][0]];
+            slong eq_b = combination->equation_indices[pair_map[pair_idx][1]];
+            size_t pair_len = strlen(poly_strings[eq_a]) + strlen(poly_strings[eq_b]) + 3;
+            char *pair_polys = (char *) malloc(pair_len);
+            char *pair_result = NULL;
+
+            if (!pair_polys) {
+                continue;
+            }
+
+            snprintf(pair_polys, pair_len, "%s, %s", poly_strings[eq_a], poly_strings[eq_b]);
+            win_trace("pairwise fallback step1 pair=%ld eq=(%ld,%ld)", pair_idx + 1, eq_a + 1, eq_b + 1);
+            pair_result = dixon_str_rational_with_file(pair_polys, first_elim, NULL);
+            free(pair_polys);
+
+            if (pair_result && strcmp(pair_result, "0") != 0) {
+                pair_resultants[num_pair_resultants++] = pair_result;
+                win_trace("pairwise fallback step1 pair=%ld ok", pair_idx + 1);
+            } else {
+                if (pair_result) {
+                    free(pair_result);
+                }
+                win_trace("pairwise fallback step1 pair=%ld zero", pair_idx + 1);
+            }
+        }
+
+        if (num_pair_resultants >= 2) {
+            for (slong i = 0; i < num_pair_resultants; i++) {
+                for (slong j = i + 1; j < num_pair_resultants; j++) {
+                    size_t final_len = strlen(pair_resultants[i]) + strlen(pair_resultants[j]) + 3;
+                    char *final_polys = (char *) malloc(final_len);
+                    char *final_result = NULL;
+
+                    if (!final_polys) {
+                        continue;
+                    }
+
+                    snprintf(final_polys, final_len, "%s, %s", pair_resultants[i], pair_resultants[j]);
+                    win_trace("pairwise fallback step2 pair=(%ld,%ld)", i + 1, j + 1);
+                    final_result = dixon_str_rational_with_file(final_polys, second_elim, NULL);
+                    free(final_polys);
+
+                    if (final_result && strcmp(final_result, "0") != 0) {
+                        for (slong k = 0; k < num_pair_resultants; k++) {
+                            free(pair_resultants[k]);
+                        }
+                        win_trace("pairwise fallback success");
+                        return final_result;
+                    }
+
+                    if (final_result) {
+                        free(final_result);
+                    }
+                }
+            }
+        }
+
+        for (slong i = 0; i < num_pair_resultants; i++) {
+            free(pair_resultants[i]);
+        }
+        win_trace("pairwise fallback failed -> use direct dixon");
+    }
+#endif
     
     if (combination->num_equations == num_elim_vars + 1) {
         printf("    Using rational dixon_str_rational for elimination\n");
@@ -2459,11 +2537,24 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                 for (slong i = 1; i < num_vars; i++) {
                     remaining_vars[i - 1] = sorted_vars[i];
                 }
+#ifdef _WIN32
+                win_trace("RECURSE base_idx=%ld/%ld base=%s target_eq=%ld comb=%ld/%ld vars=%ld",
+                          base_idx + 1, num_base_solutions, sorted_vars[0].name,
+                          target_equations, comb_idx + 1, num_combinations, num_vars - 1);
+#endif
                 
                 rational_solutions_t *test_sols = solve_rational_polynomial_system_array_with_vars(final_polys, 
                                                                                            target_equations,
                                                                                            remaining_vars,
                                                                                            num_vars - 1);
+#ifdef _WIN32
+                win_trace("RETURN  base_idx=%ld comb=%ld test_valid=%d test_has_no=%d test_exact=%ld test_real=%ld",
+                          base_idx + 1, comb_idx + 1,
+                          test_sols ? test_sols->is_valid : -1,
+                          test_sols ? test_sols->has_no_solutions : -99,
+                          test_sols ? test_sols->num_solution_sets : -1,
+                          test_sols ? test_sols->num_real_solution_sets : -1);
+#endif
                 
                 if (test_sols && test_sols->is_valid) {
                     rational_merge_solver_logs(sols, test_sols);
@@ -2472,7 +2563,7 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                     } else if (test_sols->has_no_solutions == 1) {
                         printf("  Combination %ld: no solutions\n", comb_idx + 1);
                     } else {
-                        printf("  ✓ Combination %ld succeeded with finite solutions!\n", comb_idx + 1);
+                        printf("  鉁?Combination %ld succeeded with finite solutions!\n", comb_idx + 1);
                         found_finite_solution++;
                         
                         if (test_sols->num_solution_sets > 0) {
@@ -2578,6 +2669,9 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
 int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
                                              rational_variable_info_t *sorted_vars, slong num_vars,
                                              rational_solutions_t *sols) {
+#ifdef _WIN32
+    win_trace("elim function enter vars=%ld polys=%ld", num_vars, num_polys);
+#endif
     printf("\n=== Rational Elimination Solver ===\n");
     printf("Number of variables: %ld\n", num_vars);
     printf("Number of equations: %ld\n", num_polys);
@@ -2587,6 +2681,9 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
         printf("  [%ld] %s (max_degree=%ld)\n", i, sorted_vars[i].name, sorted_vars[i].max_degree);
     }
     fflush(stdout);
+#ifdef _WIN32
+    win_trace("elim sorted vars printed");
+#endif
     
     if (num_vars == 0) {
         printf("No variables to solve for.\n");
@@ -2646,6 +2743,9 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
         elim_vars[i - 1] = sorted_vars[i].name;
     }
     char *keep_var = sorted_vars[0].name;
+#ifdef _WIN32
+    win_trace("elim vars prepared keep=%s", keep_var);
+#endif
     
     printf("Eliminating variables: ");
     for (slong i = 0; i < num_elim_vars; i++) {
@@ -2669,6 +2769,9 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
     slong num_combinations = 0;
     
     if (num_polys == target_equations) {
+#ifdef _WIN32
+        win_trace("elim using direct combination target_eq=%ld", target_equations);
+#endif
         num_combinations = 1;
         combinations = (rational_equation_combination_t*) malloc(sizeof(rational_equation_combination_t));
         combinations[0].equation_indices = (slong*) malloc(target_equations * sizeof(slong));
@@ -2677,12 +2780,18 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
             combinations[0].equation_indices[i] = i;
         }
     } else {
+#ifdef _WIN32
+        win_trace("elim generating combinations target_eq=%ld", target_equations);
+#endif
         rational_generate_equation_combinations(num_polys, target_equations, 
                                                  &combinations, &num_combinations);
     }
     
     printf("Generated %ld equation combinations to try\n", num_combinations);
     sols->total_combinations = num_combinations;
+#ifdef _WIN32
+    win_trace("elim start vars=%ld polys=%ld combs=%ld keep=%s", num_vars, num_polys, num_combinations, keep_var);
+#endif
     
     int success = 0;
     char *working_resultant = NULL;
@@ -2698,12 +2807,19 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
         printf("\n");
         
         combinations[comb_idx].tried = 1;
+#ifdef _WIN32
+        win_trace("elim combination %ld/%ld start", comb_idx + 1, num_combinations);
+#endif
         
         char *resultant = rational_eliminate_variable_dixon_with_selection(
             poly_strings, num_polys,
             elim_vars, num_elim_vars,
             &combinations[comb_idx]
         );
+#ifdef _WIN32
+        win_trace("elim combination %ld/%ld resultant=%s", comb_idx + 1, num_combinations,
+                  resultant ? resultant : "(null)");
+#endif
         
         printf("Resultant polynomial: %s\n", resultant);
         
@@ -2736,30 +2852,43 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
            successful_combinations, num_combinations);
     
     if (working_resultant) {
+#ifdef _WIN32
+        win_trace("solve resultant start keep=%s poly=%s", keep_var, working_resultant);
+#endif
         slong num_roots = 0;
         fmpq_t *base_roots = rational_solve_univariate_equation_all_roots(working_resultant, keep_var, &num_roots);
+#ifdef _WIN32
+        win_trace("solve resultant rational roots done count=%ld", num_roots);
+#endif
         slong num_real_roots = 0;
         arb_t *real_base_roots = rational_solve_univariate_equation_all_real_roots(
             working_resultant, keep_var, &num_real_roots, sols->real_solution_precision
         );
+#ifdef _WIN32
+        win_trace("solve resultant real roots done count=%ld", num_real_roots);
+#endif
         sols->num_base_solutions = (num_real_roots > 0) ? num_real_roots : num_roots;
         
         if (num_roots > 0) {
+#ifdef _WIN32
+            win_trace("back substitution start rational count=%ld", num_roots);
+#endif
             rational_solve_by_back_substitution_recursive_enhanced(
                 poly_strings, num_polys, sorted_vars, num_vars,
                 base_roots, num_roots, sols
             );
-            
-            for (slong i = 0; i < num_roots; i++) {
-                fmpq_clear(base_roots[i]);
-            }
-            free(base_roots);
+#ifdef _WIN32
+            win_trace("back substitution done exact=%ld real=%ld", sols->num_solution_sets, sols->num_real_solution_sets);
+#endif
             success = 1;
         } else {
             printf("No rational roots found for the resultant.\n");
         }
 
         if (num_real_roots > num_roots) {
+#ifdef _WIN32
+            win_trace("numeric backsolve irrational start extra=%ld", num_real_roots - num_roots);
+#endif
             rational_set_real_root_summary(sols, keep_var, real_base_roots, num_real_roots, num_roots);
             for (slong i = 0; i < num_real_roots; i++) {
                 if (!rational_real_root_matches_rational(real_base_roots[i], base_roots, num_roots,
@@ -2769,6 +2898,16 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
                                                                   real_base_roots[i], sols);
                 }
             }
+#ifdef _WIN32
+            win_trace("numeric backsolve irrational done real=%ld", sols->num_real_solution_sets);
+#endif
+        }
+
+        if (base_roots) {
+            for (slong i = 0; i < num_roots; i++) {
+                fmpq_clear(base_roots[i]);
+            }
+            free(base_roots);
         }
 
         rational_clear_real_root_array(real_base_roots, num_real_roots);
@@ -2791,6 +2930,12 @@ rational_solutions_t* solve_rational_polynomial_system_array_with_vars(char **po
                                                                        rational_variable_info_t *original_vars, slong num_original_vars) {
     rational_solutions_t *sols = (rational_solutions_t*) malloc(sizeof(rational_solutions_t));
     rational_solutions_init(sols, num_original_vars);
+#ifdef _WIN32
+    win_trace("ENTER depth=%d vars=%ld polys=%ld first_var=%s",
+              win_trace_depth, num_original_vars, num_polys,
+              (num_original_vars > 0 && original_vars && original_vars[0].name) ? original_vars[0].name : "(none)");
+    win_trace_depth++;
+#endif
     
     for (slong i = 0; i < num_original_vars; i++) {
         sols->variable_names[i] = strdup(original_vars[i].name);
@@ -2812,6 +2957,12 @@ rational_solutions_t* solve_rational_polynomial_system_array_with_vars(char **po
     if (sols->num_real_solution_sets > 0) {
         rational_compute_real_solution_residuals(sols, poly_strings, original_vars);
     }
+#ifdef _WIN32
+    win_trace_depth--;
+    win_trace("EXIT depth=%d vars=%ld polys=%ld exact=%ld real=%ld has_no=%d",
+              win_trace_depth, num_original_vars, num_polys,
+              sols->num_solution_sets, sols->num_real_solution_sets, sols->has_no_solutions);
+#endif
     return sols;
 }
 
@@ -2893,3 +3044,4 @@ void test_rational_polynomial_solver(void) {
     
     printf("\n=== Test Complete ===\n");
 }
+

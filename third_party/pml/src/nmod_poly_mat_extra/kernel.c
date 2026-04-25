@@ -117,7 +117,11 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     // Tuning the order of the subsequent approximant
     // ----------------------------------------------
 
-    long shift[n]; // temporary variable
+    /* Temporary shift workspace.
+       Use slong, not plain long: on Windows/LLP64 FLINT defines slong as
+       long long while long stays 32-bit, and qsort(..., sizeof(slong), ...)
+       would otherwise corrupt memory. */
+    slong * shift = FLINT_ARRAY_ALLOC(n, slong);
 
 
     // In order to sort for computing the order of the approximant, for the test m=1 to be ok
@@ -220,6 +224,7 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
         nmod_poly_mat_column_degree(degN, P1, ishift);
 
         nmod_poly_mat_clear(P1);
+        flint_free(shift);
         return n1;
     }
 
@@ -247,14 +252,17 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     if (m==1){
 
-        if (n1==0)
+        if (n1==0) {
+            flint_free(shift);
             return 0;
+        }
         else {
 
             nmod_poly_mat_init_set(N,P1);
             nmod_poly_mat_column_degree(degN, P1, ishift);
 
             nmod_poly_mat_clear(P1);
+            flint_free(shift);
             return n1;
         }
     }
@@ -409,6 +417,7 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     if ((c1==0) || (c2==0)){
 
         if (n1==0) {
+            flint_free(shift);
             return 0;
         }
         else {
@@ -417,6 +426,7 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
             nmod_poly_mat_clear(P1);
             nmod_poly_mat_clear(P2);
+            flint_free(shift);
             return n1;
         }
     }
@@ -446,6 +456,7 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
         nmod_poly_mat_column_degree(degN, Q, ishift);
 
         nmod_poly_mat_clear(Q);
+        flint_free(shift);
         return c2;
 
     }
@@ -481,10 +492,12 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
         nmod_poly_mat_clear(P1);
         nmod_poly_mat_clear(Q);
 
+        flint_free(shift);
         return n1+c2;
 
     }
 
+    flint_free(shift);
     return 0;
 }
 
@@ -585,6 +598,8 @@ int nmod_poly_mat_kernel_zls(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
         }
 
         nmod_poly_mat_clear(NT); // Since nz > 0
+        flint_free(perm);
+        nmod_poly_mat_clear(A);
 
         return nz;
     }

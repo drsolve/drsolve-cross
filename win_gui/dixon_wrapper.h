@@ -28,8 +28,6 @@ typedef struct {
     const char *random_degrees;
     int solve_verbose;
     int random_mode;
-    int step1_method;
-    int step4_method;
 } dixon_gui_request_t;
 
 typedef struct {

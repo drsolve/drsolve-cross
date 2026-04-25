@@ -36,89 +36,6 @@
 #define DIXON_NULL_DEVICE "/dev/null"
 #endif
 
-static char *dixon_arb_to_string(const arb_t value, slong digits)
-{
-    char *buffer = NULL;
-#ifdef _WIN32
-    FILE *mem = tmpfile();
-    long length;
-    size_t read_size;
-
-    if (!mem) return NULL;
-    arb_fprintd(mem, value, digits);
-    fflush(mem);
-    if (fseek(mem, 0, SEEK_END) != 0) {
-        fclose(mem);
-        return NULL;
-    }
-    length = ftell(mem);
-    if (length < 0) {
-        fclose(mem);
-        return NULL;
-    }
-    if (fseek(mem, 0, SEEK_SET) != 0) {
-        fclose(mem);
-        return NULL;
-    }
-
-    buffer = (char *) malloc((size_t) length + 1);
-    if (!buffer) {
-        fclose(mem);
-        return NULL;
-    }
-
-    read_size = fread(buffer, 1, (size_t) length, mem);
-    buffer[read_size] = '\0';
-    fclose(mem);
-#else
-    size_t size = 0;
-    FILE *mem = open_memstream(&buffer, &size);
-    if (!mem) return NULL;
-    arb_fprintd(mem, value, digits);
-    fclose(mem);
-#endif
-    return buffer;
-}
-
-static int dixon_string_is_zeroish(const char *s)
-{
-    if (!s) return 0;
-    while (*s && isspace((unsigned char)*s)) s++;
-    if (*s == '+') s++;
-    while (*s && isspace((unsigned char)*s)) s++;
-    int saw_digit = 0;
-    while (*s) {
-        if (isdigit((unsigned char)*s)) {
-            saw_digit = 1;
-            if (*s != '0') return 0;
-        } else if (*s == '.' || isspace((unsigned char)*s)) {
-        } else {
-            return 0;
-        }
-        s++;
-    }
-    return saw_digit;
-}
-
-static void dixon_fprint_arb_pretty(FILE *fp, const arb_t value, slong digits)
-{
-    char *raw = dixon_arb_to_string(value, digits);
-    if (!raw) {
-        arb_fprintd(fp, value, digits);
-        return;
-    }
-
-    char *pm = strstr(raw, " +/- ");
-    if (pm && (arb_is_exact(value) || dixon_string_is_zeroish(pm + 5))) {
-        size_t len = (size_t)(pm - raw);
-        while (len > 0 && isspace((unsigned char)raw[len - 1])) len--;
-        fprintf(fp, "%.*s", (int)len, raw);
-    } else {
-        fputs(raw, fp);
-    }
-    free(raw);
-}
-
 /* =========================================================================
  * Print usage
  * ========================================================================= */
@@ -127,7 +44,7 @@ static void print_version()
 {
     printf("===============================================\n");
     printf("drsolve v%s\n", PROGRAM_VERSION);
-    printf("FLINT version: %s (Recommended: 3.4.0)\n", FLINT_VERSION);
+    printf("FLINT version: %s (Recommended: 3.5.0)\n", FLINT_VERSION);
 #ifdef HAVE_PML
     printf("PML support: ENABLED\n");
 #else
@@ -226,6 +143,84 @@ static void print_usage(const char *prog_name)
 /* =========================================================================
  * Utility helpers
  * ========================================================================= */
+
+static char *dixon_arb_to_string(const arb_t value, slong digits)
+{
+    char *buffer = NULL;
+#ifdef _WIN32
+    char *raw = arb_get_str(value, digits, 0);
+    size_t start = 0;
+    size_t end;
+    size_t len;
+
+    if (!raw) return NULL;
+
+    end = strlen(raw);
+    if (end >= 2 && raw[0] == '[' && raw[end - 1] == ']') {
+        start = 1;
+        end--;
+    }
+
+    len = end - start;
+    buffer = (char *) malloc(len + 1);
+    if (!buffer) {
+        flint_free(raw);
+        return NULL;
+    }
+
+    memcpy(buffer, raw + start, len);
+    buffer[len] = '\0';
+    flint_free(raw);
+#else
+    size_t size = 0;
+    FILE *mem = open_memstream(&buffer, &size);
+    if (!mem) return NULL;
+    arb_fprintd(mem, value, digits);
+    fclose(mem);
+#endif
+    return buffer;
+}
+
+static int dixon_string_is_zeroish(const char *s)
+{
+    if (!s) return 0;
+    while (*s && isspace((unsigned char)*s)) s++;
+    if (*s == '+') s++;
+    while (*s && isspace((unsigned char)*s)) s++;
+    int saw_digit = 0;
+    while (*s) {
+        if (isdigit((unsigned char)*s)) {
+            saw_digit = 1;
+            if (*s != '0') return 0;
+        } else if (*s == '.' || isspace((unsigned char)*s)) {
+        } else {
+            return 0;
+        }
+        s++;
+    }
+    return saw_digit;
+}
+
+static void dixon_fprint_arb_pretty(FILE *fp, const arb_t value, slong digits)
+{
+    char *raw = dixon_arb_to_string(value, digits);
+    if (!raw) {
+        arb_fprintd(fp, value, digits);
+        return;
+    }
+
+    char *pm = strstr(raw, " +/- ");
+    if (pm && (arb_is_exact(value) || dixon_string_is_zeroish(pm + 5))) {
+        size_t len = (size_t)(pm - raw);
+        while (len > 0 && isspace((unsigned char)raw[len - 1])) len--;
+        fprintf(fp, "%.*s", (int)len, raw);
+    } else {
+        fputs(raw, fp);
+    }
+    free(raw);
+}
+
+
 static char *trim(char *str)
 {
     char *end;

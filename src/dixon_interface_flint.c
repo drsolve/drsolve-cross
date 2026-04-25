@@ -1642,6 +1642,34 @@ fail:
     return 0;
 }
 
+static char *qq_compute_modular_resultant_for_reconstruction(const char *poly_string,
+                                                             const char *vars_string,
+                                                             const fq_nmod_ctx_t ctx) {
+    char **poly_array = NULL;
+    char **vars_array = NULL;
+    slong num_polys = 0;
+    slong num_vars = 0;
+    char *result = NULL;
+
+    poly_array = split_string(poly_string, &num_polys);
+    vars_array = split_string(vars_string, &num_vars);
+
+    if (poly_array && vars_array && num_polys == 2 && num_vars == 1) {
+        result = bivariate_resultant(poly_array[0], poly_array[1], vars_array[0], ctx);
+    } else {
+        result = dixon_str(poly_string, vars_string, ctx);
+    }
+
+    if (poly_array) {
+        free_split_strings(poly_array, num_polys);
+    }
+    if (vars_array) {
+        free_split_strings(vars_array, num_vars);
+    }
+
+    return result;
+}
+
 static void qq_select_reconstruction_primes(ulong *primes, slong *num_primes_out, slong max_primes) {
     ulong candidate;
     slong num_primes = 0;
@@ -1741,7 +1769,7 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
             dup2(devnull, STDOUT_FILENO);
         }
 
-        mod_result = dixon_str(poly_string, vars_string, ctx);
+        mod_result = qq_compute_modular_resultant_for_reconstruction(poly_string, vars_string, ctx);
 
         fflush(stdout);
         if (saved_stdout != -1) {
@@ -1750,6 +1778,13 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
         }
         if (devnull != -1) {
             close(devnull);
+        }
+
+        if (!mod_result) {
+            printf("Skipping p = %lu: modular resultant computation failed.\n", primes[i]);
+            fq_nmod_ctx_clear(ctx);
+            fmpz_clear(p);
+            continue;
         }
 
         if (!parse_result_string_fixed_params(mod_result, recon.par_names, recon.npars, ctx, &mod_poly)) {
