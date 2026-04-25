@@ -9,7 +9,7 @@ jobs:
   # Linux: build FLINT + PML from source → static binary + test
   # ──────────────────────────────────────────────────────────────
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       INSTALL_PREFIX: ${{ github.workspace }}/deps
 
@@ -123,7 +123,7 @@ jobs:
       - name: Install build tools
         run: |
           brew update
-          brew install gmp mpfr autoconf automake libtool pkg-config cmake
+          brew install gmp mpfr autoconf automake libtool pkg-config cmake binutils
 
       - name: Set build environment
         run: |
@@ -151,69 +151,59 @@ jobs:
 
       # macOS: localize FLINT symbols that conflict with PML via nmedit
       # (Apple ld lacks --allow-multiple-definition)
-      - name: Resolve FLINT/PML duplicate symbols (macOS nmedit)
+      - name: Resolve FLINT/PML duplicate symbols via gobjcopy (macOS)
         run: |
+          # 1. Setup paths
+          # Homebrew installs binutils as 'gobjcopy' to avoid conflict with system tools
+          OBJCOPY=$(brew --prefix binutils)/bin/gobjcopy
           FLINT_A="$INSTALL_PREFIX/lib/libflint.a"
-          PML_A="$INSTALL_PREFIX/lib/libpml.a"
-          TMPDIR_WORK=$(mktemp -d)
+          WORK_DIR="${{ github.workspace }}/flint_fix_work"
+          OBJ_DIR="$WORK_DIR/objs"
+          RENAME_MAP="$WORK_DIR/rename_map.txt"
+          
+          mkdir -p "$OBJ_DIR"
 
-          echo "Collecting PML exported symbols..."
-          PML_SYMS=$(nm -g "$PML_A" 2>/dev/null \
-            | awk '/ T / || / D / || / B / {sym=$3; sub(/^_/,"",sym); print sym}' \
-            | sort -u)
+          # 2. Create the rename map
+          # Syntax: <old_symbol> <new_symbol>
+          cat <<EOF > "$RENAME_MAP"
+          _nmod_mat_left_nullspace _nmod_mat_left_nullspace_FLINT_INTERNAL
+          _nmod_mat_nullspace _nmod_mat_nullspace_FLINT_INTERNAL
+          _fmpz_mat_nullspace _fmpz_mat_nullspace_FLINT_INTERNAL
+          _fmpz_mat_rank _fmpz_mat_rank_FLINT_INTERNAL
+          _fmpz_mat_solve _fmpz_mat_solve_FLINT_INTERNAL
+          EOF
 
-          echo "Extracting libflint.a..."
-          (cd "$TMPDIR_WORK" && ar -x "$FLINT_A")
-
-          MODIFIED_OBJS=""
-
-          for obj in "$TMPDIR_WORK"/*.o; do
-            obj_name=$(basename "$obj")
-
-            ALL_GLOBALS=$(nm -g "$obj" 2>/dev/null \
-              | awk '/ T / || / D / || / B / {sym=$3; sub(/^_/,"",sym); print sym}' \
-              | sort -u)
-
-            CONFLICTS=$(comm -12 \
-              <(echo "$ALL_GLOBALS") \
-              <(echo "$PML_SYMS"))
-
-            [ -z "$CONFLICTS" ] && continue
-
-            echo "In $obj_name — making local:"
-            echo "$CONFLICTS" | sed 's/^/    /'
-
-            KEEP_FILE=$(mktemp)
-            comm -23 \
-              <(echo "$ALL_GLOBALS") \
-              <(echo "$CONFLICTS" | sort -u) \
-              | grep -v '^[[:space:]]*$' \
-              | sed 's/^/_/' \
-              > "$KEEP_FILE"
-
-            KEEP_COUNT=$(grep -c '' "$KEEP_FILE" || echo 0)
-
-            if [ "$KEEP_COUNT" -gt 0 ]; then
-              nmedit -s "$KEEP_FILE" "$obj"
-            else
-              nmedit -p "$obj"
-            fi
-
-            rm -f "$KEEP_FILE"
-            MODIFIED_OBJS="$MODIFIED_OBJS $obj_name"
+          echo "Step 1: Extracting libflint.a objects uniquely..."
+          cd "$OBJ_DIR"
+          ar -t "$FLINT_A" | grep '\.o$' | awk '{print $0, NR}' | while read -r obj idx; do
+            ar -p "$FLINT_A" "$obj" > "${idx}_${obj}"
           done
 
-          if [ -n "$MODIFIED_OBJS" ]; then
-            echo "Updating libflint.a with localized objects..."
-            (cd "$TMPDIR_WORK" && ar -r "$FLINT_A" $MODIFIED_OBJS)
-            echo "Sanity check — nmod_mat_set still in libflint.a:"
-            nm -g "$FLINT_A" 2>/dev/null | grep ' T _nmod_mat_set$' \
-              || { echo "ERROR: _nmod_mat_set missing after nmedit!"; exit 1; }
-          else
-            echo "No conflicting symbols — nothing to localize."
-          fi
+          echo "Step 2: Renaming symbols using gobjcopy..."
+          for obj in *.o; do
+            # Only run objcopy if the object contains symbols from our map
+            # This speeds up the process significantly
+            if nm -gjU "$obj" | grep -E "(_nmod_mat|_fmpz_mat)" > /dev/null; then
+              echo "Renaming symbols in $obj..."
+              $OBJCOPY --redefine-syms="$RENAME_MAP" "$obj"
+            fi
+          done
 
-          rm -rf "$TMPDIR_WORK"
+          echo "Step 3: Rebuilding libflint.a..."
+          rm -f "$FLINT_A"
+          libtool -static -o "$FLINT_A" *.o
+          ranlib "$FLINT_A"
+
+          echo "Step 4: Final Verification..."
+          # Check for original names. We expect 0 hits.
+          CONFLICT_COUNT=$(nm -gj "$FLINT_A" | grep -E '^(_nmod_mat_left_nullspace|_nmod_mat_nullspace|_fmpz_mat_nullspace|_fmpz_mat_rank|_fmpz_mat_solve)$' | wc -l | xargs)
+          
+          if [ "$CONFLICT_COUNT" -ne "0" ]; then
+             echo "Error: $CONFLICT_COUNT conflict symbols still remain in FLINT."
+             exit 1
+          else
+             echo "Success: Conflicting symbols renamed. Ready to link with PML."
+          fi
 
       - name: Configure (CMake, static)
         run: |
