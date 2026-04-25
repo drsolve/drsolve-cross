@@ -17,7 +17,7 @@ info = DixonComplexity(F, [x, y])
 print(res, "\n", sols, "\n", info, "\n")
 
 # Iterative elimination
-load("dixon_sage_interface.sage")
+load("drsolve_sage_interface.sage")
 set_dixon_path("./drsolve")
 R.<x, y, z> = GF(17)[]
 f1 = x + y + z
