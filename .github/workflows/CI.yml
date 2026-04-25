@@ -32,9 +32,9 @@ jobs:
           echo "PKG_CONFIG_PATH=$INSTALL_PREFIX/lib/pkgconfig" >> $GITHUB_ENV
           mkdir -p "$INSTALL_PREFIX"
 
-      - name: Build FLINT 3.4.0 (static)
+      - name: Build FLINT 3.5.0 (static)
         run: |
-          git clone --depth=1 --branch flint-3.4 https://github.com/flintlib/flint.git
+          git clone --depth=1 --branch flint-3.5 https://github.com/flintlib/flint.git
           cd flint
           ./bootstrap.sh
           ./configure \
@@ -134,10 +134,10 @@ jobs:
           echo "PKG_CONFIG_PATH=$INSTALL_PREFIX/lib/pkgconfig:$BREW/lib/pkgconfig"    >> $GITHUB_ENV
           mkdir -p "$INSTALL_PREFIX"
 
-      - name: Build FLINT 3.4.0 (static)
+      - name: Build FLINT 3.5.0 (static)
         run: |
           BREW=$(brew --prefix)
-          git clone --depth=1 --branch flint-3.4 https://github.com/flintlib/flint.git
+          git clone --depth=1 --branch flint-3.5 https://github.com/flintlib/flint.git
           cd flint
           ./bootstrap.sh
           ./configure \
