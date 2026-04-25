@@ -30,7 +30,7 @@ DRsolve is distributed as both a **shared library** (`libdrsolve.so` / `libdrsol
 
 ## Dependencies
 
-- **FLINT** (recommended version: 3.4.0)  
+- **FLINT** (recommended version: 3.5.0)  
   <https://github.com/flintlib/flint>
 
 Optional:
