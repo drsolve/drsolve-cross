@@ -6,7 +6,7 @@ Usage
 -----
 
 # Basic
-load("dixon_sage_interface.sage")
+load("drsolve_sage_interface.sage")
 set_dixon_path("./drsolve")
 
 R.<x, y, z> = GF(257)[]
@@ -195,11 +195,14 @@ def _locate_output_file(finput, tag, debug):
             print("[debug] found tagged output file: %s" % tagged)
         return tagged
 
-    # 2. timestamped file in CWD  (solution_*.dat / comp_*.dat)
-    pattern_cwd = "%s_*.dat" % tag.lstrip("_")
-    candidates  = sorted(glob.glob(pattern_cwd), key=os.path.getmtime)
+    # 2. timestamped file in CWD  (solution_*.dr/.dat / comp_*.dr/.dat)
+    stem = tag.lstrip("_")
+    candidates = []
+    for ext in ("dr", "dat"):
+        candidates.extend(glob.glob("%s_*.%s" % (stem, ext)))
+    candidates = sorted(candidates, key=os.path.getmtime)
     if debug:
-        print("[debug] CWD glob '%s': %s" % (pattern_cwd, candidates))
+        print("[debug] CWD glob '%s_*.{{dr,dat}}': %s" % (stem, candidates))
     if candidates:
         if debug:
             print("[debug] using most recent CWD file: %s" % candidates[-1])
@@ -207,10 +210,12 @@ def _locate_output_file(finput, tag, debug):
 
     # 3. same dir as finput
     d = os.path.dirname(finput) or "."
-    pattern_dir = os.path.join(d, "%s_*.dat" % tag.lstrip("_"))
-    candidates  = sorted(glob.glob(pattern_dir), key=os.path.getmtime)
+    candidates = []
+    for ext in ("dr", "dat"):
+        candidates.extend(glob.glob(os.path.join(d, "%s_*.%s" % (stem, ext))))
+    candidates = sorted(candidates, key=os.path.getmtime)
     if debug:
-        print("[debug] dir glob '%s': %s" % (pattern_dir, candidates))
+        print("[debug] dir glob '%s/%s_*.{dr,dat}': %s" % (d, stem, candidates))
     if candidates:
         return candidates[-1]
 
@@ -259,9 +264,9 @@ def ToDixon(F, elim_vars, field_size=257, finput="/tmp/drsolve_in.dat", debug=Fa
     _check_ring_consistency(F)
 
     with open(finput, "w") as fd:
+        fd.write(_elim_vars_to_str(elim_vars) + "\n")
         fd.write(_field_size_str(field_size) + "\n")
         fd.write(", ".join(_poly_to_str(f) for f in F) + "\n")
-        fd.write(_elim_vars_to_str(elim_vars) + "\n")
 
     if debug:
         print("[debug] wrote input file: %s" % finput)
@@ -271,7 +276,6 @@ def ToDixon(F, elim_vars, field_size=257, finput="/tmp/drsolve_in.dat", debug=Fa
             print("[debug] --- end ---")
 
     return finput
-
 
 def ToDixonSolver(F, field_size=257, finput="/tmp/drsolve_solve_in.dat", debug=False):
     """
@@ -689,9 +693,12 @@ def DixonIdeal(
         print("[DixonIdeal] drsolve exited with code %d" % proc.returncode)
         return None
 
-    candidates = sorted(glob.glob("solution_*.dat"), key=os.path.getmtime)
+    candidates = []
+    for ext in ("dr", "dat"):
+        candidates.extend(glob.glob("solution_*.%s" % ext))
+    candidates = sorted(candidates, key=os.path.getmtime)
     if debug:
-        print("[debug] solution_*.dat in CWD: %s" % candidates)
+        print("[debug] solution_*.{dr,dat} in CWD: %s" % candidates)
     if not candidates:
         print("[DixonIdeal] output file not found")
         return None
@@ -706,3 +713,7 @@ def DixonIdeal(
             pass
 
     return result
+
+
+# Backward-compatible alias matching the README/API name.
+DixonResultant = drsolveultant
