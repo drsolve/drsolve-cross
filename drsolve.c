@@ -108,6 +108,10 @@ static void print_usage(const char *prog_name)
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
     printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
+    printf("  Resultant construction:\n");
+    printf("    %s --resultant dixon|macaulay <args>\n", prog_name);
+    printf("    %s --macaulay <args>\n", prog_name);
+    printf("    -> --macaulay is shorthand for --resultant macaulay\n");
 
     printf("  Process count:\n");
     printf("    %s --threads <num> <args>\n", prog_name);
@@ -491,10 +495,11 @@ static void save_comp_result_to_file(
         char        **all_vars,
         char        **elim_var_list,
         slong         num_elim,
+        slong         num_parameter_vars,
         const long   *degrees,
         const fmpz_t  matrix_size,
         long          bezout_bound,
-        double        complexity,
+        const dixon_complexity_report_t *report,
         double        omega,
         double        comp_time)
 {
@@ -527,10 +532,25 @@ static void save_comp_result_to_file(
         fprintf(fp, "%s", elim_var_list[i]);
     }
     fprintf(fp, "\n");
+    int first = 1;
+    fprintf(fp, "Parameter vars (%ld): ", num_parameter_vars);
+    first = 1;
+    for (slong i = 0; i < num_all_vars; i++) {
+        int is_elim = 0;
+        for (slong j = 0; j < num_elim; j++) {
+            if (strcmp(all_vars[i], elim_var_list[j]) == 0) { is_elim = 1; break; }
+        }
+        if (!is_elim) {
+            if (!first) fprintf(fp, ", ");
+            fprintf(fp, "%s", all_vars[i]);
+            first = 0;
+        }
+    }
+    if (first) fprintf(fp, "(none)");
+    fprintf(fp, "\n");
 
     /* Remaining vars */
     fprintf(fp, "Remaining vars: ");
-    int first = 1;
     for (slong i = 0; i < num_all_vars; i++) {
         int is_elim = 0;
         for (slong j = 0; j < num_elim; j++)
@@ -556,8 +576,42 @@ static void save_comp_result_to_file(
     fmpz_fprint(fp, matrix_size);
     fprintf(fp, "\n");
     fprintf(fp, "Resultant degree estimate (Bezout): %ld\n", bezout_bound);
-    fprintf(fp, "\n--- Complexity ---\n");
-    fprintf(fp, "Complexity (log2, omega=%.4g): %.6f\n", omega, complexity);
+    fprintf(fp, "\n--- Step 1 determinant ---\n");
+    fprintf(fp, "Cancellation matrix size: %ld x %ld\n",
+            report->det_size, report->det_size);
+    fprintf(fp, "Step 1 variable count (2*elim + params): %ld = 2*%ld + %ld\n",
+            report->step1_var_count, report->num_elim_vars, report->num_parameter_vars);
+    fprintf(fp, "Step 1 determinant total degree upper bound: %ld\n",
+            report->step1_det_total_degree);
+    fprintf(fp, "Step 1 Kronecker univariate degree upper bound log2: %.6f\n",
+            report->step1_kronecker_degree_log2);
+    fprintf(fp, "Step 1 sparse term upper bound log2(T): %.6f\n",
+            report->step1_sparse_term_bound_log2);
+    fprintf(fp, "Step 1 direct Leibniz + Kronecker/FFT (log2): %.6f\n",
+            report->step1_direct_log2);
+    fprintf(fp, "Step 1 Kronecker + HNF (log2): %.6f\n",
+            report->step1_hnf_log2);
+    fprintf(fp, "Step 1 derivative sparse interpolation (log2): %.6f\n",
+            report->step1_sparse_log2);
+    fprintf(fp, "Macaulay degree: %ld\n", report->macaulay_degree);
+    fprintf(fp, "Macaulay matrix size upper bound: %ld x %ld (square <= %ld)\n",
+            report->macaulay_rows, report->macaulay_cols, report->macaulay_square_size);
+    fprintf(fp, "Macaulay resultant + HNF estimate (log2): %.6f\n",
+            report->macaulay_log2);
+    fprintf(fp, "Groebner degree of regularity estimate: %ld\n",
+            report->grobner_dreg);
+    fprintf(fp, "Groebner basis estimate (log2): %.6f\n",
+            report->grobner_log2);
+
+    fprintf(fp, "\n--- Step 4 / total ---\n");
+    fprintf(fp, "Step 4 Dixon complexity (log2, omega=%.4g): %.6f\n",
+            omega, report->step4_log2);
+    fprintf(fp, "Total with direct step 1 (log2): %.6f\n",
+            report->total_direct_log2);
+    fprintf(fp, "Total with HNF step 1 (log2): %.6f\n",
+            report->total_hnf_log2);
+    fprintf(fp, "Total with sparse step 1 (log2): %.6f\n",
+            report->total_sparse_log2);
 
     fclose(fp);
 }
@@ -592,6 +646,20 @@ static void run_complexity_analysis(
     collect_variables((const char **)poly_arr, num_polys,
                       gen_name, &all_vars, &num_all_vars);
 
+    slong num_parameter_vars = 0;
+    for (slong i = 0; i < num_all_vars; i++) {
+        int is_elim = 0;
+        for (slong j = 0; j < num_elim; j++) {
+            if (strcmp(all_vars[i], elim_arr[j]) == 0) {
+                is_elim = 1;
+                break;
+            }
+        }
+        if (!is_elim) {
+            num_parameter_vars++;
+        }
+    }
+
     /* ---- compute degree of each polynomial ---- */
     if (num_polys <= 0) {
         if (!silent_mode) fprintf(stderr, "Error: no polynomials to analyze\n");
@@ -625,15 +693,21 @@ static void run_complexity_analysis(
         close(orig_stdout);
     }
 
-    /* ---- Dixon complexity ---- */
-    double complexity = dixon_complexity(degrees, (int)num_polys,
-                                        (int)num_all_vars, omega);
+    /* ---- Step 1 / Step 4 complexity report ---- */
+    dixon_complexity_report_t report;
+    dixon_complexity_report_from_degrees(&report,
+                                         degrees,
+                                         num_polys,
+                                         num_all_vars,
+                                         num_elim,
+                                         num_parameter_vars,
+                                         omega);
 
     /* ---- console output (concise) ---- */
     if (!silent_mode) {
         printf("\n=== Complexity Analysis ===\n");
-        printf("Equations: %ld  |  Variables: %ld  |  Eliminate: %ld\n",
-               num_polys, num_all_vars, num_elim);
+        printf("Equations: %ld  |  Variables: %ld  |  Eliminate: %ld  |  Parameters: %ld\n",
+               num_polys, num_all_vars, num_elim, num_parameter_vars);
 
         printf("All vars : ");
         for (slong i = 0; i < num_all_vars; i++) {
@@ -656,12 +730,39 @@ static void run_complexity_analysis(
         printf("\n");
 
         printf("Resultant deg est : %ld  (Bezout bound)\n", bezout);
+        printf("\nStep 1 matrix size              : %ld x %ld\n",
+               report.det_size, report.det_size);
+        printf("Step 1 variable count           : %ld = 2*%ld + %ld\n",
+               report.step1_var_count, report.num_elim_vars, report.num_parameter_vars);
+        printf("Step 1 determinant total degree : %ld\n",
+               report.step1_det_total_degree);
+        printf("Step 1 Kronecker degree log2    : %.4f\n",
+               report.step1_kronecker_degree_log2);
+        printf("Step 1 sparse term upper log2 T : %.4f\n",
+               report.step1_sparse_term_bound_log2);
 
-        if (isfinite(complexity))
-            printf("Complexity (log2) : %.4f  (omega=%.4g)\n",
-                   complexity, omega);
-        else
-            printf("Complexity (log2) : inf / undefined\n");
+        printf("Step 1 direct   (log2)          : %.4f\n",
+               report.step1_direct_log2);
+        printf("Step 1 HNF      (log2)          : %.4f\n",
+               report.step1_hnf_log2);
+        printf("Step 1 sparse   (log2)          : %.4f\n",
+               report.step1_sparse_log2);
+        printf("Macaulay degree               : %ld\n", report.macaulay_degree);
+        printf("Macaulay matrix size          : %ld x %ld (square <= %ld)\n",
+               report.macaulay_rows, report.macaulay_cols, report.macaulay_square_size);
+        printf("Macaulay+HNF  (log2)          : %.4f\n",
+               report.macaulay_log2);
+        printf("Groebner dreg estimate        : %ld\n", report.grobner_dreg);
+        printf("Groebner basis (log2)         : %.4f\n", report.grobner_log2);
+        printf("Step 4 Dixon    (log2)          : %.4f  (omega=%.4g)\n",
+               report.step4_log2, omega);
+
+        printf("Total direct+step4 (log2)       : %.4f\n",
+               report.total_direct_log2);
+        printf("Total HNF+step4    (log2)       : %.4f\n",
+               report.total_hnf_log2);
+        printf("Total sparse+step4 (log2)       : %.4f\n",
+               report.total_sparse_log2);
 
         if (output_filename)
             printf("Report saved to   : %s\n", output_filename);
@@ -674,9 +775,9 @@ static void run_complexity_analysis(
             output_filename, polys_str, vars_str,
             prime, power,
             num_polys, num_all_vars, all_vars,
-            elim_arr, num_elim,
+            elim_arr, num_elim, num_parameter_vars,
             degrees, matrix_size, bezout,
-            complexity, omega, comp_time);
+            &report, omega, comp_time);
     }
 
     /* ---- cleanup ---- */
@@ -1644,7 +1745,10 @@ static void save_result_to_file(const char *filename,
         return;
     }
 
-    fprintf(out_fp, "Dixon Resultant Computation\n");
+    fprintf(out_fp, "%s\n",
+            g_resultant_method == RESULTANT_METHOD_MACAULAY
+                ? "Macaulay Resultant Computation"
+                : "Dixon Resultant Computation");
     fprintf(out_fp, "==========================\n");
     fprintf(out_fp, "Field: ");
     print_field_label(out_fp, prime, power);
@@ -1923,6 +2027,7 @@ int main(int argc, char *argv[])
     int    det_method_step1 = -1;  /* determinant method override for step 1 */
     int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
+    resultant_method_t resultant_method = RESULTANT_METHOD_DIXON;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -1942,6 +2047,20 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--field-equation") == 0 ||
                    strcmp(argv[i], "--field-eqution")  == 0) {
             field_eq_mode = 1; arg_offset++;
+        } else if (strcmp(argv[i], "--macaulay") == 0) {
+            resultant_method = RESULTANT_METHOD_MACAULAY; arg_offset++;
+        } else if ((strcmp(argv[i], "--resultant") == 0 ||
+                    strcmp(argv[i], "--resultant-method") == 0) && i + 1 < argc) {
+            if (strcmp(argv[i + 1], "macaulay") == 0) {
+                resultant_method = RESULTANT_METHOD_MACAULAY;
+            } else if (strcmp(argv[i + 1], "dixon") == 0) {
+                resultant_method = RESULTANT_METHOD_DIXON;
+            } else {
+                fprintf(stderr, "Warning: invalid resultant method '%s', using dixon.\n",
+                                argv[i + 1]);
+            }
+            arg_offset += 2;
+            i++;
         } else if ((strcmp(argv[i], "--omega") == 0 ||
                     strcmp(argv[i], "-w")      == 0) && i + 1 < argc) {
             char *endptr = NULL;
@@ -2277,7 +2396,10 @@ int main(int argc, char *argv[])
 
     if (!silent_mode) {
         if (!comp_mode && !solve_mode) {
-            printf("=== Dixon Resultant Computation ===\n");
+            printf("=== %s ===\n",
+                   g_resultant_method == RESULTANT_METHOD_MACAULAY
+                       ? "Macaulay Resultant Computation"
+                       : "Dixon Resultant Computation");
             printf("Field: ");
             print_field_label(stdout, p_fmpz, power);
             printf("\n");
@@ -2466,6 +2588,11 @@ int main(int argc, char *argv[])
     dixon_global_method_step1 = -1;
     dixon_global_method_step4 = -1;
     dixon_global_method = -1;
+    g_resultant_method = resultant_method;
+    if (!silent_mode && !comp_mode && !solve_mode && !ideal_str) {
+        printf("Resultant construction method: %s\n",
+               resultant_method == RESULTANT_METHOD_MACAULAY ? "Macaulay" : "Dixon");
+    }
     if (det_method_step1 != -1) {
         dixon_global_method_step1 = (det_method_t)det_method_step1;
         dixon_global_method = dixon_global_method_step1;
@@ -2571,14 +2698,16 @@ int main(int argc, char *argv[])
         result = dixon_with_ideal_reduction_str(polys_str, vars_str, ideal_str, ctx);
 
     } else {
-        /* ---- Basic Dixon resultant ---- */
+        /* ---- Basic resultant ---- */
         if (!silent_mode) {
             int poly_count = count_comma_separated_items(polys_str);
             int var_count  = count_comma_separated_items(vars_str);
-            printf("Task: Dixon resultant  |  Equations: %d  |  Eliminate: %s\n",
+            printf("Task: %s  |  Equations: %d  |  Eliminate: %s\n",
+                   (resultant_method == RESULTANT_METHOD_MACAULAY)
+                       ? "Macaulay resultant" : "Dixon resultant",
                    poly_count, vars_str);
             if (var_count != poly_count - 1)
-                printf("WARNING: Dixon method requires eliminating exactly %d variables "
+                printf("WARNING: resultant mode requires eliminating exactly %d variables "
                        "for %d equations!\n", poly_count - 1, poly_count);
             printf("--------------------------------\n");
         }

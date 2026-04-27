@@ -62,6 +62,56 @@ static inline void poly_mul_dense_optimized(fq_nmod_mpoly_t c,
 
 // ============= Conversion Functions for Polynomial Recursive Implementation =============
 
+static slong kronecker_max_univariate_degree_poly_array(fq_nmod_poly_t **poly_matrix,
+                                                        slong rows,
+                                                        slong cols,
+                                                        const fq_nmod_ctx_t ctx) {
+    slong max_degree = -1;
+    for (slong i = 0; i < rows; i++) {
+        for (slong j = 0; j < cols; j++) {
+            slong deg = fq_nmod_poly_degree(poly_matrix[i][j], ctx);
+            if (deg > max_degree) {
+                max_degree = deg;
+            }
+        }
+    }
+    return max_degree;
+}
+
+static slong kronecker_max_univariate_degree_poly_mat(const fq_nmod_poly_mat_t mat,
+                                                      const fq_nmod_ctx_t ctx) {
+    slong max_degree = -1;
+    slong rows = mat->r;
+    slong cols = mat->c;
+    for (slong i = 0; i < rows; i++) {
+        for (slong j = 0; j < cols; j++) {
+            slong deg = fq_nmod_poly_degree(fq_nmod_poly_mat_entry(mat, i, j), ctx);
+            if (deg > max_degree) {
+                max_degree = deg;
+            }
+        }
+    }
+    return max_degree;
+}
+
+static int compare_long_desc_local(const void *a, const void *b) {
+    long av = *(const long *) a;
+    long bv = *(const long *) b;
+    if (av < bv) return 1;
+    if (av > bv) return -1;
+    return 0;
+}
+
+static void kronecker_print_slong_array(const char *label,
+                                        const slong *values,
+                                        slong length) {
+    printf("[Kronecker] %s:", label);
+    for (slong i = 0; i < length; i++) {
+        printf(" [%ld]=%ld", i, values[i]);
+    }
+    printf("\n");
+}
+
 // Convert fq_mvpoly to fq_nmod_poly for a specific variable
 void mvpoly_to_fq_nmod_poly(fq_nmod_poly_t poly, const fq_mvpoly_t *mvpoly, 
                            slong var_index, const fq_nmod_ctx_t ctx) {
@@ -332,6 +382,7 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
     slong *var_bounds = (slong*) malloc(total_vars * sizeof(slong));
     compute_kronecker_bounds(var_bounds, matrix, size, nvars, npars);
     timing_info_t bounds_elapsed = end_timing(bounds_start);
+    kronecker_print_slong_array("var_bounds", var_bounds, total_vars);
     
     // Step 2: Compute substitution powers
     slong *substitution_powers = (slong*) malloc(total_vars * sizeof(slong));
@@ -339,6 +390,7 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
     for (slong v = 1; v < total_vars; v++) {
         substitution_powers[v] = substitution_powers[v-1] * var_bounds[v-1];
     }
+    kronecker_print_slong_array("substitution_powers", substitution_powers, total_vars);
     
     DET_PRINT("Substitution powers: ");
     for (slong v = 0; v < total_vars; v++) {
@@ -358,6 +410,8 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
         }
     }
     timing_info_t convert_elapsed = end_timing(convert_start);
+    printf("[Kronecker] Maximum univariate degree after substitution: %ld\n",
+           kronecker_max_univariate_degree_poly_array(poly_matrix, size, size, ctx));
     
     // Step 4: Compute determinant using recursive algorithm
     timing_info_t det_start = start_timing();
@@ -406,10 +460,17 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
 void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix, 
                              slong size, slong nvars, slong npars) {
     slong total_vars = nvars + npars;
+    slong *entry_max = NULL;
+    int is_step1_structured = (size > 0 && nvars > 0 && (nvars % 2) == 0 &&
+                               size == nvars / 2 + 1);
     
     // Initialize bounds
     for (slong v = 0; v < total_vars; v++) {
         var_bounds[v] = 0;
+    }
+
+    if (total_vars > 0) {
+        entry_max = (slong *) flint_calloc(total_vars, sizeof(slong));
     }
     
     // Find maximum degree in each variable across all matrix entries
@@ -421,8 +482,8 @@ void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix,
                 // Check variable degrees
                 if (poly->terms[t].var_exp && nvars > 0) {
                     for (slong v = 0; v < nvars && v < poly->nvars; v++) {
-                        if (poly->terms[t].var_exp[v] > var_bounds[v]) {
-                            var_bounds[v] = poly->terms[t].var_exp[v];
+                        if (poly->terms[t].var_exp[v] > entry_max[v]) {
+                            entry_max[v] = poly->terms[t].var_exp[v];
                         }
                     }
                 }
@@ -430,13 +491,74 @@ void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix,
                 // Check parameter degrees
                 if (poly->terms[t].par_exp && npars > 0) {
                     for (slong p = 0; p < npars && p < poly->npars; p++) {
-                        if (poly->terms[t].par_exp[p] > var_bounds[nvars + p]) {
-                            var_bounds[nvars + p] = poly->terms[t].par_exp[p];
+                        if (poly->terms[t].par_exp[p] > entry_max[nvars + p]) {
+                            entry_max[nvars + p] = poly->terms[t].par_exp[p];
                         }
                     }
                 }
             }
         }
+    }
+
+    if (is_step1_structured) {
+        slong elim_vars = nvars / 2;
+        long *col_degrees = (long *) flint_calloc(size, sizeof(long));
+        long *sorted = (long *) flint_calloc(size, sizeof(long));
+        long *prefix = (long *) flint_calloc(size + 1, sizeof(long));
+
+        for (slong col = 0; col < size; col++) {
+            long col_max_total = 0;
+            for (slong row = 0; row < size; row++) {
+                fq_mvpoly_t *poly = &matrix[row][col];
+                for (slong t = 0; t < poly->nterms; t++) {
+                    long total_deg = 0;
+                    if (poly->terms[t].var_exp) {
+                        for (slong v = 0; v < poly->nvars; v++) {
+                            total_deg += poly->terms[t].var_exp[v];
+                        }
+                    }
+                    if (poly->terms[t].par_exp) {
+                        for (slong p = 0; p < poly->npars; p++) {
+                            total_deg += poly->terms[t].par_exp[p];
+                        }
+                    }
+                    if (total_deg > col_max_total) {
+                        col_max_total = total_deg;
+                    }
+                }
+            }
+            col_degrees[col] = col_max_total;
+            sorted[col] = col_max_total;
+        }
+
+        qsort(sorted, (size_t) size, sizeof(long), compare_long_desc_local);
+        for (slong i = 0; i < size; i++) {
+            prefix[i + 1] = prefix[i] + sorted[i];
+        }
+
+        for (slong i = 0; i < elim_vars; i++) {
+            slong orig_count = i + 1;
+            slong dual_count = elim_vars - i;
+            slong orig_det_bound = prefix[orig_count] - orig_count;
+            slong dual_det_bound = prefix[dual_count] - dual_count;
+            if (orig_det_bound < 0) orig_det_bound = 0;
+            if (dual_det_bound < 0) dual_det_bound = 0;
+
+            var_bounds[i] = FLINT_MAX(entry_max[i], orig_det_bound) + 1;
+            var_bounds[elim_vars + i] = FLINT_MAX(entry_max[elim_vars + i], dual_det_bound) + 1;
+        }
+
+        for (slong p = 0; p < npars; p++) {
+            slong param_det_bound = prefix[size] - elim_vars;
+            if (param_det_bound < 0) param_det_bound = 0;
+            var_bounds[nvars + p] = FLINT_MAX(entry_max[nvars + p], param_det_bound) + 1;
+        }
+
+        flint_free(col_degrees);
+        flint_free(sorted);
+        flint_free(prefix);
+        if (entry_max) flint_free(entry_max);
+        return;
     }
     
     // Compute degree bound for determinant (sum of row maximums)
@@ -465,11 +587,10 @@ void compute_kronecker_bounds(slong *var_bounds, fq_mvpoly_t **matrix,
             det_bound += row_max;
         }
         
-        var_bounds[v] = det_bound + 1;  // Add 1 for safety
+        var_bounds[v] = FLINT_MAX(entry_max ? entry_max[v] : 0, det_bound) + 1;  // Add 1 for safety
     }
-    for (slong v = 0; v < nvars/2; v++) {
-        var_bounds[v] = var_bounds[v + nvars/2];
-    }
+
+    if (entry_max) flint_free(entry_max);
 }
 
 // Convert multivariate polynomial to univariate using Kronecker+HNF
@@ -587,6 +708,7 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     slong *var_bounds = (slong*) malloc(total_vars * sizeof(slong));
     compute_kronecker_bounds(var_bounds, matrix, size, nvars, npars);
     timing_info_t bounds_elapsed = end_timing(bounds_start);
+    kronecker_print_slong_array("var_bounds", var_bounds, total_vars);
     
     DET_PRINT("Variable bounds: ");
     for (slong v = 0; v < total_vars; v++) {
@@ -600,6 +722,7 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     for (slong v = 1; v < total_vars; v++) {
         substitution_powers[v] = substitution_powers[v-1] * var_bounds[v-1];
     }
+    kronecker_print_slong_array("substitution_powers", substitution_powers, total_vars);
     
     DET_PRINT("Substitution powers: ");
     for (slong v = 0; v < total_vars; v++) {
@@ -619,16 +742,8 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
         }
     }
     timing_info_t convert_elapsed = end_timing(convert_start);
-    
-    // Check maximum degree
-    slong max_degree = 0;
-    for (slong i = 0; i < size; i++) {
-        for (slong j = 0; j < size; j++) {
-            slong deg = fq_nmod_poly_degree(fq_nmod_poly_mat_entry(uni_mat, i, j), ctx);
-            if (deg > max_degree) max_degree = deg;
-        }
-    }
-    DET_PRINT("Maximum univariate degree after conversion: %ld\n", max_degree);
+    printf("[Kronecker] Maximum univariate degree after substitution: %ld\n",
+           kronecker_max_univariate_degree_poly_mat(uni_mat, ctx));
     
     // Step 4: Compute univariate determinant
     timing_info_t det_start = start_timing();
