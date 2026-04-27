@@ -76,9 +76,9 @@ extern "C" {
 /* FLINT version number */
 
 #define __FLINT_VERSION 3
-#define __FLINT_VERSION_MINOR 4
+#define __FLINT_VERSION_MINOR 5
 #define __FLINT_VERSION_PATCHLEVEL 0
-#define FLINT_VERSION "3.4.0"
+#define FLINT_VERSION "3.5.0"
 #define __FLINT_RELEASE_NUM(a,b,c) ((a)*10000 + (b)*100 + (c))
 #define __FLINT_RELEASE __FLINT_RELEASE_NUM(__FLINT_VERSION, __FLINT_VERSION_MINOR, __FLINT_VERSION_PATCHLEVEL)
 
@@ -268,9 +268,6 @@ flint_rand_struct;
 
 typedef flint_rand_struct flint_rand_t[1];
 
-/* Assumes that flint_rand_init has been called for state */
-#define FLINT_RAND_GMP_STATE_IS_INITIALISED(state) ((state)->__gmp_state != NULL)
-
 FLINT_INLINE
 void flint_rand_init(flint_rand_t state)
 {
@@ -298,21 +295,15 @@ void flint_rand_get_seed(ulong * seed1, ulong * seed2, flint_rand_t state)
     *seed2 = state->__randval2;
 }
 
-void _flint_rand_init_gmp_state(flint_rand_t);
-void _flint_rand_clear_gmp_state(flint_rand_t);
+/* __gmp_state is deprecated; don't clean it up */
+FLINT_INLINE void flint_rand_clear(flint_rand_t FLINT_UNUSED(state)) { }
 
-FLINT_INLINE
-void flint_rand_clear(flint_rand_t state)
-{
-    if (FLINT_RAND_GMP_STATE_IS_INITIALISED(state))
-        _flint_rand_clear_gmp_state(state);
-}
-
+FLINT_DEPRECATED void _flint_rand_init_gmp_state(flint_rand_t state);
+FLINT_DEPRECATED void _flint_rand_clear_gmp_state(flint_rand_t state);
 FLINT_DEPRECATED void flint_randinit(flint_rand_t);
 FLINT_DEPRECATED void flint_randclear(flint_rand_t);
 FLINT_DEPRECATED void flint_randseed(flint_rand_t, ulong, ulong);
 FLINT_DEPRECATED void flint_get_randseed(ulong *, ulong *, flint_rand_t);
-FLINT_DEPRECATED void _flint_rand_init_gmp(flint_rand_t);
 FLINT_DEPRECATED flint_rand_struct * flint_rand_alloc(void);
 FLINT_DEPRECATED void flint_rand_free(flint_rand_struct * state);
 
@@ -320,14 +311,7 @@ FLINT_DEPRECATED void flint_rand_free(flint_rand_struct * state);
 ulong n_randlimb(flint_rand_t);
 ulong n_randtest(flint_rand_t);
 ulong n_randtest_not_zero(flint_rand_t);
-
-FLINT_INLINE ulong n_randint(flint_rand_t state, ulong limit)
-{
-    if (limit == UWORD(0))
-        return n_randlimb(state);
-    else
-        return n_randlimb(state) % limit;
-}
+ulong n_randint(flint_rand_t state, ulong limit);
 
 #if FLINT_USES_GC
 # define FLINT_GC_INIT() GC_init()
@@ -411,11 +395,14 @@ int parse_fmt(int * floating, const char * fmt);
 
 int flint_printf(const char * str, ...);
 int flint_sprintf(char * s, const char * str, ...);
+int flint_snprintf(char * s, size_t n, const char * str, ...);
 int flint_scanf(const char * str, ...);
 int flint_sscanf(const char * s, const char * str, ...);
 
 #if FLINT_HAVE_VA_LIST
 int flint_vprintf(const char * str, va_list ap);
+int flint_vsprintf(char * s, const char * str, va_list ap);
+int flint_vsnprintf(char * s, size_t n, const char * str, va_list ap);
 #endif
 
 #if FLINT_HAVE_FILE

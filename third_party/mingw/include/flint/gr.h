@@ -117,6 +117,8 @@ typedef enum
     GR_METHOD_CTX_IS_COMPLEX_VECTOR_SPACE,
     GR_METHOD_CTX_IS_ORDERED_RING,
 
+    GR_METHOD_CTX_IS_APPROX_COMMUTATIVE_RING,
+
     /* group properties */
     GR_METHOD_CTX_IS_MULTIPLICATIVE_GROUP,
 
@@ -135,6 +137,8 @@ typedef enum
     GR_METHOD_CTX_SET_GEN_NAMES,
     GR_METHOD_CTX_NGENS,
     GR_METHOD_CTX_GEN_NAME,
+
+    GR_METHOD_CTX_BASE,
 
     GR_METHOD_INIT,
     GR_METHOD_CLEAR,
@@ -639,6 +643,7 @@ typedef enum
     GR_METHOD_VEC_SUBMUL_SCALAR,
     GR_METHOD_VEC_ADDMUL_SCALAR_SI,
     GR_METHOD_VEC_SUBMUL_SCALAR_SI,
+    GR_METHOD_VEC_ADDMUL_SCALAR_FMPZ,
 
     GR_METHOD_VEC_SUM,
     GR_METHOD_VEC_PRODUCT,
@@ -654,6 +659,7 @@ typedef enum
 
     /* Polynomial methods (todo: rename -> GR_POLY) */
     GR_METHOD_POLY_MULLOW,
+    GR_METHOD_POLY_MULMID,
     GR_METHOD_POLY_DIV,
     GR_METHOD_POLY_DIVREM,
     GR_METHOD_POLY_DIVEXACT,
@@ -700,13 +706,17 @@ typedef struct
 gr_method_tab_input;
 
 void gr_method_tab_init(gr_funcptr * methods, gr_method_tab_input * tab);
+void gr_method_tab_extend(gr_funcptr * methods, gr_method_tab_input * tab);
 
 /* Identify specific rings/fields. */
 
 typedef enum
 {
-    GR_CTX_FMPZ, GR_CTX_FMPQ, GR_CTX_FMPZI,
-    GR_CTX_FMPZ_MOD, GR_CTX_NMOD, GR_CTX_NMOD8, GR_CTX_NMOD32, GR_CTX_MPN_MOD,
+    GR_CTX_FMPZ, GR_CTX_RADIX_INTEGER,
+    GR_CTX_FMPQ, GR_CTX_FMPZI,
+    GR_CTX_FMPZ_MOD, GR_CTX_NMOD, GR_CTX_NMOD8, GR_CTX_NMOD32,
+    GR_CTX_NMOD_REDC, GR_CTX_NMOD_REDC_FAST,
+    GR_CTX_MPN_MOD,
     GR_CTX_FQ, GR_CTX_FQ_NMOD, GR_CTX_FQ_ZECH,
     GR_CTX_NF,
     GR_CTX_REAL_ALGEBRAIC_QQBAR, GR_CTX_COMPLEX_ALGEBRAIC_QQBAR,
@@ -718,16 +728,18 @@ typedef enum
     GR_CTX_NFLOAT, GR_CTX_NFLOAT_COMPLEX,
     GR_CTX_MPF,
     GR_CTX_FMPZ_POLY, GR_CTX_FMPQ_POLY, GR_CTX_GR_POLY,
-    GR_CTX_FMPZ_MPOLY, GR_CTX_GR_MPOLY,
+    GR_CTX_FMPZ_MPOLY, GR_CTX_FMPQ_MPOLY, GR_CTX_GR_MPOLY,
     GR_CTX_FMPZ_MPOLY_Q,
     GR_CTX_FMPZ_MOD_MPOLY_Q,
-    GR_CTX_GR_FRACTION,
+    GR_CTX_GR_ORE_POLY,
+    GR_CTX_GR_FRACTION, GR_CTX_GR_COMPLEX,
     GR_CTX_GR_SERIES, GR_CTX_SERIES_MOD_GR_POLY,
     GR_CTX_GR_MAT,
     GR_CTX_GR_VEC,
     GR_CTX_PSL2Z, GR_CTX_DIRICHLET_GROUP, GR_CTX_PERM,
     GR_CTX_FEXPR,
     GR_CTX_DEBUG,
+    GR_CTX_UNINITIALIZED,
     GR_CTX_UNKNOWN_DOMAIN,
     GR_CTX_WHICH_STRUCTURE_TAB_SIZE
 }
@@ -752,6 +764,7 @@ typedef void ((*gr_method_init_clear_op)(gr_ptr, gr_ctx_ptr));
 typedef void ((*gr_method_swap_op)(gr_ptr, gr_ptr, gr_ctx_ptr));
 typedef int ((*gr_method_ctx)(gr_ctx_ptr));
 typedef void ((*gr_method_ctx_void_op)(gr_ctx_ptr));
+typedef gr_ctx_ptr ((*gr_method_ctx_base)(gr_ctx_ptr));
 typedef truth_t ((*gr_method_ctx_predicate)(gr_ctx_ptr));
 typedef slong ((*gr_method_ctx_size)(gr_ctx_ptr));
 typedef int ((*gr_method_ctx_gen_name)(char **, slong, gr_ctx_ptr));
@@ -839,6 +852,7 @@ typedef int ((*gr_method_poly_unary_trunc_op)(gr_ptr, gr_srcptr, slong, slong, g
 typedef int ((*gr_method_poly_binary_op)(gr_ptr, gr_srcptr, slong, gr_srcptr, slong, gr_ctx_ptr));
 typedef int ((*gr_method_poly_binary_binary_op)(gr_ptr, gr_ptr, gr_srcptr, slong, gr_srcptr, slong, gr_ctx_ptr));
 typedef int ((*gr_method_poly_binary_trunc_op)(gr_ptr, gr_srcptr, slong, gr_srcptr, slong, slong, gr_ctx_ptr));
+typedef int ((*gr_method_poly_binary_trunc2_op)(gr_ptr, gr_srcptr, slong, gr_srcptr, slong, slong, slong, gr_ctx_ptr));
 typedef int ((*gr_method_poly_gcd_op)(gr_ptr, slong *, gr_srcptr, slong, gr_srcptr, slong, gr_ctx_ptr));
 typedef int ((*gr_method_poly_xgcd_op)(slong *, gr_ptr, gr_ptr, gr_ptr, gr_srcptr, slong, gr_srcptr, slong, gr_ctx_ptr));
 typedef int ((*gr_method_vec_ctx_op)(gr_vec_t, gr_ctx_ptr));
@@ -861,6 +875,7 @@ typedef int ((*gr_method_set_fexpr_op)(gr_ptr, fexpr_vec_t, gr_vec_t, const fexp
 #define GR_CTX_SET_TRUTH(ctx, NAME) (((gr_method_ctx_set_truth *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_CTX_SET_STR(ctx, NAME) (((gr_method_ctx_set_str *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_CTX_SET_STRS(ctx, NAME) (((gr_method_ctx_set_strs *) ctx->methods)[GR_METHOD_ ## NAME])
+#define GR_CTX_BASE(ctx, NAME) (((gr_method_ctx_base *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_STREAM_IN(ctx, NAME) (((gr_method_stream_in *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_STREAM_IN_SI(ctx, NAME) (((gr_method_stream_in_si *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_RANDTEST(ctx, NAME) (((gr_method_randtest *) ctx->methods)[GR_METHOD_ ## NAME])
@@ -941,6 +956,7 @@ typedef int ((*gr_method_set_fexpr_op)(gr_ptr, fexpr_vec_t, gr_vec_t, const fexp
 #define GR_POLY_UNARY_TRUNC_OP(ctx, NAME) (((gr_method_poly_unary_trunc_op *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_POLY_BINARY_BINARY_OP(ctx, NAME) (((gr_method_poly_binary_binary_op *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_POLY_BINARY_TRUNC_OP(ctx, NAME) (((gr_method_poly_binary_trunc_op *) ctx->methods)[GR_METHOD_ ## NAME])
+#define GR_POLY_BINARY_TRUNC2_OP(ctx, NAME) (((gr_method_poly_binary_trunc2_op *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_POLY_GCD_OP(ctx, NAME) (((gr_method_poly_gcd_op *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_POLY_XGCD_OP(ctx, NAME) (((gr_method_poly_xgcd_op *) ctx->methods)[GR_METHOD_ ## NAME])
 #define GR_VEC_CTX_OP(ctx, NAME) (((gr_method_vec_ctx_op *) ctx->methods)[GR_METHOD_ ## NAME])
@@ -963,12 +979,13 @@ GR_INLINE truth_t gr_ctx_is_zero_ring(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ct
 GR_INLINE truth_t gr_ctx_is_rational_vector_space(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_RATIONAL_VECTOR_SPACE)(ctx); }
 GR_INLINE truth_t gr_ctx_is_real_vector_space(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_REAL_VECTOR_SPACE)(ctx); }
 GR_INLINE truth_t gr_ctx_is_complex_vector_space(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_COMPLEX_VECTOR_SPACE)(ctx); }
-
 GR_INLINE truth_t gr_ctx_is_unique_factorization_domain(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_UNIQUE_FACTORIZATION_DOMAIN)(ctx); }
 GR_INLINE truth_t gr_ctx_is_finite(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_FINITE)(ctx); }
 GR_INLINE truth_t gr_ctx_is_finite_characteristic(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_FINITE_CHARACTERISTIC)(ctx); }
 GR_INLINE truth_t gr_ctx_is_algebraically_closed(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_ALGEBRAICALLY_CLOSED)(ctx); }
 GR_INLINE truth_t gr_ctx_is_ordered_ring(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_ORDERED_RING)(ctx); }
+
+GR_INLINE truth_t gr_ctx_is_approx_commutative_ring(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_APPROX_COMMUTATIVE_RING)(ctx); }
 
 GR_INLINE truth_t gr_ctx_is_multiplicative_group(gr_ctx_t ctx) { return GR_CTX_PREDICATE(ctx, CTX_IS_MULTIPLICATIVE_GROUP)(ctx); }
 
@@ -993,6 +1010,9 @@ GR_INLINE slong _gr_ctx_get_real_prec(gr_ctx_t ctx)
     GR_IGNORE(gr_ctx_get_real_prec(&res, ctx));
     return res;
 }
+
+GR_INLINE gr_ptr gr_ctx_base(gr_ctx_t ctx) { return GR_CTX_BASE(ctx, CTX_BASE)(ctx); }
+
 
 GR_INLINE void gr_init(gr_ptr res, gr_ctx_t ctx) { GR_INIT_CLEAR_OP(ctx, INIT)(res, ctx); }
 GR_INLINE void gr_clear(gr_ptr res, gr_ctx_t ctx) { GR_INIT_CLEAR_OP(ctx, CLEAR)(res, ctx); }
@@ -1372,7 +1392,14 @@ truth_t gr_generic_ctx_predicate_false(gr_ctx_t ctx);
 
 /* Some base rings */
 
+void gr_ctx_uninitialized(gr_ctx_t ctx);
+
 void gr_ctx_init_random(gr_ctx_t ctx, flint_rand_t state);
+void gr_ctx_init_random_commutative_ring(gr_ctx_t ctx, flint_rand_t state);
+void gr_ctx_init_random_field(gr_ctx_t ctx, flint_rand_t state);
+void gr_ctx_init_random_poly(gr_ctx_t ctx, flint_rand_t state);
+void gr_ctx_init_random_mpoly(gr_ctx_t ctx, flint_rand_t state);
+void gr_ctx_init_random_series(gr_ctx_t ctx, flint_rand_t state);
 
 void gr_ctx_init_fmpz(gr_ctx_t ctx);
 void gr_ctx_init_fmpq(gr_ctx_t ctx);
@@ -1381,11 +1408,11 @@ void gr_ctx_init_fmpzi(gr_ctx_t ctx);
 void gr_ctx_init_fmpz_mod(gr_ctx_t ctx, const fmpz_t n);
 void _gr_ctx_init_fmpz_mod_from_ref(gr_ctx_t ctx, const void * fmod_ctx);
 
-void gr_ctx_init_nmod(gr_ctx_t ctx, ulong n);
+int gr_ctx_init_nmod(gr_ctx_t ctx, ulong n);
 void _gr_ctx_init_nmod(gr_ctx_t ctx, void * nmod_t_ref);
 
-void gr_ctx_init_nmod8(gr_ctx_t ctx, unsigned char n);
-void gr_ctx_init_nmod32(gr_ctx_t ctx, unsigned int n);
+int gr_ctx_init_nmod8(gr_ctx_t ctx, ulong n);
+int gr_ctx_init_nmod32(gr_ctx_t ctx, ulong n);
 
 int gr_ctx_init_mpn_mod(gr_ctx_t ctx, const fmpz_t n);
 
@@ -1452,6 +1479,7 @@ void gr_ctx_init_gr_poly(gr_ctx_t ctx, gr_ctx_t base_ring);
 
 #ifdef MPOLY_H
 void gr_ctx_init_fmpz_mpoly(gr_ctx_t ctx, slong nvars, const ordering_t ord);
+void gr_ctx_init_fmpq_mpoly(gr_ctx_t ctx, slong nvars, const ordering_t ord);
 void gr_ctx_init_gr_mpoly(gr_ctx_t ctx, gr_ctx_t base_ring, slong nvars, const ordering_t ord);
 #endif
 
@@ -1469,6 +1497,10 @@ void gr_ctx_init_fmpz_mod_mpoly_q(gr_ctx_t ctx, slong nvars, const ordering_t or
 #define GR_FRACTION_STRONGLY_CANONICAL  2
 
 void gr_ctx_init_gr_fraction(gr_ctx_t ctx, gr_ctx_t domain, int flags);
+
+/* Generic complex numbers */
+
+void gr_ctx_init_gr_complex(gr_ctx_t ctx, gr_ctx_t real_ctx);
 
 /* Generic series - moved to gr_series.h */
 

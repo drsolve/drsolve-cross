@@ -27,7 +27,7 @@
 #if defined(_MSC_VER) || defined(__x86_64__) || defined(__aarch64__)
 # define FLINT_HAVE_get_cycle_counter  1
 #endif
-#if (defined(__unix__) && !defined(__CYGWIN__)) || defined(__APPLE__)
+#if (defined(__unix__) && !defined(__CYGWIN__) && !defined(__EMSCRIPTEN__)) || defined(__APPLE__)
 # define FLINT_HAVE_getrusage   1
 #endif
 
@@ -49,7 +49,7 @@ int gettimeofday(struct timeval * p, void * tz);
 
 #if FLINT_HAVE_getrusage
 #if FLINT_HAVE_FILE
-void fprint_memory_usage(FILE *);
+void fprint_memory_usage(FILE * fs);
 #endif
 void print_memory_usage(void);
 #endif

@@ -120,7 +120,7 @@ void nmod_mat_randfull(nmod_mat_t mat, flint_rand_t state);
 void nmod_mat_rand(nmod_mat_t mat, flint_rand_t state);
 int nmod_mat_randpermdiag(nmod_mat_t mat, flint_rand_t state,
                  nn_srcptr diag, slong n);
-void nmod_mat_randrank(nmod_mat_t, flint_rand_t state, slong rank);
+void nmod_mat_randrank(nmod_mat_t mat, flint_rand_t state, slong rank);
 void nmod_mat_randops(nmod_mat_t mat, flint_rand_t state, slong count);
 void nmod_mat_randtril(nmod_mat_t mat, flint_rand_t state, int unit);
 void nmod_mat_randtriu(nmod_mat_t mat, flint_rand_t state, int unit);
@@ -346,6 +346,7 @@ slong nmod_mat_reduce_row(nmod_mat_t M, slong * P, slong * L, slong m);
 /* Nullspace */
 
 slong nmod_mat_nullspace(nmod_mat_t X, const nmod_mat_t A);
+slong nmod_mat_left_nullspace(nmod_mat_t X, const nmod_mat_t A);
 
 /* Howell form */
 

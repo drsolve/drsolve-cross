@@ -28,10 +28,6 @@
 extern "C" {
 #endif
 
-#define NMOD_POLY_HGCD_CUTOFF  100      /* HGCD: Basecase -> Recursion      */
-#define NMOD_POLY_GCD_CUTOFF  340       /* GCD:  Euclidean -> HGCD          */
-#define NMOD_POLY_SMALL_GCD_CUTOFF 200  /* GCD (small n): Euclidean -> HGCD */
-
 typedef struct
 {
    ulong res;
@@ -336,7 +332,7 @@ void _nmod_poly_KS2_recover_reduce(nn_ptr res, slong s, nn_srcptr op1, nn_srcptr
 void _nmod_poly_bit_pack(nn_ptr res, nn_srcptr poly, slong len, flint_bitcnt_t bits);
 void nmod_poly_bit_pack(fmpz_t f, const nmod_poly_t poly, flint_bitcnt_t bit_size);
 
-void _nmod_poly_bit_unpack(nn_ptr res, slong len, nn_srcptr mpn, flint_bitcnt_t bits, nmod_t mod);
+void _nmod_poly_bit_unpack(nn_ptr res, slong nlo, slong nhi, nn_srcptr mpn, flint_bitcnt_t bits, nmod_t mod);
 void nmod_poly_bit_unpack(nmod_poly_t poly, const fmpz_t f, flint_bitcnt_t bit_size);
 
 /* Multiplication  ***********************************************************/
@@ -350,8 +346,8 @@ void nmod_poly_mullow_classical(nmod_poly_t res, const nmod_poly_t poly1, const 
 void _nmod_poly_mulhigh_classical(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, slong start, nmod_t mod);
 void nmod_poly_mulhigh_classical(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong start);
 
-void _nmod_poly_mul_KS(nn_ptr out, nn_srcptr in1, slong len1, nn_srcptr in2, slong len2, flint_bitcnt_t bits, nmod_t mod);
-void nmod_poly_mul_KS(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, flint_bitcnt_t bits);
+void _nmod_poly_mul_KS(nn_ptr out, nn_srcptr in1, slong len1, nn_srcptr in2, slong len2, nmod_t mod);
+void nmod_poly_mul_KS(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2);
 
 void _nmod_poly_mul_KS2(nn_ptr res, nn_srcptr op1, slong n1, nn_srcptr op2, slong n2, nmod_t mod);
 void nmod_poly_mul_KS2(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2);
@@ -359,18 +355,27 @@ void nmod_poly_mul_KS2(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly
 void _nmod_poly_mul_KS4(nn_ptr res, nn_srcptr op1, slong n1, nn_srcptr op2, slong n2, nmod_t mod);
 void nmod_poly_mul_KS4(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2);
 
-void _nmod_poly_mullow_KS(nn_ptr out, nn_srcptr in1, slong len1, nn_srcptr in2, slong len2, flint_bitcnt_t bits, slong n, nmod_t mod);
-void nmod_poly_mullow_KS(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, flint_bitcnt_t bits, slong n);
+void _nmod_poly_mullow_KS(nn_ptr out, nn_srcptr in1, slong len1, nn_srcptr in2, slong len2, slong n, nmod_t mod);
+void nmod_poly_mullow_KS(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong n);
 
 void _nmod_poly_mul(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, nmod_t mod);
 void nmod_poly_mul(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2);
 
-int _nmod_poly_mullow_fft_small_repack(nn_ptr z, nn_srcptr a, slong an, nn_srcptr b, slong bn, slong zn, nmod_t mod);
+int _nmod_poly_mulmid_fft_small_repack(nn_ptr z, nn_srcptr a, slong an, nn_srcptr b, slong bn, slong znlo, slong zn, nmod_t mod);
 int _nmod_poly_mullow_want_fft_small(slong len1, slong len2, slong n, int squaring, nmod_t mod);
+
+void _nmod_poly_mulmid_fft_small(nn_ptr z, nn_srcptr a, slong an, nn_srcptr b, slong bn, slong znlo, slong zn, nmod_t mod);
 void _nmod_poly_mullow_fft_small(nn_ptr z, nn_srcptr a, slong an, nn_srcptr b, slong bn, slong zn, nmod_t mod);
 
 void _nmod_poly_mullow(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, slong trunc, nmod_t mod);
 void nmod_poly_mullow(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong trunc);
+
+void _nmod_poly_mulmid_classical(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, slong nlo, slong nhi, nmod_t mod);
+void nmod_poly_mulmid_classical(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong nlo, slong nhi);
+void _nmod_poly_mulmid_KS(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, slong nlo, slong nhi, nmod_t mod);
+void nmod_poly_mulmid_KS(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong nlo, slong nhi);
+void _nmod_poly_mulmid(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, slong nlo, slong nhi, nmod_t mod);
+void nmod_poly_mulmid(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong nlo, slong nhi);
 
 void _nmod_poly_mulhigh(nn_ptr res, nn_srcptr poly1, slong len1, nn_srcptr poly2, slong len2, slong n, nmod_t mod);
 void nmod_poly_mulhigh(nmod_poly_t res, const nmod_poly_t poly1, const nmod_poly_t poly2, slong n);
@@ -479,6 +484,7 @@ void nmod_poly_powers_mod_bsgs(nmod_poly_struct * res,
 
 /* Division  *****************************************************************/
 
+void _nmod_poly_divrem_q1_preinv1(nn_ptr Q, nn_ptr R, nn_srcptr A, slong lenA, nn_srcptr B, slong lenB, ulong invL, nmod_t mod);
 void _nmod_poly_divrem_basecase_preinv1(nn_ptr Q, nn_ptr R, nn_srcptr A, slong A_len, nn_srcptr B, slong B_len, ulong invB, nmod_t mod);
 
 void _nmod_poly_divrem_basecase(nn_ptr Q, nn_ptr R, nn_srcptr A, slong A_len, nn_srcptr B, slong B_len, nmod_t mod);
@@ -749,8 +755,23 @@ NMOD_POLY_INLINE slong nmod_poly_hamming_weight(const nmod_poly_t A)
 
 /* Greatest common divisor  **************************************************/
 
+/* HGCD: Basecase -> Recursion */
+slong nmod_poly_hgcd_iter_recursive_cutoff(nmod_t mod);
+/* HGCD: Euclidean -> HGCD */
+slong nmod_poly_hgcd_outer_cutoff(nmod_t mod);
+/* GCD:  Euclidean -> HGCD */
+slong nmod_poly_gcd_hgcd_cutoff(nmod_t mod);
+/* XGCD:  Euclidean -> HGCD */
+slong nmod_poly_xgcd_hgcd_cutoff(nmod_t mod);
+
+/* Euclidean GCD: normal -> redc_fast */
+#define NMOD_POLY_GCD_EUCLIDEAN_USE_REDC_FAST(lenB, mod) (lenB >= 32 && NMOD_BITS(mod) >= FLINT_BITS / 2 && NMOD_BITS(mod) <= FLINT_BITS - 2)
+
 slong _nmod_poly_gcd_euclidean(nn_ptr G, nn_srcptr A, slong lenA, nn_srcptr B, slong lenB, nmod_t mod);
 void nmod_poly_gcd_euclidean(nmod_poly_t G, const nmod_poly_t A, const nmod_poly_t B);
+
+slong _nmod_poly_gcd_euclidean_redc_fast(nn_ptr G, nn_srcptr A, slong lenA, nn_srcptr B, slong lenB, nmod_t mod);
+void nmod_poly_gcd_euclidean_redc_fast(nmod_poly_t G, const nmod_poly_t A, const nmod_poly_t B);
 
 slong _nmod_poly_hgcd_recursive(nn_ptr *M, slong *lenM, nn_ptr A, slong *lenA, nn_ptr B, slong *lenB, nn_srcptr a, slong lena, nn_srcptr b, slong lenb, nn_ptr P, nmod_t mod, int flag, nmod_poly_res_t res);
 
