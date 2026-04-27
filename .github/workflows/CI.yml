@@ -99,7 +99,7 @@ jobs:
           Arch     : ${ARCH}
           Ref      : ${{ github.ref }}
           SHA      : ${{ github.sha }}
-          FLINT    : static (3.4.0)
+          FLINT    : static (3.5.0)
           PML      : static
           EOF
           cat dist/build-info-linux.txt
@@ -246,7 +246,7 @@ jobs:
           Arch     : ${ARCH}
           Ref      : ${{ github.ref }}
           SHA      : ${{ github.sha }}
-          FLINT    : static (3.4.0)
+          FLINT    : static (3.5.0)
           PML      : static
           EOF
           cat dist/build-info-macos.txt
