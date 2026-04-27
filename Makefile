@@ -111,7 +111,6 @@ MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
                $(SRC_DIR)/dixon_test.c \
                $(SRC_DIR)/dixon_with_ideal_reduction.c \
                $(SRC_DIR)/fq_mat_det.c \
-               $(SRC_DIR)/macaulay_flint.c \
                $(SRC_DIR)/fq_mpoly_mat_det.c \
                $(SRC_DIR)/fq_multivariate_interpolation.c \
                $(SRC_DIR)/fq_mvpoly.c \

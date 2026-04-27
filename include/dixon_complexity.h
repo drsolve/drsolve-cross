@@ -49,31 +49,6 @@ typedef struct {
     const char *generator_name;
 } lightweight_parser_t;
 
-typedef struct {
-    slong det_size;
-    slong num_all_vars;
-    slong num_elim_vars;
-    slong num_parameter_vars;
-    slong step1_var_count;
-    long step1_det_total_degree;
-    double step1_kronecker_degree_log2;
-    double step1_direct_log2;
-    double step1_hnf_log2;
-    double step1_sparse_log2;
-    double step1_sparse_term_bound_log2;
-    slong macaulay_degree;
-    slong macaulay_rows;
-    slong macaulay_cols;
-    slong macaulay_square_size;
-    double macaulay_log2;
-    slong grobner_dreg;
-    double grobner_log2;
-    double step4_log2;
-    double total_direct_log2;
-    double total_hnf_log2;
-    double total_sparse_log2;
-} dixon_complexity_report_t;
-
 // Function declarations
 
 // Basic utility functions
@@ -93,14 +68,6 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
                            const char **elim_vars, slong num_elim_vars,
                            const fq_nmod_ctx_t ctx);
 char* dixon_complexity_auto_str(const char *poly_string, const char *vars_string, const fq_nmod_ctx_t ctx);
-
-void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
-                                          const long *degrees,
-                                          slong num_polys,
-                                          slong num_all_vars,
-                                          slong num_elim_vars,
-                                          slong num_parameter_vars,
-                                          double omega);
 
 // Complexity extraction functions
 double extract_max_complexity(const char **poly_strings, slong num_polys);

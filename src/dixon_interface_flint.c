@@ -1020,15 +1020,10 @@ char* compute_dixon_internal_with_file(const char **poly_strings, slong npoly_st
         
         parse_expression(&state, &polys[i]);
     }
-    // Compute resultant with original names
+    // Compute Dixon resultant with original names
     fq_mvpoly_t dixon_result_poly;
-    if (g_resultant_method == RESULTANT_METHOD_MACAULAY) {
-        fq_macaulay_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
-                                         state.var_names, state.par_names, gen_name);
-    } else {
-        fq_dixon_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
-                                      state.var_names, state.par_names, gen_name);
-    }
+    fq_dixon_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
+                                 state.var_names, state.par_names, gen_name);
 
     // Find roots with proper parameter names
     find_and_print_roots_of_univariate_resultant_with_file(&dixon_result_poly, &state, fp_file, print_to_stdout);

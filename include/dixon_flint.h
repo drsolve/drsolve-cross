@@ -52,16 +52,10 @@ typedef enum {
     DET_METHOD_HUANG = 3          // sparse interpolation method
 } det_method_t;
 
-typedef enum {
-    RESULTANT_METHOD_DIXON = 0,
-    RESULTANT_METHOD_MACAULAY = 1
-} resultant_method_t;
-
 // Global method selection variables
 extern det_method_t dixon_global_method_step1;
 extern det_method_t dixon_global_method_step4;
 extern det_method_t dixon_global_method; // deprecated compatibility alias
-extern resultant_method_t g_resultant_method;
 extern int g_matrix_transpose_threshold;
 
 // Matrix operations
@@ -166,12 +160,4 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                   slong nvars, slong npars,
                                   char **var_names, char **par_names, 
                                   const char *gen_name);
-
-void fq_macaulay_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
-                           slong nvars, slong npars);
-
-void fq_macaulay_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
-                                      slong nvars, slong npars,
-                                      char **var_names, char **par_names,
-                                      const char *gen_name);
 #endif
