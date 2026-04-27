@@ -571,6 +571,7 @@ set(MATH_SOURCES
   src/dixon_test.c
   src/dixon_with_ideal_reduction.c
   src/fq_mat_det.c
+  src/macaulay_flint.c
   src/fq_mpoly_mat_det.c
   src/fq_multivariate_interpolation.c
   src/fq_mvpoly.c

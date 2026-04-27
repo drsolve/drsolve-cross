@@ -12,6 +12,7 @@
 det_method_t dixon_global_method_step1 = -1;
 det_method_t dixon_global_method_step4 = -1;
 det_method_t dixon_global_method = -1; // deprecated compatibility alias
+resultant_method_t g_resultant_method = RESULTANT_METHOD_DIXON;
 
 static const char *dixon_det_method_name(det_method_t method)
 {
@@ -669,6 +670,90 @@ static slong compute_fq_polynomial_total_degree(fq_mvpoly_t *poly, slong npars) 
     }
     
     return max_degree;
+}
+
+static void print_fq_degree_vector_with_names(const char *label,
+                                              const slong *degrees,
+                                              slong count,
+                                              char **names,
+                                              int is_dual,
+                                              int is_parameter) {
+    static const char default_var_names[] = {'x', 'y', 'z', 'w', 'v', 'u'};
+    static const char default_par_names[] = {'a', 'b', 'c', 'd'};
+
+    printf("  %s:", label);
+    if (count <= 0) {
+        printf(" (none)\n");
+        return;
+    }
+
+    for (slong i = 0; i < count; i++) {
+        printf(" ");
+        if (is_dual) {
+            printf("~");
+        }
+
+        if (names && names[i]) {
+            printf("%s:%ld", names[i], degrees[i]);
+        } else if (is_parameter) {
+            if (i < (slong) (sizeof(default_par_names) / sizeof(default_par_names[0]))) {
+                printf("%c:%ld", default_par_names[i], degrees[i]);
+            } else {
+                printf("p_%ld:%ld", i, degrees[i]);
+            }
+        } else {
+            if (i < (slong) (sizeof(default_var_names) / sizeof(default_var_names[0]))) {
+                printf("%c:%ld", default_var_names[i], degrees[i]);
+            } else {
+                printf("x_%ld:%ld", i, degrees[i]);
+            }
+        }
+    }
+    printf("\n");
+}
+
+static void print_dixon_poly_actual_degrees(const fq_mvpoly_t *poly,
+                                            slong nvars,
+                                            slong npars,
+                                            char **var_names,
+                                            char **par_names) {
+    slong *orig_deg = (slong*) flint_calloc(nvars > 0 ? nvars : 1, sizeof(slong));
+    slong *dual_deg = (slong*) flint_calloc(nvars > 0 ? nvars : 1, sizeof(slong));
+    slong *par_deg = (slong*) flint_calloc(npars > 0 ? npars : 1, sizeof(slong));
+
+    if (poly != NULL && poly->nterms > 0) {
+        for (slong t = 0; t < poly->nterms; t++) {
+            if (poly->terms[t].var_exp) {
+                for (slong j = 0; j < nvars && j < poly->nvars; j++) {
+                    if (poly->terms[t].var_exp[j] > orig_deg[j]) {
+                        orig_deg[j] = poly->terms[t].var_exp[j];
+                    }
+                }
+                for (slong j = 0; j < nvars && (nvars + j) < poly->nvars; j++) {
+                    if (poly->terms[t].var_exp[nvars + j] > dual_deg[j]) {
+                        dual_deg[j] = poly->terms[t].var_exp[nvars + j];
+                    }
+                }
+            }
+
+            if (poly->terms[t].par_exp) {
+                for (slong j = 0; j < npars && j < poly->npars; j++) {
+                    if (poly->terms[t].par_exp[j] > par_deg[j]) {
+                        par_deg[j] = poly->terms[t].par_exp[j];
+                    }
+                }
+            }
+        }
+    }
+
+    printf("Dixon polynomial actual degrees:\n");
+    print_fq_degree_vector_with_names("original vars", orig_deg, nvars, var_names, 0, 0);
+    print_fq_degree_vector_with_names("dual vars", dual_deg, nvars, var_names, 1, 0);
+    print_fq_degree_vector_with_names("parameter vars", par_deg, npars, par_names, 0, 1);
+
+    flint_free(orig_deg);
+    flint_free(dual_deg);
+    flint_free(par_deg);
 }
 
 // Compute row maximum total degree
@@ -2036,6 +2121,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     } else {
         printf("Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
+    print_dixon_poly_actual_degrees(&d_poly, nvars, npars, NULL, NULL);
     printf("Time: %.3f seconds\n", (double)(clock() - step1_start) / CLOCKS_PER_SEC);
 
     for (slong i = 0; i <= nvars; i++) {
@@ -2151,6 +2237,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     } else {
         printf("Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
+    print_dixon_poly_actual_degrees(&d_poly, nvars, npars, var_names, par_names);
     clock_t step1_cpu_end = clock();
     double step1_wall_end = get_wall_time();
     double step1_cpu_elapsed = (double)(step1_cpu_end - step1_cpu_start) / CLOCKS_PER_SEC;
@@ -2233,4 +2320,5 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
 
     printf("\n=== Dixon Resultant Computation Complete ===\n");
 }
+
 
