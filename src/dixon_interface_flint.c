@@ -1305,6 +1305,7 @@ static int parse_result_string_fixed_params(const char *result_str,
                                            const fq_nmod_ctx_t ctx,
                                            fq_mvpoly_t *poly) {
     parser_state_t state = {0};
+    char *gen_name = get_generator_name(ctx);
 
     state.input = result_str;
     state.pos = 0;
@@ -1320,7 +1321,7 @@ static int parse_result_string_fixed_params(const char *result_str,
     state.ctx = ctx;
     state.current.str = NULL;
     fq_nmod_init(state.current.value, ctx);
-    state.generator_name = NULL;
+    state.generator_name = gen_name ? strdup(gen_name) : NULL;
 
     fq_mvpoly_init(poly, 0, npars, ctx);
     next_token(&state);
@@ -1334,6 +1335,8 @@ static int parse_result_string_fixed_params(const char *result_str,
     free(state.par_names);
     fq_nmod_clear(state.current.value, ctx);
     if (state.current.str) free(state.current.str);
+    if (state.generator_name) free(state.generator_name);
+    if (gen_name) free(gen_name);
 
     if (!ok) {
         fq_mvpoly_clear(poly);
@@ -2073,7 +2076,6 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     clock_t total_start = clock();
     // Get generator name
     char *gen_name = get_generator_name(ctx);
-    printf("Use FLINT's built-in resultant to compute two polynomials\n");
     char **remaining_vars = NULL;
     slong num_remaining = 0;
     
@@ -2496,7 +2498,7 @@ void append_roots_to_file_from_result(const char *result_str,
     parse_state.ctx = ctx;
     parse_state.current.str = NULL;
     fq_nmod_init(parse_state.current.value, ctx);
-    parse_state.generator_name = NULL;
+    parse_state.generator_name = gen_name ? strdup(gen_name) : NULL;
     
     next_token(&parse_state);
     parse_expression(&parse_state, &result_poly);
@@ -2529,6 +2531,9 @@ void append_roots_to_file_from_result(const char *result_str,
     fq_nmod_clear(parse_state.current.value, ctx);
     if (parse_state.current.str) {
         free(parse_state.current.str);
+    }
+    if (parse_state.generator_name) {
+        free(parse_state.generator_name);
     }
     
     free(gen_name);

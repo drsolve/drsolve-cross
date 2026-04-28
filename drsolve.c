@@ -117,9 +117,11 @@ static void print_usage(const char *prog_name)
     printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
     printf("  Resultant construction:\n");
-    printf("    %s --resultant dixon|macaulay <args>\n", prog_name);
+    printf("    %s --resultant dixon|macaulay|subres <args>\n", prog_name);
     printf("    %s --macaulay <args>\n", prog_name);
+    printf("    %s --subres <args>\n", prog_name);
     printf("    -> --macaulay is shorthand for --resultant macaulay\n");
+    printf("    -> --subres is for exactly 2 polynomials and 1 elimination variable\n");
 
     printf("  Process count:\n");
     printf("    %s --threads <num> <args>\n", prog_name);
@@ -145,7 +147,7 @@ static void print_usage(const char *prog_name)
     printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
     printf("  %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
     printf("  %s --field-eqution \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
-    printf("  %s --silent \"x+y^2+t, x*y+t*y+1\" \"x\" 2^8\n", prog_name);
+    printf("  %s --silent \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
     printf("  %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("  (AES polynomial for GF(2^8), 't' is the field extension generator)\n");
     printf("  %s example.dr\n", prog_name);
@@ -260,6 +262,82 @@ static const char *det_method_name_cli(int method)
         case 3: return "sparse interpolation";
         default: return "Default";
     }
+}
+
+static const char *resultant_method_heading(resultant_method_t method)
+{
+    switch (method) {
+        case RESULTANT_METHOD_MACAULAY:
+            return "Macaulay Resultant Computation";
+        case RESULTANT_METHOD_SUBRES:
+            return "Subresultant Resultant Computation";
+        case RESULTANT_METHOD_DIXON:
+        default:
+            return "Dixon Resultant Computation";
+    }
+}
+
+static const char *resultant_method_task_label(resultant_method_t method)
+{
+    switch (method) {
+        case RESULTANT_METHOD_MACAULAY:
+            return "Macaulay resultant";
+        case RESULTANT_METHOD_SUBRES:
+            return "Subresultant resultant";
+        case RESULTANT_METHOD_DIXON:
+        default:
+            return "Dixon resultant";
+    }
+}
+
+static int validate_subres_input(const char *polys_str,
+                                 const char *vars_str,
+                                 int silent_mode)
+{
+    slong num_polys = 0, num_vars = 0;
+    char **poly_array = split_string(polys_str, &num_polys);
+    char **vars_array = split_string(vars_str, &num_vars);
+    int ok = 1;
+
+    if (num_polys != 2) {
+        if (!silent_mode) {
+            fprintf(stderr,
+                    "Error: --subres supports exactly 2 polynomials, but got %ld.\n",
+                    num_polys);
+        }
+        ok = 0;
+    }
+
+    if (ok && num_vars != 1) {
+        if (!silent_mode) {
+            fprintf(stderr,
+                    "Error: --subres requires exactly 1 elimination variable, but got %ld.\n",
+                    num_vars);
+        }
+        ok = 0;
+    }
+
+    free_split_strings(poly_array, num_polys);
+    free_split_strings(vars_array, num_vars);
+    return ok;
+}
+
+static char *compute_subres_resultant_str(const char *polys_str,
+                                          const char *vars_str,
+                                          const fq_nmod_ctx_t ctx)
+{
+    slong num_polys = 0, num_vars = 0;
+    char **poly_array = split_string(polys_str, &num_polys);
+    char **vars_array = split_string(vars_str, &num_vars);
+    char *result = NULL;
+
+    if (num_polys == 2 && num_vars == 1) {
+        result = bivariate_resultant(poly_array[0], poly_array[1], vars_array[0], ctx);
+    }
+
+    free_split_strings(poly_array, num_polys);
+    free_split_strings(vars_array, num_vars);
+    return result;
 }
 
 static int check_prime_power(const fmpz_t n, fmpz_t prime, ulong *power)
@@ -1443,10 +1521,7 @@ static void save_result_to_file(const char *filename,
         return;
     }
 
-    fprintf(out_fp, "%s\n",
-            g_resultant_method == RESULTANT_METHOD_MACAULAY
-                ? "Macaulay Resultant Computation"
-                : "Dixon Resultant Computation");
+    fprintf(out_fp, "%s\n", resultant_method_heading(g_resultant_method));
     fprintf(out_fp, "==========================\n");
     fprintf(out_fp, "Field: ");
     print_field_label(out_fp, prime, power);
@@ -1753,10 +1828,14 @@ int main(int argc, char *argv[])
             debug_mode = 1; arg_offset++;
         } else if (strcmp(argv[i], "--macaulay") == 0) {
             resultant_method = RESULTANT_METHOD_MACAULAY; arg_offset++;
+        } else if (strcmp(argv[i], "--subres") == 0) {
+            resultant_method = RESULTANT_METHOD_SUBRES; arg_offset++;
         } else if ((strcmp(argv[i], "--resultant") == 0 ||
                     strcmp(argv[i], "--resultant-method") == 0) && i + 1 < argc) {
             if (strcmp(argv[i + 1], "macaulay") == 0) {
                 resultant_method = RESULTANT_METHOD_MACAULAY;
+            } else if (strcmp(argv[i + 1], "subres") == 0) {
+                resultant_method = RESULTANT_METHOD_SUBRES;
             } else if (strcmp(argv[i + 1], "dixon") == 0) {
                 resultant_method = RESULTANT_METHOD_DIXON;
             } else {
@@ -2100,10 +2179,7 @@ int main(int argc, char *argv[])
 
     if (!silent_mode) {
         if (!comp_mode && !solve_mode) {
-            printf("=== %s ===\n",
-                   g_resultant_method == RESULTANT_METHOD_MACAULAY
-                       ? "Macaulay Resultant Computation"
-                       : "Dixon Resultant Computation");
+            printf("=== %s ===\n", resultant_method_heading(resultant_method));
             printf("Field: ");
             print_field_label(stdout, p_fmpz, power);
             printf("\n");
@@ -2282,6 +2358,32 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (resultant_method == RESULTANT_METHOD_SUBRES) {
+        if (comp_mode) {
+            fprintf(stderr, "Error: --subres does not support --comp.\n");
+            goto cleanup_fail;
+        }
+        if (solve_mode) {
+            fprintf(stderr, "Error: --subres does not support --solve.\n");
+            goto cleanup_fail;
+        }
+        if (ideal_str) {
+            fprintf(stderr, "Error: --subres does not support --ideal.\n");
+            goto cleanup_fail;
+        }
+        if (rational_mode) {
+            fprintf(stderr, "Error: --subres currently requires a finite field.\n");
+            goto cleanup_fail;
+        }
+        if (large_prime_mode) {
+            fprintf(stderr, "Error: --subres currently does not support large-prime fallback.\n");
+            goto cleanup_fail;
+        }
+        if (!validate_subres_input(polys_str, vars_str, silent_mode)) {
+            goto cleanup_fail;
+        }
+    }
+
     /* ======================================================
      * Set determinant method and thread count
      * ====================================================== */
@@ -2418,10 +2520,10 @@ int main(int argc, char *argv[])
             int poly_count = count_comma_separated_items(polys_str);
             int var_count  = count_comma_separated_items(vars_str);
             printf("Task: %s  |  Equations: %d  |  Eliminate: %s\n",
-                   (resultant_method == RESULTANT_METHOD_MACAULAY)
-                       ? "Macaulay resultant" : "Dixon resultant",
+                   resultant_method_task_label(resultant_method),
                    poly_count, vars_str);
-            if (var_count != poly_count - 1)
+            if (resultant_method != RESULTANT_METHOD_SUBRES &&
+                var_count != poly_count - 1)
                 printf("WARNING: resultant mode requires eliminating exactly %d variables "
                        "for %d equations!\n", poly_count - 1, poly_count);
             printf("--------------------------------\n");
@@ -2449,7 +2551,11 @@ int main(int argc, char *argv[])
         } else if (large_prime_mode) {
             result = dixon_str_large_prime(polys_str, vars_str, p_fmpz);
         } else {
-            result = dixon_str(polys_str, vars_str, ctx);
+            if (resultant_method == RESULTANT_METHOD_SUBRES) {
+                result = compute_subres_resultant_str(polys_str, vars_str, ctx);
+            } else {
+                result = dixon_str(polys_str, vars_str, ctx);
+            }
         }
 
         if (silent_mode && orig_stdout != -1) {

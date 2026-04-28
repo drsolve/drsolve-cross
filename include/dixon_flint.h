@@ -55,7 +55,8 @@ typedef enum {
 
 typedef enum {
     RESULTANT_METHOD_DIXON = 0,
-    RESULTANT_METHOD_MACAULAY = 1
+    RESULTANT_METHOD_MACAULAY = 1,
+    RESULTANT_METHOD_SUBRES = 2
 } resultant_method_t;
 
 // Global method selection variables
