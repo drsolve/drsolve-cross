@@ -5,6 +5,7 @@
 #include <flint/fmpq.h>
 #include <flint/fmpq_poly.h>
 #include <flint/fmpz_poly.h>
+#include <stdarg.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -14,6 +15,61 @@ static int g_suppress_univariate_root_reporting = 0;
 static int g_suppress_rational_root_reporting = 0;
 static const slong QQ_ROOT_SEARCH_MAX_DEGREE = 1000;
 static const slong QQ_ROOT_SEARCH_MAX_CANDIDATES = 1000000;
+static char *g_last_root_report = NULL;
+
+static void root_report_appendf(char **buffer, size_t *length, size_t *capacity,
+                                const char *fmt, ...)
+{
+    va_list args;
+    va_list args_copy;
+    int needed;
+
+    if (!buffer || !length || !capacity || !fmt) return;
+
+    va_start(args, fmt);
+    va_copy(args_copy, args);
+    needed = vsnprintf(NULL, 0, fmt, args_copy);
+    va_end(args_copy);
+
+    if (needed < 0) {
+        va_end(args);
+        return;
+    }
+
+    if (*capacity < *length + (size_t) needed + 1) {
+        size_t new_capacity = (*capacity == 0) ? 128 : *capacity;
+        while (new_capacity < *length + (size_t) needed + 1) {
+            new_capacity *= 2;
+        }
+        *buffer = (char *) realloc(*buffer, new_capacity);
+        *capacity = new_capacity;
+    }
+
+    vsnprintf(*buffer + *length, *capacity - *length, fmt, args);
+    *length += (size_t) needed;
+    va_end(args);
+}
+
+void dixon_clear_last_root_report(void)
+{
+    if (g_last_root_report) {
+        free(g_last_root_report);
+        g_last_root_report = NULL;
+    }
+}
+
+const char *dixon_get_last_root_report(void)
+{
+    return g_last_root_report;
+}
+
+static void dixon_set_last_root_report(const char *report)
+{
+    dixon_clear_last_root_report();
+    if (report) {
+        g_last_root_report = strdup(report);
+    }
+}
 
 static int at_end(parser_state_t *state) {
     return state->pos >= state->len;
@@ -456,6 +512,10 @@ void parse_expression(parser_state_t *state, fq_mvpoly_t *poly) {
 }
 
 void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *result, parser_state_t *state, FILE *fp_file, int print_to_stdout) {
+    char *root_report = NULL;
+    size_t root_report_len = 0;
+    size_t root_report_cap = 0;
+
     if (g_suppress_univariate_root_reporting) {
         return;
     }
@@ -544,6 +604,17 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
         nmod_roots_init(nmod_roots);
         slong num_roots = our_nmod_poly_roots(nmod_roots, nmod_poly, 1);
 
+        root_report_appendf(&root_report, &root_report_len, &root_report_cap,
+                            "\nRoots in %s (degree %ld):\n", var_name, degree);
+        root_report_appendf(&root_report, &root_report_len, &root_report_cap,
+                            "Find %ld roots:\n", num_roots);
+        for (slong i = 0; i < nmod_roots->num; i++) {
+            root_report_appendf(&root_report, &root_report_len, &root_report_cap,
+                                "  Root %ld: %lu (Multiplicity: %ld)\n",
+                                i + 1, nmod_roots->roots[i], nmod_roots->mult[i]);
+        }
+        dixon_set_last_root_report(root_report);
+
         if (print_to_stdout) {
             printf("\nRoots in %s (degree %ld):\n", var_name, degree);
             printf("Find %ld roots:\n", num_roots);
@@ -567,8 +638,23 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
         
     } else {
         fq_nmod_roots_t roots;
+        char *gen_name = get_generator_name(result->ctx);
         fq_nmod_roots_init(roots, result->ctx);
         slong num_roots = our_fq_nmod_poly_roots(roots, poly, 1, result->ctx);
+
+        root_report_appendf(&root_report, &root_report_len, &root_report_cap,
+                            "\nRoots in %s (degree %ld):\n", var_name, degree);
+        root_report_appendf(&root_report, &root_report_len, &root_report_cap,
+                            "Find %ld roots:\n", num_roots);
+        for (slong i = 0; i < roots->num; i++) {
+            char *root_str = fq_nmod_to_string_with_gen(roots->roots + i, result->ctx,
+                                                        gen_name);
+            root_report_appendf(&root_report, &root_report_len, &root_report_cap,
+                                "  Root %ld: %s (Multiplicity: %ld)\n",
+                                i + 1, root_str, roots->mult[i]);
+            free(root_str);
+        }
+        dixon_set_last_root_report(root_report);
 
         if (print_to_stdout) {
             printf("\nRoots in %s (degree %ld):\n", var_name, degree);
@@ -593,10 +679,12 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
         }
         
         fq_nmod_roots_clear(roots, result->ctx);
+        free(gen_name);
     }
 
     fq_nmod_poly_clear(poly, result->ctx);
     free(par_used);
+    free(root_report);
 }
 
 void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, parser_state_t *state) {

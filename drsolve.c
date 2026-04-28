@@ -2426,6 +2426,8 @@ int main(int argc, char *argv[])
     rational_solutions_t *rational_solutions = NULL;
     large_prime_solutions_t *large_prime_solutions = NULL;
 
+    dixon_clear_last_root_report();
+
     if (comp_mode) {
         /* ---- Complexity analysis ---- */
         if (!silent_mode) {
@@ -2667,7 +2669,12 @@ int main(int argc, char *argv[])
                         large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
                                                                       p_fmpz, fp_append, !silent_mode);
                     } else {
-                        append_roots_to_file_from_result(result, polys_str, vars_str, ctx, fp_append);
+                        const char *cached_root_report = dixon_get_last_root_report();
+                        if (cached_root_report && cached_root_report[0] != '\0') {
+                            fputs(cached_root_report, fp_append);
+                        } else {
+                            append_roots_to_file_from_result(result, polys_str, vars_str, ctx, fp_append);
+                        }
                     }
                     fclose(fp_append);
                 } else if (large_prime_mode && !silent_mode) {
