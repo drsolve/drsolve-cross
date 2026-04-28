@@ -207,7 +207,7 @@ static slong nmod_poly_roots_gf2(nmod_roots_t roots, const nmod_poly_t poly, int
 
 slong our_nmod_poly_roots(nmod_roots_t roots, const nmod_poly_t poly, int with_multiplicity) {
     slong deg = nmod_poly_degree(poly);
-    printf("Resultant polynomial degree: %ld\n", deg);
+    // printf("Resultant polynomial degree: %ld\n", deg);
     
     if (deg <= 0) return 0;
     
@@ -447,7 +447,7 @@ void fq_nmod_split_equal_degree(fq_nmod_roots_t roots, const fq_nmod_poly_t poly
 slong our_fq_nmod_poly_roots(fq_nmod_roots_t roots, const fq_nmod_poly_t poly, 
                              int with_multiplicity, const fq_nmod_ctx_t ctx) {
     slong deg = fq_nmod_poly_degree(poly, ctx);
-    printf("Resultant polynomial degree: %ld\n", deg);
+    // printf("Resultant polynomial degree: %ld\n", deg);
     
     if (deg <= 0) return 0;
     
