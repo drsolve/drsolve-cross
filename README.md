@@ -4,7 +4,7 @@ A cross-platform C library and command-line tool for computing Dixon resultants 
 
 ## Library & Platform Support
 
-DRsolve is distributed as both a **shared library** (`libdrsolve.so` / `libdrsolve.dylib` / `libdrsolve-1.dll`) and a **static library** (`libdrsolve.a` / `libdrsolve-1.a`), alongside the `drsolve` command-line executable.
+DRSolve is distributed as both a **shared library** (`libdrsolve.so` / `libdrsolve.dylib` / `libdrsolve-1.dll`) and a **static library** (`libdrsolve.a` / `libdrsolve-1.a`), alongside the `drsolve` command-line executable.
 
 | Platform | Shared lib | Static lib | CLI |
 |---|---|---|---|
@@ -41,7 +41,7 @@ Optional:
 
 ## Build
 
-DRsolve uses **CMake** (≥ 3.16) as its primary build system.
+DRSolve uses **CMake** (≥ 3.16) as its primary build system.
 
 ### Linux / macOS
 
@@ -317,4 +317,4 @@ and the resultant, solutions, or complexity report.
 ---
 
 ## License
-DRsolve is distributed under the GNU General Public License version 2.0 (GPL-2.0-or-later). See the file COPYING.
+DRSolve is distributed under the GNU General Public License version 2.0 (GPL-2.0-or-later). See the file COPYING.
