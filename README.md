@@ -309,10 +309,10 @@ and the resultant, solutions, or complexity report.
 | Dixon resultant | ✅ | ✅ | ✅ | ✅ |
 | Complexity analysis (`--comp`) | ✅ | ✅ | ✅ | ✅ |
 | Random mode (`-r`) | ✅ | ✅ | ✅ | ✅ |
-| Polynomial solver (`--solve`) | ✅ | ❌ | ✅ | ❌ |
+| Polynomial solver (`--solve`) | ✅ | ✅ | ✅ | ✅ |
 | Ideal reduction (`--ideal`) | ✅ | ❌ | ✅ | ❌ |
 | Field-equation reduction | ✅ | ❌ | ✅ | ❌ |
-| PML acceleration | ✅ | ❌ | ❌ | ❌ |
+| PML acceleration | ✅ | ✅ | ❌ | ✅ |
 
 ---
 
