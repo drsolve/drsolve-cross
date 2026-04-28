@@ -94,6 +94,16 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
                            const fq_nmod_ctx_t ctx);
 char* dixon_complexity_auto_str(const char *poly_string, const char *vars_string, const fq_nmod_ctx_t ctx);
 
+void run_complexity_analysis(const char *polys_str,
+                             const char *vars_str,
+                             const fmpz_t prime,
+                             ulong power,
+                             const fq_nmod_ctx_t ctx,
+                             const char *output_filename,
+                             int silent_mode,
+                             double comp_time,
+                             double omega);
+
 void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                           const long *degrees,
                                           slong num_polys,

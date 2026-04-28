@@ -33,6 +33,7 @@
 #include "fq_mpoly_mat_det.h"
 #include "fq_unified_interface.h"
 #include "dixon_interface_flint.h"
+#include "macaulay_flint.h"
 
 // Debug output control - set to 0 to disable all output
 #define DEBUG_OUTPUT_D 0
@@ -167,11 +168,4 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                   char **var_names, char **par_names, 
                                   const char *gen_name);
 
-void fq_macaulay_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
-                           slong nvars, slong npars);
-
-void fq_macaulay_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
-                                      slong nvars, slong npars,
-                                      char **var_names, char **par_names,
-                                      const char *gen_name);
 #endif

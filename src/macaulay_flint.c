@@ -2,6 +2,7 @@
  * macaulay_flint.c - Macaulay resultant construction for finite extension fields
  */
 
+#include "macaulay_flint.h"
 #include "dixon_flint.h"
 
 static const char *macaulay_det_method_name(det_method_t method)

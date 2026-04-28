@@ -741,6 +741,342 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     report->total_sparse_log2 = log2_add_exp(report->step1_sparse_log2, report->step4_log2);
 }
 
+static int complexity_is_elimination_var(const char *var_name,
+                                         char *const *elim_vars,
+                                         slong num_elim_vars) {
+    for (slong i = 0; i < num_elim_vars; i++) {
+        if (strcmp(var_name, elim_vars[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void dixon_complexity_print_field_label(FILE *out,
+                                               const fmpz_t prime,
+                                               ulong power) {
+    if (fmpz_is_zero(prime)) {
+        fprintf(out, "Q");
+        return;
+    }
+
+    fprintf(out, "F_");
+    fmpz_fprint(out, prime);
+    if (power > 1) {
+        fprintf(out, "^%lu", power);
+        if (fmpz_abs_fits_ui(prime)) {
+            mp_limb_t prime_ui = fmpz_get_ui(prime);
+            mp_limb_t field_size = 1;
+            int overflow = 0;
+
+            for (ulong i = 0; i < power; i++) {
+                if (prime_ui != 0 && field_size > UWORD_MAX / prime_ui) {
+                    overflow = 1;
+                    break;
+                }
+                field_size *= prime_ui;
+            }
+
+            if (!overflow) {
+                fprintf(out, " (size %lu)", field_size);
+            }
+        }
+    }
+}
+
+static void dixon_complexity_fprint_name_list(FILE *fp,
+                                              char *const *names,
+                                              slong count) {
+    if (count <= 0) {
+        fprintf(fp, "(none)");
+        return;
+    }
+
+    for (slong i = 0; i < count; i++) {
+        if (i > 0) {
+            fprintf(fp, ", ");
+        }
+        fprintf(fp, "%s", names[i]);
+    }
+}
+
+static void dixon_complexity_fprint_parameter_vars(FILE *fp,
+                                                   char *const *all_vars,
+                                                   slong num_all_vars,
+                                                   char *const *elim_vars,
+                                                   slong num_elim_vars) {
+    int first = 1;
+
+    for (slong i = 0; i < num_all_vars; i++) {
+        if (!complexity_is_elimination_var(all_vars[i], elim_vars, num_elim_vars)) {
+            if (!first) {
+                fprintf(fp, ", ");
+            }
+            fprintf(fp, "%s", all_vars[i]);
+            first = 0;
+        }
+    }
+
+    if (first) {
+        fprintf(fp, "(none)");
+    }
+}
+
+static double dixon_complexity_best_total_log2(const dixon_complexity_report_t *report) {
+    double best = report->total_direct_log2;
+    if (report->total_hnf_log2 < best) {
+        best = report->total_hnf_log2;
+    }
+    if (report->total_sparse_log2 < best) {
+        best = report->total_sparse_log2;
+    }
+    return best;
+}
+
+static void dixon_complexity_write_report_body(
+        FILE *fp,
+        slong num_polys,
+        slong num_all_vars,
+        char **all_vars,
+        char **elim_var_list,
+        slong num_elim,
+        slong num_parameter_vars,
+        const long *degrees,
+        const fmpz_t matrix_size,
+        long bezout_bound,
+        const dixon_complexity_report_t *report,
+        double omega) {
+    fprintf(fp, "--- Raw parameters ---\n");
+    fprintf(fp, "Equations: %ld\n", num_polys);
+    fprintf(fp, "All vars (%ld): ", num_all_vars);
+    dixon_complexity_fprint_name_list(fp, all_vars, num_all_vars);
+    fprintf(fp, "\n");
+    fprintf(fp, "Elimination vars (%ld): ", num_elim);
+    dixon_complexity_fprint_name_list(fp, elim_var_list, num_elim);
+    fprintf(fp, "\n");
+    fprintf(fp, "Parameter vars (%ld): ", num_parameter_vars);
+    dixon_complexity_fprint_parameter_vars(fp, all_vars, num_all_vars,
+                                           elim_var_list, num_elim);
+    fprintf(fp, "\n");
+    fprintf(fp, "Degree sequence: [");
+    for (slong i = 0; i < num_polys; i++) {
+        if (i > 0) {
+            fprintf(fp, ", ");
+        }
+        fprintf(fp, "%ld", degrees[i]);
+    }
+    fprintf(fp, "]\n");
+    fprintf(fp, "Bezout bound (degree product): %ld\n", bezout_bound);
+
+    fprintf(fp, "\n--- Step 1 ---\n");
+    fprintf(fp, "Cancellation matrix size: %ld x %ld\n",
+            report->det_size, report->det_size);
+    fprintf(fp, "Step 1 indeterminates (2*elim + params): %ld = 2*%ld + %ld\n",
+            report->step1_var_count, report->num_elim_vars, report->num_parameter_vars);
+    fprintf(fp, "Step 1 determinant total degree upper bound: %ld\n",
+            report->step1_det_total_degree);
+    fprintf(fp, "Step 1 Kronecker univariate degree upper bound (log2): %.6f\n",
+            report->step1_kronecker_degree_log2);
+    fprintf(fp, "Step 1 sparse term upper bound (log2 T): %.6f\n",
+            report->step1_sparse_term_bound_log2);
+    fprintf(fp, "Step 1 direct Leibniz + Kronecker/FFT (log2): %.6f\n",
+            report->step1_direct_log2);
+    fprintf(fp, "Step 1 Kronecker + HNF (log2): %.6f\n",
+            report->step1_hnf_log2);
+    fprintf(fp, "Step 1 derivative sparse interpolation (log2): %.6f\n",
+            report->step1_sparse_log2);
+    if (num_polys != num_elim + 1) {
+        fprintf(fp,
+                "Step 1 note: standard Dixon resultant shape expects #polys = #elim + 1; current input is %ld vs %ld + 1.\n",
+                num_polys, num_elim);
+    }
+
+    fprintf(fp, "\n--- Step 4 ---\n");
+    fprintf(fp, "Step 4 ambient variable count n: %ld\n", report->num_all_vars);
+    fprintf(fp, "Dixon matrix size: ");
+    fmpz_fprint(fp, matrix_size);
+    fprintf(fp, "\n");
+    fprintf(fp, "Step 4 resultant degree estimate (Bezout): %ld\n", bezout_bound);
+    fprintf(fp, "Step 4 Dixon complexity (log2, omega=%.4g): %.6f\n",
+            omega, report->step4_log2);
+
+    fprintf(fp, "\n--- Overall ---\n");
+    fprintf(fp, "Total with direct step 1 (log2): %.6f\n",
+            report->total_direct_log2);
+    fprintf(fp, "Total with HNF step 1 (log2): %.6f\n",
+            report->total_hnf_log2);
+    fprintf(fp, "Total with sparse step 1 (log2): %.6f\n",
+            report->total_sparse_log2);
+    fprintf(fp, "Best overall estimate used for encoding (log2): %.6f\n",
+            dixon_complexity_best_total_log2(report));
+
+    fprintf(fp, "\n--- Comparison: Macaulay / Groebner ---\n");
+    fprintf(fp, "Macaulay degree: %ld\n", report->macaulay_degree);
+    fprintf(fp, "Macaulay matrix size upper bound: %ld x %ld (square <= %ld)\n",
+            report->macaulay_rows, report->macaulay_cols, report->macaulay_square_size);
+    fprintf(fp, "Macaulay resultant + HNF estimate (log2): %.6f\n",
+            report->macaulay_log2);
+    fprintf(fp, "Groebner degree of regularity estimate: %ld\n",
+            report->grobner_dreg);
+    fprintf(fp, "Groebner basis estimate (log2): %.6f\n",
+            report->grobner_log2);
+}
+
+static void save_comp_result_to_file(
+        const char   *filename,
+        const char   *polys_str,
+        const char   *vars_str,
+        const fmpz_t  prime,
+        ulong         power,
+        slong         num_polys,
+        slong         num_all_vars,
+        char        **all_vars,
+        char        **elim_var_list,
+        slong         num_elim,
+        slong         num_parameter_vars,
+        const long   *degrees,
+        const fmpz_t  matrix_size,
+        long          bezout_bound,
+        const dixon_complexity_report_t *report,
+        double        omega,
+        double        comp_time) {
+    FILE *fp = fopen(filename, "w");
+    if (!fp) {
+        fprintf(stderr, "Warning: Cannot create output file '%s'\n", filename);
+        return;
+    }
+
+    fprintf(fp, "Dixon Complexity Analysis\n");
+    fprintf(fp, "=========================\n");
+    fprintf(fp, "Field: ");
+    dixon_complexity_print_field_label(fp, prime, power);
+    fprintf(fp, "\n");
+    fprintf(fp, "Polynomials: %s\n", polys_str);
+    fprintf(fp, "Eliminate:   %s\n", vars_str);
+    fprintf(fp, "Computation time: %.3f seconds\n\n", comp_time);
+
+    dixon_complexity_write_report_body(fp,
+                                       num_polys,
+                                       num_all_vars,
+                                       all_vars,
+                                       elim_var_list,
+                                       num_elim,
+                                       num_parameter_vars,
+                                       degrees,
+                                       matrix_size,
+                                       bezout_bound,
+                                       report,
+                                       omega);
+    fclose(fp);
+}
+
+void run_complexity_analysis(
+        const char      *polys_str,
+        const char      *vars_str,
+        const fmpz_t     prime,
+        ulong            power,
+        const fq_nmod_ctx_t ctx,
+        const char      *output_filename,
+        int              silent_mode,
+        double           comp_time,
+        double           omega) {
+    slong num_polys = 0;
+    slong num_elim = 0;
+    char **poly_arr = split_string(polys_str, &num_polys);
+    char **elim_arr = split_string(vars_str, &num_elim);
+    char *gen_name = (ctx == NULL) ? NULL : get_generator_name(ctx);
+    char **all_vars = NULL;
+    slong num_all_vars = 0;
+    slong num_parameter_vars = 0;
+    long *degrees = NULL;
+    long bezout = 1;
+    fmpz_t matrix_size;
+    dixon_complexity_report_t report;
+
+    collect_variables((const char **) poly_arr, num_polys,
+                      gen_name, &all_vars, &num_all_vars);
+
+    for (slong i = 0; i < num_all_vars; i++) {
+        if (!complexity_is_elimination_var(all_vars[i], elim_arr, num_elim)) {
+            num_parameter_vars++;
+        }
+    }
+
+    if (num_polys <= 0) {
+        if (!silent_mode) {
+            fprintf(stderr, "Error: no polynomials to analyze\n");
+        }
+        free_split_strings(poly_arr, num_polys);
+        free_split_strings(elim_arr, num_elim);
+        if (gen_name) {
+            free(gen_name);
+        }
+        for (slong i = 0; i < num_all_vars; i++) {
+            free(all_vars[i]);
+        }
+        free(all_vars);
+        return;
+    }
+
+    degrees = (long *) calloc((size_t) num_polys, sizeof(long));
+    for (slong i = 0; i < num_polys; i++) {
+        degrees[i] = get_poly_total_degree(poly_arr[i], gen_name);
+        bezout *= degrees[i];
+    }
+
+    fmpz_init(matrix_size);
+    dixon_size(matrix_size, degrees, (int) num_polys, 0);
+
+    dixon_complexity_report_from_degrees(&report,
+                                         degrees,
+                                         num_polys,
+                                         num_all_vars,
+                                         num_elim,
+                                         num_parameter_vars,
+                                         omega);
+
+    if (!silent_mode) {
+        printf("\n=== Complexity Analysis ===\n");
+        dixon_complexity_write_report_body(stdout,
+                                           num_polys,
+                                           num_all_vars,
+                                           all_vars,
+                                           elim_arr,
+                                           num_elim,
+                                           num_parameter_vars,
+                                           degrees,
+                                           matrix_size,
+                                           bezout,
+                                           &report,
+                                           omega);
+        if (output_filename) {
+            printf("\nReport saved to: %s\n", output_filename);
+        }
+        printf("===========================\n");
+    }
+
+    if (output_filename) {
+        save_comp_result_to_file(output_filename, polys_str, vars_str,
+                                 prime, power,
+                                 num_polys, num_all_vars, all_vars,
+                                 elim_arr, num_elim, num_parameter_vars,
+                                 degrees, matrix_size, bezout,
+                                 &report, omega, comp_time);
+    }
+
+    fmpz_clear(matrix_size);
+    free(degrees);
+    for (slong i = 0; i < num_all_vars; i++) {
+        free(all_vars[i]);
+    }
+    free(all_vars);
+    if (gen_name) {
+        free(gen_name);
+    }
+    free_split_strings(poly_arr, num_polys);
+    free_split_strings(elim_arr, num_elim);
+}
+
 // Initialize polynomial analysis structure
 static void poly_analysis_init(poly_analysis_t *analysis, slong num_polys, const fq_nmod_ctx_t ctx) {
     analysis->max_vars = 16;
