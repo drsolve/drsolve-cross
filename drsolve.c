@@ -24,6 +24,7 @@
 #include "unified_mpoly_resultant.h"
 #include "dixon_with_ideal_reduction.h"
 #include "dixon_complexity.h"
+#include "large_prime_system_solver.h"
 #include "polynomial_system_solver.h"
 #include "rational_system_solver.h"
 #include "dixon_test.h"
@@ -2428,10 +2429,6 @@ int main(int argc, char *argv[])
         }
     }
     if (large_prime_mode) {
-        if (solve_mode) {
-            fprintf(stderr, "Error: large prime fields beyond the nmod limit currently support Dixon resultant only; solver mode is not implemented.\n");
-            goto cleanup_fail;
-        }
         if (ideal_str) {
             fprintf(stderr, "Error: large prime fallback currently does not support --ideal.\n");
             goto cleanup_fail;
@@ -2624,6 +2621,7 @@ int main(int argc, char *argv[])
     char *result = NULL;
     polynomial_solutions_t *solutions = NULL;
     rational_solutions_t *rational_solutions = NULL;
+    large_prime_solutions_t *large_prime_solutions = NULL;
 
     if (comp_mode) {
         /* ---- Complexity analysis ---- */
@@ -2664,6 +2662,22 @@ int main(int argc, char *argv[])
             }
 
             rational_solutions = solve_rational_polynomial_system_string(polys_str);
+
+            if (suppress_solver_trace) {
+                restore_stdio(orig_stdout, orig_stderr);
+            } else if (suppress_solver_stdout) {
+                restore_fd(STDOUT_FILENO, orig_stdout);
+            }
+        } else if (large_prime_mode) {
+            large_prime_solver_set_realtime_progress(0);
+
+            if (suppress_solver_trace) {
+                redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
+            } else if (suppress_solver_stdout) {
+                redirect_fd_to_devnull(STDOUT_FILENO, &orig_stdout);
+            }
+
+            large_prime_solutions = solve_large_prime_polynomial_system_string(polys_str, p_fmpz);
 
             if (suppress_solver_trace) {
                 restore_stdio(orig_stdout, orig_stderr);
@@ -2792,6 +2806,25 @@ int main(int argc, char *argv[])
                 if (!silent_mode)
                     fprintf(stderr, "\nError: Rational polynomial system solving failed\n");
             }
+        } else if (large_prime_mode) {
+            if (large_prime_solutions) {
+                if (!silent_mode) {
+                    print_large_prime_solutions(large_prime_solutions);
+                }
+
+                if (output_filename) {
+                    save_large_prime_solver_result_to_file(output_filename, polys_str,
+                                                           p_fmpz, large_prime_solutions,
+                                                           cpu_time, wall_time, total_threads);
+                    if (!silent_mode)
+                        printf("Result saved to: %s\n", output_filename);
+                }
+                large_prime_solutions_clear(large_prime_solutions);
+                free(large_prime_solutions);
+            } else {
+                if (!silent_mode)
+                    fprintf(stderr, "\nError: Large-prime polynomial system solving failed\n");
+            }
         } else {
             if (solutions) {
                 if (!silent_mode) {
@@ -2823,9 +2856,20 @@ int main(int argc, char *argv[])
                 
                 FILE *fp_append = fopen(output_filename, "a");
                 if (fp_append) {
-                    append_roots_to_file_from_result(result, polys_str, vars_str, ctx, fp_append);
+                    if (large_prime_mode) {
+                        large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
+                                                                      p_fmpz, fp_append, !silent_mode);
+                    } else {
+                        append_roots_to_file_from_result(result, polys_str, vars_str, ctx, fp_append);
+                    }
                     fclose(fp_append);
+                } else if (large_prime_mode && !silent_mode) {
+                    large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
+                                                                  p_fmpz, NULL, 1);
                 }
+            } else if (large_prime_mode) {
+                large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
+                                                              p_fmpz, NULL, !silent_mode);
             } else if (output_filename && rational_mode) {
                 if (!silent_mode)
                     printf("\nResult saved to: %s\n", output_filename);

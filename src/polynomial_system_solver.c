@@ -1353,12 +1353,22 @@ int solve_by_back_substitution_recursive_enhanced(char **original_polys, slong n
                                                                                            sols->ctx);
                 
                 if (test_sols && test_sols->is_valid) {
+                    if (test_sols->num_solution_sets > 0) {
+                        filter_solutions_by_verification(test_sols,
+                                                         reduced_polys,
+                                                         num_nonzero_polys,
+                                                         remaining_vars);
+                    }
                     merge_solver_logs(sols, test_sols);
                     if (test_sols->has_no_solutions == -1) {
                         printf("  Combination %ld: dimension > 0\n", comb_idx + 1);
                         found_dimension_gt_zero++;
                     } else if (test_sols->has_no_solutions == 1) {
                         printf("  Combination %ld: no solutions\n", comb_idx + 1);
+                        found_no_solution++;
+                    } else if (test_sols->num_solution_sets == 0) {
+                        printf("  Combination %ld: candidate solutions failed verification against the full reduced system\n",
+                               comb_idx + 1);
                         found_no_solution++;
                     } else {
                         printf("  ✓ Combination %ld succeeded with finite solutions!\n", comb_idx + 1);

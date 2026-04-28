@@ -11,6 +11,7 @@
 // Fixed string parser implementation
 
 static int g_suppress_univariate_root_reporting = 0;
+static int g_suppress_rational_root_reporting = 0;
 static const slong QQ_ROOT_SEARCH_MAX_DEGREE = 1000;
 static const slong QQ_ROOT_SEARCH_MAX_CANDIDATES = 1000000;
 
@@ -1856,13 +1857,13 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     }
     
     FILE *fp_file = NULL;
-    if (output_filename && have_best_recon && strcmp(best_result, "0") != 0) {
+    if (!g_suppress_rational_root_reporting && output_filename && have_best_recon && strcmp(best_result, "0") != 0) {
         fp_file = fopen(output_filename, "a");
         find_and_print_rational_roots_of_univariate_resultant(&best_recon, fp_file);
         if (fp_file) {
             fclose(fp_file);
         }
-    } else if (have_best_recon && strcmp(best_result, "0") != 0) {
+    } else if (!g_suppress_rational_root_reporting && have_best_recon && strcmp(best_result, "0") != 0) {
         find_and_print_rational_roots_of_univariate_resultant(&best_recon, NULL);
     }
 
@@ -2000,8 +2001,10 @@ char* dixon_str_large_prime(const char *poly_string,
     char *prime_str;
     int have_best_recon = 0;
 
+    g_suppress_rational_root_reporting = 1;
     best_result = qq_reconstruct_from_modular_dixon(poly_string, vars_string,
                                                     &best_recon, &have_best_recon);
+    g_suppress_rational_root_reporting = 0;
 
     prime_str = fmpz_get_str(NULL, 10, prime);
     printf("Final reconstruction over Q completed.\n");

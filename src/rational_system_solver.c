@@ -372,6 +372,55 @@ static double rational_evaluate_polynomial_double(const char *poly_str,
     return value;
 }
 
+static int rational_polynomial_is_numerically_zero(const char *poly_str,
+                                                   rational_variable_info_t *vars,
+                                                   slong num_vars) {
+    if (!poly_str) {
+        return 0;
+    }
+
+    if (strcmp(poly_str, "0") == 0) {
+        return 1;
+    }
+
+    double *values = NULL;
+    if (num_vars > 0) {
+        values = (double *) calloc((size_t) num_vars, sizeof(double));
+        if (!values) {
+            return 0;
+        }
+    }
+
+    for (int pattern = 0; pattern < 4; pattern++) {
+        for (slong i = 0; i < num_vars; i++) {
+            switch (pattern) {
+                case 0:
+                    values[i] = 0.0;
+                    break;
+                case 1:
+                    values[i] = (double) (i + 1);
+                    break;
+                case 2:
+                    values[i] = (i % 2 == 0) ? -1.0 : 2.0;
+                    break;
+                default:
+                    values[i] = (double) (2 * i + 3);
+                    break;
+            }
+        }
+
+        int ok = 0;
+        double value = rational_evaluate_polynomial_double(poly_str, vars, num_vars, values, &ok);
+        if (!ok || fabs(value) > 1e-12) {
+            free(values);
+            return 0;
+        }
+    }
+
+    free(values);
+    return 1;
+}
+
 static int rational_contains_any_variable(const char *poly_str,
                                           rational_variable_info_t *vars,
                                           slong num_vars) {
@@ -401,12 +450,7 @@ static int rational_real_root_matches_rational(const arb_t root,
 }
 
 static double rational_fmpq_to_double(const fmpq_t value) {
-    char *buffer = fmpq_get_str(NULL, 10, value);
-    double result = buffer ? strtod(buffer, NULL) : 0.0;
-    if (buffer) {
-        flint_free(buffer);
-    }
-    return result;
+    return fmpq_get_d(value);
 }
 
 static double rational_arb_to_double(const arb_t value) {
@@ -2435,12 +2479,12 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
         
         for (slong poly_idx = 0; poly_idx < num_polys; poly_idx++) {
             char *substituted = rational_substitute_variable_in_polynomial(original_polys[poly_idx],
-                                                                          sorted_vars[0].name,
-                                                                          base_solutions[base_idx]);
+                                                                           sorted_vars[0].name,
+                                                                           base_solutions[base_idx]);
             printf("Equation %ld after substituting %s: %s\n", 
                    poly_idx, sorted_vars[0].name, substituted);
             
-            if (strcmp(substituted, "0") != 0) {
+            if (!rational_polynomial_is_numerically_zero(substituted, sorted_vars + 1, num_vars - 1)) {
                 reduced_polys[num_nonzero_polys] = substituted;
                 num_nonzero_polys++;
             } else {
@@ -2557,10 +2601,23 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
 #endif
                 
                 if (test_sols && test_sols->is_valid) {
+                    if (test_sols->num_solution_sets > 0) {
+                        rational_filter_solutions_by_verification(test_sols,
+                                                                  reduced_polys,
+                                                                  num_nonzero_polys,
+                                                                  remaining_vars);
+                    }
+                    if (test_sols->num_real_solution_sets > 0) {
+                        rational_filter_real_solutions_by_verification(test_sols,
+                                                                       reduced_polys,
+                                                                       remaining_vars);
+                    }
+
                     rational_merge_solver_logs(sols, test_sols);
                     if (test_sols->has_no_solutions == -1) {
                         printf("  Combination %ld: dimension > 0\n", comb_idx + 1);
-                    } else if (test_sols->has_no_solutions == 1) {
+                    } else if (test_sols->num_solution_sets == 0 &&
+                               test_sols->num_real_solution_sets == 0) {
                         printf("  Combination %ld: no solutions\n", comb_idx + 1);
                     } else {
                         printf("  鉁?Combination %ld succeeded with finite solutions!\n", comb_idx + 1);
@@ -2649,6 +2706,23 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
             }
             
             rational_free_equation_combinations(combinations, num_combinations);
+
+            if (found_finite_solution == 0) {
+                slong old_real_count = sols->num_real_solution_sets;
+                arb_t base_real;
+                arb_init(base_real);
+                arb_set_fmpq(base_real, base_solutions[base_idx], sols->real_solution_precision);
+                rational_try_numeric_backsolve_from_real_root(original_polys, num_polys,
+                                                              sorted_vars, num_vars,
+                                                              base_real, sols);
+                arb_clear(base_real);
+
+                if (sols->num_real_solution_sets > old_real_count) {
+                    printf("  Numerical back-substitution recovered %ld real solution set(s) for base solution %ld\n",
+                           sols->num_real_solution_sets - old_real_count,
+                           base_idx + 1);
+                }
+            }
         }
         
         for (slong i = 0; i < num_nonzero_polys; i++) {

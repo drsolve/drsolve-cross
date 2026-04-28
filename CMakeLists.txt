@@ -583,6 +583,7 @@ set(MATH_SOURCES
   src/gf2n_mpoly.c
   src/gf2n_field.c
   src/gf2n_poly.c
+  src/large_prime_system_solver.c
   src/polynomial_system_solver.c
   src/rational_system_solver.c
   src/resultant_with_ideal_reduction.c

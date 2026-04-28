@@ -122,6 +122,7 @@ MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
                $(SRC_DIR)/gf2n_mpoly.c \
                $(SRC_DIR)/gf2n_field.c \
                $(SRC_DIR)/gf2n_poly.c \
+               $(SRC_DIR)/large_prime_system_solver.c \
                $(SRC_DIR)/polynomial_system_solver.c \
                $(SRC_DIR)/resultant_with_ideal_reduction.c \
                $(SRC_DIR)/unified_mpoly_det.c \
