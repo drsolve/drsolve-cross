@@ -1522,34 +1522,16 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
                            const char **elim_vars, slong num_elim_vars,
                            const fq_nmod_ctx_t ctx) {
     
-    printf("\n=== Dixon Complexity Analysis (Hessenberg Method) ===\n");
+    printf("\n=== Dixon Complexity Analysis ===\n");
     
     // Initialize analysis structure
     poly_analysis_t analysis;
     poly_analysis_init(&analysis, num_polys, ctx);
     
     // Analyze each polynomial
-    printf("Analyzing %ld polynomials...\n", num_polys);
     for (slong i = 0; i < num_polys; i++) {
-        printf("  Polynomial %ld: ", i + 1);
         analyze_single_polynomial(&analysis, i, poly_strings[i]);
-        printf("degree = %ld\n", analysis.degrees[i]);
     }
-    
-    // Print all discovered variables
-    printf("\nDiscovered variables (%ld): ", analysis.num_all_vars);
-    for (slong i = 0; i < analysis.num_all_vars; i++) {
-        if (i > 0) printf(", ");
-        printf("%s", analysis.all_vars[i]);
-    }
-    printf("\n");
-    
-    printf("Elimination variables (%ld): ", num_elim_vars);
-    for (slong i = 0; i < num_elim_vars; i++) {
-        if (i > 0) printf(", ");
-        printf("%s", elim_vars[i]);
-    }
-    printf("\n");
     
     // Identify remaining variables
     char **remaining_vars = (char**) malloc(analysis.num_all_vars * sizeof(char*));
@@ -1562,25 +1544,11 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
         }
     }
     
-    printf("Remaining variables (%ld): ", num_remaining);
-    for (slong i = 0; i < num_remaining; i++) {
-        if (i > 0) printf(", ");
-        printf("%s", remaining_vars[i]);
-    }
-    printf("\n");
-    
     // Calculate total degree product
     long td = 1;
-    printf("\nDegree calculation: ");
     for (slong i = 0; i < num_polys; i++) {
-        if (i > 0) printf(" * ");
-        printf("%ld", analysis.degrees[i]);
         td *= analysis.degrees[i];
     }
-    printf(" = %ld\n", td);
-    
-    // Step 1 determinant complexity analysis
-    printf("\n=== Step 1 Determinant Complexity Analysis ===\n");
 
     dixon_complexity_report_t report;
     dixon_complexity_report_from_degrees(&report,
@@ -1590,61 +1558,26 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
                                          num_elim_vars,
                                          num_remaining,
                                          DIXON_OMEGA);
-
-    printf("Cancellation matrix size (step 1): %ld x %ld\n",
-           report.det_size, report.det_size);
-    printf("Step 1 indeterminates (2*elim + params): %ld = 2*%ld + %ld\n",
-           report.step1_var_count, report.num_elim_vars, report.num_parameter_vars);
-    if (num_polys != num_elim_vars + 1) {
-        printf("Note: input has %ld polynomials and %ld elimination variables; "
-               "the estimate uses the %ld input polynomials for the step 1 determinant.\n",
-               num_polys, num_elim_vars, num_polys);
-    }
-    printf("Step 1 determinant total degree upper bound: %ld\n",
-           report.step1_det_total_degree);
-    printf("Step 1 Kronecker univariate degree upper bound (log_2): %.6f\n",
-           report.step1_kronecker_degree_log2);
-    printf("Step 1 sparse term upper bound (log_2 T): %.6f\n",
-           report.step1_sparse_term_bound_log2);
-    printf("Step 1 direct Leibniz + Kronecker/FFT (log_2): %.6f\n",
-           report.step1_direct_log2);
-    printf("Step 1 Kronecker + HNF (log_2): %.6f\n",
-           report.step1_hnf_log2);
-    printf("Step 1 derivative sparse interpolation (log_2): %.6f\n",
-           report.step1_sparse_log2);
-    printf("Macaulay degree: %ld\n", report.macaulay_degree);
-    printf("Macaulay matrix size upper bound: %ld x %ld (square <= %ld)\n",
-           report.macaulay_rows, report.macaulay_cols, report.macaulay_square_size);
-    printf("Macaulay resultant + HNF estimate (log_2): %.6f\n",
-           report.macaulay_log2);
-    printf("Groebner degree of regularity estimate: %ld\n", report.grobner_dreg);
-    printf("Groebner basis estimate (log_2): %.6f\n", report.grobner_log2);
-
-    // Compute Dixon matrix size and step 4 complexity using Hessenberg method
-    printf("\n=== Step 4 Dixon Matrix Analysis (Hessenberg Method) ===\n");
     
     fmpz_t matrix_size;
     fmpz_init(matrix_size);
-    dixon_size(matrix_size, analysis.degrees, num_polys, 1);
-    
-    printf("Dixon matrix size: ");
-    fmpz_print(matrix_size);
-    printf("\n");
-    
-    // Calculate complexity
-    printf("Step 4 Dixon complexity (log_2): %.6f\n", report.step4_log2);
-    printf("Total complexity with direct step 1 (log_2): %.6f\n",
-           report.total_direct_log2);
-    printf("Total complexity with HNF step 1 (log_2): %.6f\n",
-           report.total_hnf_log2);
-    printf("Total complexity with sparse step 1 (log_2): %.6f\n",
-           report.total_sparse_log2);
-    printf("Omega parameter: %.1f\n", DIXON_OMEGA);
+    dixon_size(matrix_size, analysis.degrees, num_polys, 0);
+
+    dixon_complexity_write_report_body(stdout,
+                                       num_polys,
+                                       analysis.num_all_vars,
+                                       analysis.all_vars,
+                                       (char **) elim_vars,
+                                       num_elim_vars,
+                                       num_remaining,
+                                       analysis.degrees,
+                                       matrix_size,
+                                       td,
+                                       &report,
+                                       DIXON_OMEGA);
     
     // Encode a single compatibility value for callers that expect one scalar.
-    double complexity = report.total_direct_log2;
-    if (report.total_hnf_log2 < complexity) complexity = report.total_hnf_log2;
-    if (report.total_sparse_log2 < complexity) complexity = report.total_sparse_log2;
+    double complexity = dixon_complexity_best_total_log2(&report);
     long complexity_encoded = (long)(complexity * 1000.0 + 0.5);
     
     // Generate evaluation polynomial
@@ -1842,7 +1775,7 @@ int test_dixon_complexity() {
     // Test data
     long a1[] = {1000, 1000, 1000, 1001, 1002, 1003};
     int len = sizeof(a1) / sizeof(a1[0]);
-    double omega = 2.3;
+    double omega = DIXON_OMEGA;
     
     printf("Dixon Complexity Results (Hessenberg Method):\n");
     for (int n = 5; n < 10; n++) {

@@ -879,7 +879,7 @@ add_test(NAME drsolve_comp_short
   WORKING_DIRECTORY ${_test_wd}
 )
 add_test(NAME drsolve_comp_omega
-  COMMAND drsolve_exe --comp --omega 2.373
+  COMMAND drsolve_exe --comp --omega 2.81
     "x^4+y^4+z^4+w^4+1, x^3*y+z+1, x+y^3+z^2+w, x*y*z*w+1"
     "x,y,z" 65537
   WORKING_DIRECTORY ${_test_wd}

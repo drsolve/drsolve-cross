@@ -132,9 +132,9 @@ Examples:
 ```
 
 **Custom omega** — set the matrix-multiplication exponent used in the complexity formula
-(default: 2.3):
+(default: 2.81):
 ```bash
-./drsolve --comp --omega 2.373 "polynomials" "eliminate_vars" field_size
+./drsolve --comp --omega 2.81 "polynomials" "eliminate_vars" field_size
 ./drsolve -c -w 2.0            "polynomials" "eliminate_vars" field_size
 ```
 
@@ -225,7 +225,7 @@ Generate random polynomial systems with specified degrees for testing and benchm
 
 # Random + complexity analysis
 ./drsolve -r --comp  "[d]*n" field_size
-./drsolve -r -c --omega 2.373 "[4]*5" 257   # custom omega
+./drsolve -r -c --omega 2.81 "[4]*5" 257   # custom omega
 
 # Random + Dixon with ideal reduction
 ./drsolve -r "[d1,d2,d3]" "ideal_generators" field_size
@@ -243,7 +243,7 @@ Generate random polynomial systems with specified degrees for testing and benchm
 ./drsolve -r --solve "[2]*3" 257
 
 # Complexity analysis of 4 quartic polynomials
-./drsolve -r --comp --omega 2.373 "[4]*4" 257
+./drsolve -r --comp --omega 2.81 "[4]*4" 257
 
 # GF(2^8) with degrees 3 and 2
 ./drsolve -r "[3,2]" 2^8

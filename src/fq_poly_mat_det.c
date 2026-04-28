@@ -2,6 +2,8 @@
 
 #include "fq_poly_mat_det.h"
 
+extern int g_dixon_debug_mode;
+
 /* ============================================================================
    GLOBAL VARIABLES FOR PROGRESS TRACKING
    ============================================================================ */
@@ -419,7 +421,9 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
     /* Check if we're in a prime field (degree 1) */
     if (fq_nmod_ctx_degree(ctx) == 1) {
         /* Convert to nmod_poly_mat and use the optimized prime field version */
-        printf("Using fast HNF from PML library\n");
+        if (g_dixon_debug_mode) {
+            printf("  Using fast HNF from PML library\n");
+        }
 
         nmod_poly_mat_t nmod_mat;
         nmod_poly_t nmod_det;

@@ -231,6 +231,8 @@ static void extract_fq_coefficient_matrix_from_macaulay(fq_mvpoly_t ***coeff_mat
                                                         slong *macaulay_degree_out)
 {
     const fq_nmod_ctx_struct *ctx = polys[0].ctx;
+    double step2_wall_start;
+    double step3_wall_start;
     slong *elim_degrees = (slong *) flint_calloc((size_t) npolys, sizeof(slong));
     slong macaulay_degree = 0;
     fq_mvpoly_t ***full_matrix = NULL;
@@ -247,6 +249,7 @@ static void extract_fq_coefficient_matrix_from_macaulay(fq_mvpoly_t ***coeff_mat
     enumerate_monomials_degree_leq(&column_monoms, &ncols, nvars, macaulay_degree);
 
     printf("\nStep 2: Construct Macaulay matrix\n");
+    step2_wall_start = get_wall_time();
     printf("Macaulay degree: %ld\n", macaulay_degree);
     printf("Macaulay matrix size: %ld x %ld\n", nrows, ncols);
 
@@ -258,6 +261,7 @@ static void extract_fq_coefficient_matrix_from_macaulay(fq_mvpoly_t ***coeff_mat
         printf("Warning: Empty Macaulay coefficient matrix\n");
         *coeff_matrix = NULL;
         *matrix_size = 0;
+        dixon_maybe_print_step_time("Step 2", get_wall_time() - step2_wall_start);
         flint_free(elim_degrees);
         if (column_monoms) flint_free(column_monoms);
         return;
@@ -305,8 +309,10 @@ static void extract_fq_coefficient_matrix_from_macaulay(fq_mvpoly_t ***coeff_mat
 
         if (multipliers) flint_free(multipliers);
     }
+    dixon_maybe_print_step_time("Step 2", get_wall_time() - step2_wall_start);
 
     printf("\nStep 3: Extract maximal-rank submatrix\n");
+    step3_wall_start = get_wall_time();
     {
         slong *row_idx_array = NULL;
         slong *col_idx_array = NULL;
@@ -344,6 +350,7 @@ static void extract_fq_coefficient_matrix_from_macaulay(fq_mvpoly_t ***coeff_mat
         if (row_idx_array) flint_free(row_idx_array);
         if (col_idx_array) flint_free(col_idx_array);
     }
+    dixon_maybe_print_step_time("Step 3", get_wall_time() - step3_wall_start);
 
     for (slong i = 0; i < nrows; i++) {
         if (full_matrix[i]) {
@@ -410,6 +417,7 @@ void fq_macaulay_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     cleanup_unified_workspace();
 
     printf("\nStep 1: Build Macaulay coefficient matrix\n");
+    double step1_wall_start = get_wall_time();
 
     fq_mvpoly_t **coeff_matrix = NULL;
     slong macaulay_degree = 0;
@@ -419,17 +427,26 @@ void fq_macaulay_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     extract_fq_coefficient_matrix_from_macaulay(&coeff_matrix, &matrix_size,
                                                 polys, nvars + 1, nvars, npars,
                                                 &full_rows, &full_cols, &macaulay_degree);
+    dixon_maybe_print_step_time("Step 1", get_wall_time() - step1_wall_start);
 
     if (matrix_size > 0) {
         det_method_t coeff_method;
         slong res_deg_bound = compute_fq_dixon_resultant_degree_bound(polys, nvars + 1, nvars, npars);
+        clock_t step4_cpu_start;
+        double step4_wall_start;
 
         printf("\nStep 4: Compute Macaulay resultant\n");
         printf("Resultant degree bound: %ld\n", res_deg_bound);
 
         coeff_method = choose_macaulay_det_method(matrix_size, npars);
+        step4_cpu_start = clock();
+        step4_wall_start = get_wall_time();
         compute_fq_coefficient_matrix_det(result, coeff_matrix, matrix_size,
                                           npars, polys[0].ctx, coeff_method, res_deg_bound);
+        dixon_maybe_print_step_method_time("Step 4",
+                                           coeff_method,
+                                           ((double)(clock() - step4_cpu_start) / CLOCKS_PER_SEC),
+                                           get_wall_time() - step4_wall_start);
 
         if (result->nterms <= 100) {
             fq_mvpoly_print(result, "Final Resultant");
@@ -455,6 +472,7 @@ void fq_macaulay_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     cleanup_unified_workspace();
 
     printf("\nStep 1: Build Macaulay coefficient matrix\n");
+    double step1_wall_start = get_wall_time();
 
     fq_mvpoly_t **coeff_matrix = NULL;
     slong macaulay_degree = 0;
@@ -464,17 +482,26 @@ void fq_macaulay_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     extract_fq_coefficient_matrix_from_macaulay(&coeff_matrix, &matrix_size,
                                                 polys, nvars + 1, nvars, npars,
                                                 &full_rows, &full_cols, &macaulay_degree);
+    dixon_maybe_print_step_time("Step 1", get_wall_time() - step1_wall_start);
 
     if (matrix_size > 0) {
         det_method_t coeff_method;
         slong res_deg_bound = compute_fq_dixon_resultant_degree_bound(polys, nvars + 1, nvars, npars);
+        clock_t step4_cpu_start;
+        double step4_wall_start;
 
         printf("\nStep 4: Compute Macaulay resultant\n");
         printf("Resultant degree bound: %ld\n", res_deg_bound);
 
         coeff_method = choose_macaulay_det_method(matrix_size, npars);
+        step4_cpu_start = clock();
+        step4_wall_start = get_wall_time();
         compute_fq_coefficient_matrix_det(result, coeff_matrix, matrix_size,
                                           npars, polys[0].ctx, coeff_method, res_deg_bound);
+        dixon_maybe_print_step_method_time("Step 4",
+                                           coeff_method,
+                                           ((double)(clock() - step4_cpu_start) / CLOCKS_PER_SEC),
+                                           get_wall_time() - step4_wall_start);
 
         if (result->nterms <= 100) {
             fq_mvpoly_print_with_names(result, "Final Resultant", NULL, par_names, gen_name, 0);

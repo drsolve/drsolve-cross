@@ -75,6 +75,7 @@ static void print_usage(const char *prog_name)
     printf("    -> Prints complexity info; saves to comp+timestamp.dat\n");
     printf("    Add --omega <value> (or -w <value>) to set omega (default: %.4g)\n",
            DIXON_OMEGA);
+    printf("    Add --time to print per-step timing; add --debug for extra diagnostics\n");
 
     printf("  Dixon with ideal reduction:\n");
     printf("    %s --ideal \"ideal_generators\" \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
@@ -103,6 +104,12 @@ static void print_usage(const char *prog_name)
     printf("  Silent mode:\n");
     printf("    %s --silent [--solve|--comp|-c] <args>\n", prog_name);
     printf("    -> No console output; solution file is still generated\n");
+
+    printf("  Diagnostics:\n");
+    printf("    %s --time <args>\n", prog_name);
+    printf("    %s --debug <args>\n", prog_name);
+    printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
+    printf("    -> --debug enables extra internal diagnostics and also turns on per-step timing\n");
 
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
@@ -135,7 +142,7 @@ static void print_usage(const char *prog_name)
     printf("  %s --random \"[3,3,2]\" 257\n", prog_name);
     printf("  %s -r \"[3]*3\" 0\n", prog_name);
     printf("  %s -r --solve \"[2]*3\" 257\n", prog_name);
-    printf("  %s -r --comp --omega 2.373 \"[4]*4\" 257\n", prog_name);
+    printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
     printf("  %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
     printf("  %s --field-eqution \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
     printf("  %s --silent \"x+y^2+t, x*y+t*y+1\" \"x\" 2^8\n", prog_name);
@@ -1713,6 +1720,8 @@ int main(int argc, char *argv[])
     int    rand_mode   = 0;   /* --random / -r */
     int    ideal_mode  = 0;   /*  --ideal flag */
     int    field_eq_mode = 0; /* --field-equation */
+    int    time_mode   = 0;   /* --time */
+    int    debug_mode  = 0;   /* --debug */
     int    arg_offset  = 0;
     double omega       = DIXON_OMEGA;   /* default, overridden by --omega */
     int    det_method_step1 = -1;  /* determinant method override for step 1 */
@@ -1738,6 +1747,10 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--field-equation") == 0 ||
                    strcmp(argv[i], "--field-eqution")  == 0) {
             field_eq_mode = 1; arg_offset++;
+        } else if (strcmp(argv[i], "--time") == 0) {
+            time_mode = 1; arg_offset++;
+        } else if (strcmp(argv[i], "--debug") == 0) {
+            debug_mode = 1; arg_offset++;
         } else if (strcmp(argv[i], "--macaulay") == 0) {
             resultant_method = RESULTANT_METHOD_MACAULAY; arg_offset++;
         } else if ((strcmp(argv[i], "--resultant") == 0 ||
@@ -2276,10 +2289,8 @@ int main(int argc, char *argv[])
     dixon_global_method_step4 = -1;
     dixon_global_method = -1;
     g_resultant_method = resultant_method;
-    if (!silent_mode && !comp_mode && !solve_mode && !ideal_str) {
-        printf("Resultant construction method: %s\n",
-               resultant_method == RESULTANT_METHOD_MACAULAY ? "Macaulay" : "Dixon");
-    }
+    g_dixon_show_step_timing = time_mode || debug_mode;
+    g_dixon_debug_mode = debug_mode;
     if (det_method_step1 != -1) {
         dixon_global_method_step1 = (det_method_t)det_method_step1;
         dixon_global_method = dixon_global_method_step1;

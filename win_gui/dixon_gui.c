@@ -605,7 +605,7 @@ static void create_tab_pages(void)
                                   0, 0, 10, 10, "257");
     g_tabs[2].label4 = create_label(g_tabs[2].panel, "Omega", 0, 0, 10, 10);
     g_tabs[2].edit4 = create_edit(g_tabs[2].panel, ID_COMP_OMEGA, ES_LEFT | WS_TABSTOP,
-                                  0, 0, 10, 10, "2.373");
+                                  0, 0, 10, 10, "2.81");
 
     g_tabs[3].panel = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE,
                                       0, 0, 10, 10, g_tab, NULL, g_instance, NULL);
@@ -642,7 +642,7 @@ static void create_tab_pages(void)
     SendMessageA(g_tabs[4].edit3, CB_SETCURSEL, DIXON_GUI_RANDOM_RESULTANT, 0);
     g_tabs[4].label4 = create_label(g_tabs[4].panel, "Omega", 0, 0, 10, 10);
     g_tabs[4].edit4 = create_edit(g_tabs[4].panel, ID_RAND_OMEGA, ES_LEFT | WS_TABSTOP,
-                                  0, 0, 10, 10, "2.373");
+                                  0, 0, 10, 10, "2.81");
 
     layout_tab_pages();
     show_active_tab();

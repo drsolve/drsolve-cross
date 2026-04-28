@@ -12,7 +12,7 @@
 #include "dixon_interface_flint.h"
 
 // Define omega parameter for complexity calculation
-#define DIXON_OMEGA 2.3
+#define DIXON_OMEGA 2.81
 
 // Helper structure to collect polynomial information
 typedef struct {
