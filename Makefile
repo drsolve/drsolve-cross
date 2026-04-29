@@ -1094,7 +1094,7 @@ check-verbose: $(DIXON_TARGET)
 	./$(DIXON_TARGET) -r --solve "[2]*3" 257; \
 	echo ""; \
 	echo "--- Test 6: Extension field 2^8 (silent) ---"; \
-	./$(DIXON_TARGET) --silent "x+y^2+t, x*y+t*y+1" "x" "2^8"; \
+	./$(DIXON_TARGET) --silent "x+y^2+t, x*y+t*y+1" "y" "2^8"; \
 	echo ""; \
 	echo "=== All verbose tests passed ==="; \
 	rm -f solution_*.dat comp_*.dat

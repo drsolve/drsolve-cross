@@ -37,12 +37,6 @@
 #define DIXON_NULL_DEVICE "/dev/null"
 #endif
 
-static int auto_adjust_elimination_vars_for_msolve_compat(const char *polys_str,
-                                                          const char *field_str,
-                                                          const char *input_vars_str,
-                                                          char **vars_str_out,
-                                                          int silent_mode);
-
 /* =========================================================================
  * Print usage
  * ========================================================================= */
@@ -243,7 +237,6 @@ static void dixon_fprint_arb_pretty(FILE *fp, const arb_t value, slong digits)
     }
     free(raw);
 }
-
 
 static char *trim(char *str)
 {
