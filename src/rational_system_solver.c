@@ -4,9 +4,12 @@
 
 #include "rational_system_solver.h"
 #include <ctype.h>
+#include <limits.h>
 #include <stdarg.h>
 
 static int rational_solver_realtime_progress_enabled = 0;
+static int rational_solver_internal_trace_enabled = 0;
+static int rational_solver_exact_only_enabled = 0;
 
 #define RATIONAL_REAL_ROOT_PREC 256
 #define RATIONAL_REAL_ROOT_DIGITS 20
@@ -32,6 +35,14 @@ void rational_solver_set_realtime_progress(int enabled) {
     rational_solver_realtime_progress_enabled = enabled;
 }
 
+void rational_solver_set_internal_trace(int enabled) {
+    rational_solver_internal_trace_enabled = enabled;
+}
+
+void rational_solver_set_exact_only(int enabled) {
+    rational_solver_exact_only_enabled = enabled;
+}
+
 static void rational_solver_progress(const char *fmt, ...) {
     if (!rational_solver_realtime_progress_enabled) {
         return;
@@ -43,6 +54,17 @@ static void rational_solver_progress(const char *fmt, ...) {
     vfprintf(stderr, fmt, args);
     fprintf(stderr, "\n");
     fflush(stderr);
+    va_end(args);
+}
+
+static void rational_trace_stdout(const char *fmt, ...) {
+    if (!rational_solver_internal_trace_enabled) {
+        return;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
     va_end(args);
 }
 
@@ -433,6 +455,20 @@ static int rational_contains_any_variable(const char *poly_str,
     return 0;
 }
 
+static int rational_polynomial_string_exists(char **poly_strings, slong count, const char *candidate) {
+    if (!poly_strings || !candidate) {
+        return 0;
+    }
+
+    for (slong i = 0; i < count; i++) {
+        if (poly_strings[i] && strcmp(poly_strings[i], candidate) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static int rational_real_root_matches_rational(const arb_t root,
                                                const fmpq_t *rational_roots,
                                                slong num_rational_roots,
@@ -745,7 +781,10 @@ static void rational_add_resultant_step(rational_solutions_t *sols, const char *
     va_end(args);
 
     rational_store_resultant_step(sols, buffer);
-    rational_solver_progress("%s", buffer);
+    if (strncmp(buffer, "Compute ", 8) == 0 ||
+        strncmp(buffer, "Found ", 6) == 0) {
+        rational_solver_progress("%s", buffer);
+    }
 }
 
 static char *rational_format_solution_set_line_from_arrays(char **variable_names, slong num_variables,
@@ -883,7 +922,7 @@ char** rational_extract_variables_improved(char **poly_strings, slong num_polys,
     char **temp_vars = (char**) malloc(100 * sizeof(char*));
     slong temp_count = 0;
     
-    printf("=== Improved Rational Variable Extraction ===\n");
+    rational_trace_stdout("=== Improved Rational Variable Extraction ===\n");
     
     for (slong poly_idx = 0; poly_idx < num_polys; poly_idx++) {
         const char *poly = poly_strings[poly_idx];
@@ -917,7 +956,7 @@ char** rational_extract_variables_improved(char **poly_strings, slong num_polys,
                 if (!already_exists) {
                     temp_vars[temp_count] = strdup(identifier);
                     temp_count++;
-                    printf("Found variable: %s\n", identifier);
+                    rational_trace_stdout("Found variable: %s\n", identifier);
                 }
                 
                 free(identifier);
@@ -937,9 +976,9 @@ char** rational_extract_variables_improved(char **poly_strings, slong num_polys,
     free(temp_vars);
     *num_vars_out = temp_count;
     
-    printf("Total variables found: %ld\n", temp_count);
+    rational_trace_stdout("Total variables found: %ld\n", temp_count);
     for (slong i = 0; i < temp_count; i++) {
-        printf("  Variable %ld: %s\n", i, final_vars[i]);
+        rational_trace_stdout("  Variable %ld: %s\n", i, final_vars[i]);
     }
     
     return final_vars;
@@ -1413,7 +1452,9 @@ void print_rational_solutions(const rational_solutions_t *sols) {
         return;
     }
 
-    if (sols->num_resultant_steps > 0) {
+    if (sols->num_resultant_steps > 0 &&
+        !rational_solver_realtime_progress_enabled &&
+        !rational_solver_internal_trace_enabled) {
         for (slong i = 0; i < sols->num_resultant_steps; i++) {
             printf("Progress: %s\n", sols->resultant_steps[i]);
         }
@@ -1535,7 +1576,7 @@ void print_rational_solutions(const rational_solutions_t *sols) {
 int rational_extract_and_sort_variables(char **poly_strings, slong num_polys,
                                          rational_variable_info_t **sorted_vars_out, slong *num_vars_out) {
     
-    printf("=== Analyzing Rational Polynomial Variables (improved) ===\n");
+    rational_trace_stdout("=== Analyzing Rational Polynomial Variables (improved) ===\n");
     
     char **all_vars = rational_extract_variables_improved(poly_strings, num_polys, num_vars_out);
     
@@ -1554,15 +1595,15 @@ int rational_extract_and_sort_variables(char **poly_strings, slong num_polys,
             }
         }
         
-        printf("Polynomial %ld: estimated degree = %ld\n", i + 1, total_degree);
+        rational_trace_stdout("Polynomial %ld: estimated degree = %ld\n", i + 1, total_degree);
     }
     
-    printf("Discovered variables (%ld): ", *num_vars_out);
+    rational_trace_stdout("Discovered variables (%ld): ", *num_vars_out);
     for (slong i = 0; i < *num_vars_out; i++) {
-        if (i > 0) printf(", ");
-        printf("%s", all_vars[i]);
+        if (i > 0) rational_trace_stdout(", ");
+        rational_trace_stdout("%s", all_vars[i]);
     }
-    printf("\n");
+    rational_trace_stdout("\n");
     
     rational_variable_info_t *var_info = (rational_variable_info_t*) malloc(*num_vars_out * sizeof(rational_variable_info_t));
     
@@ -1585,9 +1626,9 @@ int rational_extract_and_sort_variables(char **poly_strings, slong num_polys,
     
     qsort(var_info, *num_vars_out, sizeof(rational_variable_info_t), rational_compare_variables_by_degree);
     
-    printf("\nVariables sorted by maximum degree:\n");
+    rational_trace_stdout("\nVariables sorted by maximum degree:\n");
     for (slong i = 0; i < *num_vars_out; i++) {
-        printf("  %s: max degree %ld\n", var_info[i].name, var_info[i].max_degree);
+        rational_trace_stdout("  %s: max degree %ld\n", var_info[i].name, var_info[i].max_degree);
     }
     
     *sorted_vars_out = var_info;
@@ -1634,8 +1675,27 @@ static int rational_parse_string_to_fmpq_poly(const char *poly_str, const char *
         fmpq_set_si(term_coeff, 1, 1);
         
         slong term_degree = 0;
+        int wrapped_numeric = 0;
+        int inner_sign = 1;
+
+        if (*ptr == '(') {
+            const char *scan = ptr + 1;
+            while (isspace((unsigned char) *scan)) scan++;
+            if (*scan == '+') {
+                scan++;
+                while (isspace((unsigned char) *scan)) scan++;
+            } else if (*scan == '-') {
+                inner_sign = -1;
+                scan++;
+                while (isspace((unsigned char) *scan)) scan++;
+            }
+            if (isdigit((unsigned char) *scan) || *scan == '.') {
+                ptr = scan;
+                wrapped_numeric = 1;
+            }
+        }
         
-        if (isdigit(*ptr) || *ptr == '.') {
+        if (isdigit((unsigned char) *ptr) || *ptr == '.') {
             const char *num_start = ptr;
             while (isdigit(*ptr) || *ptr == '.' || *ptr == '/') ptr++;
             size_t num_len = ptr - num_start;
@@ -1662,6 +1722,16 @@ static int rational_parse_string_to_fmpq_poly(const char *poly_str, const char *
                 fmpz_clear(num);
             }
             free(num_str);
+        }
+
+        if (wrapped_numeric) {
+            while (isspace((unsigned char) *ptr)) ptr++;
+            if (*ptr == ')') {
+                ptr++;
+            }
+            if (inner_sign < 0) {
+                fmpq_neg(term_coeff, term_coeff);
+            }
         }
         
         while (isspace(*ptr)) ptr++;
@@ -1715,7 +1785,7 @@ static int rational_parse_string_to_fmpq_poly(const char *poly_str, const char *
 
 fmpq_t* rational_solve_univariate_equation_all_roots(const char *poly_str, const char *var_name,
                                                       slong *num_roots_out) {
-    printf("Solving univariate equation: %s (variable: %s)\n", poly_str, var_name);
+    rational_trace_stdout("Solving univariate equation: %s (variable: %s)\n", poly_str, var_name);
     
     fmpq_poly_t fmpq_poly;
     rational_parse_string_to_fmpq_poly(poly_str, var_name, fmpq_poly);
@@ -1733,15 +1803,17 @@ fmpq_t* rational_solve_univariate_equation_all_roots(const char *poly_str, const
         }
         *num_roots_out = roots.num_roots;
         
-        printf("Found %ld rational roots:\n", roots.num_roots);
+        rational_trace_stdout("Found %ld rational roots:\n", roots.num_roots);
         for (slong i = 0; i < roots.num_roots; i++) {
-            printf("  Root %ld: ", i + 1);
-            fmpq_print(roots.roots[i]);
-            printf("\n");
+            rational_trace_stdout("  Root %ld: ", i + 1);
+            if (rational_solver_internal_trace_enabled) {
+                fmpq_print(roots.roots[i]);
+            }
+            rational_trace_stdout("\n");
         }
     } else {
         *num_roots_out = 0;
-        printf("No rational roots found.\n");
+        rational_trace_stdout("No rational roots found.\n");
     }
     
     fmpq_roots_clear(&roots);
@@ -1752,7 +1824,7 @@ fmpq_t* rational_solve_univariate_equation_all_roots(const char *poly_str, const
 
 arb_t* rational_solve_univariate_equation_all_real_roots(const char *poly_str, const char *var_name,
                                                           slong *num_roots_out, slong prec) {
-    printf("Solving univariate equation over R: %s (variable: %s)\n", poly_str, var_name);
+    rational_trace_stdout("Solving univariate equation over R: %s (variable: %s)\n", poly_str, var_name);
 
     fmpq_poly_t fmpq_poly;
     rational_parse_string_to_fmpq_poly(poly_str, var_name, fmpq_poly);
@@ -1787,14 +1859,16 @@ arb_t* rational_solve_univariate_equation_all_real_roots(const char *poly_str, c
     *num_roots_out = result_count;
 
     if (result_count > 0) {
-        printf("Found %ld real roots:\n", result_count);
+        rational_trace_stdout("Found %ld real roots:\n", result_count);
         for (slong i = 0; i < result_count; i++) {
-            printf("  Root %ld: ", i + 1);
-            arb_printd(result_roots[i], RATIONAL_REAL_ROOT_DIGITS);
-            printf("\n");
+            rational_trace_stdout("  Root %ld: ", i + 1);
+            if (rational_solver_internal_trace_enabled) {
+                arb_printd(result_roots[i], RATIONAL_REAL_ROOT_DIGITS);
+            }
+            rational_trace_stdout("\n");
         }
     } else {
-        printf("No real roots found.\n");
+        rational_trace_stdout("No real roots found.\n");
     }
 
     fmpq_roots_clear(&rational_roots);
@@ -2164,9 +2238,9 @@ char* rational_eliminate_variable_dixon_with_selection(char **poly_strings, slon
     win_trace("enter rational_eliminate_variable_dixon_with_selection eqs=%ld elim_vars=%ld",
               combination ? combination->num_equations : -1, num_elim_vars);
 #endif
-    printf("  Entering rational_eliminate_variable_dixon_with_selection...\n");
-    printf("    combination->num_equations = %ld, num_elim_vars = %ld\n", combination->num_equations, num_elim_vars);
-    fflush(stdout);
+    rational_trace_stdout("  Entering rational_eliminate_variable_dixon_with_selection...\n");
+    rational_trace_stdout("    combination->num_equations = %ld, num_elim_vars = %ld\n", combination->num_equations, num_elim_vars);
+    if (rational_solver_internal_trace_enabled) fflush(stdout);
 
 #ifdef _WIN32
     if (combination->num_equations == 3 && num_elim_vars == 2) {
@@ -2247,8 +2321,8 @@ char* rational_eliminate_variable_dixon_with_selection(char **poly_strings, slon
 #endif
     
     if (combination->num_equations == num_elim_vars + 1) {
-        printf("    Using rational dixon_str_rational for elimination\n");
-        fflush(stdout);
+        rational_trace_stdout("    Using rational dixon_str_rational for elimination\n");
+        if (rational_solver_internal_trace_enabled) fflush(stdout);
         
         size_t total_poly_len = 0;
         for (slong i = 0; i < combination->num_equations; i++) {
@@ -2276,22 +2350,22 @@ char* rational_eliminate_variable_dixon_with_selection(char **poly_strings, slon
             strcat(combined_vars, elim_vars[i]);
         }
         
-        printf("    Calling dixon_str_rational_with_file...\n");
-        printf("    Polys: %s\n", combined_polys);
-        printf("    Elim:  %s\n", combined_vars);
-        fflush(stdout);
+        rational_trace_stdout("    Calling dixon_str_rational_with_file...\n");
+        rational_trace_stdout("    Polys: %s\n", combined_polys);
+        rational_trace_stdout("    Elim:  %s\n", combined_vars);
+        if (rational_solver_internal_trace_enabled) fflush(stdout);
         
         char *result = dixon_str_rational_with_file(combined_polys, combined_vars, NULL);
         
-        printf("    dixon_str_rational_with_file returned: %s\n", result ? result : "NULL");
-        fflush(stdout);
+        rational_trace_stdout("    dixon_str_rational_with_file returned: %s\n", result ? result : "NULL");
+        if (rational_solver_internal_trace_enabled) fflush(stdout);
         
         free(combined_polys);
         free(combined_vars);
         return result;
     } else {
-        printf("    Number of equations does not match, returning 0\n");
-        fflush(stdout);
+        rational_trace_stdout("    Number of equations does not match, returning 0\n");
+        if (rational_solver_internal_trace_enabled) fflush(stdout);
         return strdup("0");
     }
 }
@@ -2303,13 +2377,15 @@ int rational_verify_solution_set(char **original_polys, slong num_polys,
         return 0;
     }
 
-    printf("    Verifying rational solution: ");
+    rational_trace_stdout("    Verifying rational solution: ");
     for (slong v = 0; v < num_vars; v++) {
-        if (v > 0) printf(", ");
-        printf("%s=", sorted_vars[v].name);
-        fmpq_print(solution_values[v][0]);
+        if (v > 0) rational_trace_stdout(", ");
+        rational_trace_stdout("%s=", sorted_vars[v].name);
+        if (rational_solver_internal_trace_enabled) {
+            fmpq_print(solution_values[v][0]);
+        }
     }
-    printf("\n");
+    rational_trace_stdout("\n");
 
     double *values = (double *) calloc(num_vars, sizeof(double));
     if (!values) {
@@ -2327,11 +2403,11 @@ int rational_verify_solution_set(char **original_polys, slong num_polys,
     free(values);
 
     if (!ok) {
-        printf("    Verification FAILED (max residual %.3e)\n", max_residual);
+        rational_trace_stdout("    Verification FAILED (max residual %.3e)\n", max_residual);
         return 0;
     }
 
-    printf("    Verification PASSED\n");
+    rational_trace_stdout("    Verification PASSED\n");
     return 1;
 }
 
@@ -2342,13 +2418,13 @@ void rational_filter_solutions_by_verification(rational_solutions_t *sols,
         return;
     }
     
-    printf("\n=== Verifying Rational Solution Sets ===\n");
+    rational_trace_stdout("\n=== Verifying Rational Solution Sets ===\n");
     
     slong verified_count = 0;
     int *valid_sets = (int*) calloc(sols->num_solution_sets, sizeof(int));
     
     for (slong set = 0; set < sols->num_solution_sets; set++) {
-        printf("  Checking rational solution set %ld...\n", set + 1);
+        rational_trace_stdout("  Checking rational solution set %ld...\n", set + 1);
         int pass = 0;
         char *candidate_line = rational_format_solution_set_line_from_arrays(
             sols->variable_names,
@@ -2360,8 +2436,8 @@ void rational_filter_solutions_by_verification(rational_solutions_t *sols,
         int is_complete = 1;
         for (slong var = 0; var < sols->num_variables; var++) {
             if (sols->solutions_per_var[set * sols->num_variables + var] == 0) {
-                printf("    Solution set %ld incomplete (missing value for %s)\n", 
-                       set + 1, sols->variable_names[var]);
+                rational_trace_stdout("    Solution set %ld incomplete (missing value for %s)\n", 
+                                      set + 1, sols->variable_names[var]);
                 is_complete = 0;
                 break;
             }
@@ -2381,8 +2457,8 @@ void rational_filter_solutions_by_verification(rational_solutions_t *sols,
         rational_add_candidate_solution(sols, candidate_line, pass);
     }
     
-    printf("  Verification complete: %ld out of %ld solution sets are valid\n", 
-           verified_count, sols->num_solution_sets);
+    rational_trace_stdout("  Verification complete: %ld out of %ld solution sets are valid\n", 
+                          verified_count, sols->num_solution_sets);
     sols->checked_solution_sets = sols->num_solution_sets;
     sols->verified_solution_sets = verified_count;
     
@@ -2451,7 +2527,7 @@ void rational_filter_solutions_by_verification(rational_solutions_t *sols,
     }
     
     free(valid_sets);
-    printf("=== Verification Complete ===\n\n");
+    rational_trace_stdout("=== Verification Complete ===\n\n");
 }
 
 int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys, slong num_polys,
@@ -2459,7 +2535,7 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                                                              fmpq_t *base_solutions, slong num_base_solutions,
                                                              rational_solutions_t *sols) {
     if (sols->has_no_solutions == -1) {
-        printf("Back substitution SKIPPED: system already has dimension > 0 status\n");
+        rational_trace_stdout("Back substitution SKIPPED: system already has dimension > 0 status\n");
         return 1;
     }
     
@@ -2467,39 +2543,63 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
         return 1; 
     }
     
-    printf("Starting rational back substitution process...\n");
-    printf("Base variable %s has %ld solutions\n", sorted_vars[0].name, num_base_solutions);
+    rational_trace_stdout("Starting rational back substitution process...\n");
+    rational_trace_stdout("Base variable %s has %ld solutions\n", sorted_vars[0].name, num_base_solutions);
     
     fmpq_t ***all_solution_sets = NULL;
     slong *all_solutions_per_var = NULL;
     slong total_solution_sets = 0;
     
     for (slong base_idx = 0; base_idx < num_base_solutions; base_idx++) {
-        printf("\n--- Processing rational base solution %ld: ", base_idx + 1);
-        fmpq_print(base_solutions[base_idx]);
-        printf(" ---\n");
+        rational_trace_stdout("\n--- Processing rational base solution %ld: ", base_idx + 1);
+        if (rational_solver_internal_trace_enabled) {
+            fmpq_print(base_solutions[base_idx]);
+        }
+        rational_trace_stdout(" ---\n");
         
         char **reduced_polys = (char**) malloc(num_polys * sizeof(char*));
         slong num_nonzero_polys = 0;
+        int inconsistent_branch = 0;
         
         for (slong poly_idx = 0; poly_idx < num_polys; poly_idx++) {
             char *substituted = rational_substitute_variable_in_polynomial(original_polys[poly_idx],
                                                                            sorted_vars[0].name,
                                                                            base_solutions[base_idx]);
-            printf("Equation %ld after substituting %s: %s\n", 
-                   poly_idx, sorted_vars[0].name, substituted);
+            rational_trace_stdout("Equation %ld after substituting %s: %s\n", 
+                                  poly_idx, sorted_vars[0].name, substituted);
             
             if (!rational_polynomial_is_numerically_zero(substituted, sorted_vars + 1, num_vars - 1)) {
-                reduced_polys[num_nonzero_polys] = substituted;
-                num_nonzero_polys++;
+                if (!rational_contains_any_variable(substituted, sorted_vars + 1, num_vars - 1)) {
+                    rational_trace_stdout("Equation %ld reduced to nonzero constant %s, so this base solution is impossible\n",
+                                          poly_idx, substituted);
+                    free(substituted);
+                    inconsistent_branch = 1;
+                    break;
+                }
+                if (rational_polynomial_string_exists(reduced_polys, num_nonzero_polys, substituted)) {
+                    rational_trace_stdout("Equation %ld duplicates an existing reduced equation, skipping it\n",
+                                          poly_idx);
+                    free(substituted);
+                } else {
+                    reduced_polys[num_nonzero_polys] = substituted;
+                    num_nonzero_polys++;
+                }
             } else {
-                printf("Equation %ld became zero (satisfied)\n", poly_idx);
+                rational_trace_stdout("Equation %ld became zero (satisfied)\n", poly_idx);
                 free(substituted);
             }
         }
+
+        if (inconsistent_branch) {
+            for (slong i = 0; i < num_nonzero_polys; i++) {
+                free(reduced_polys[i]);
+            }
+            free(reduced_polys);
+            continue;
+        }
         
         if (num_nonzero_polys == 0) {
-            printf("All equations satisfied by base solution\n");
+            rational_trace_stdout("All equations satisfied by base solution\n");
             if (total_solution_sets == 0) {
                 all_solution_sets = (fmpq_t***) malloc(sizeof(fmpq_t**));
                 all_solutions_per_var = (slong*) calloc(num_vars, sizeof(slong));
@@ -2531,11 +2631,31 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
             rational_equation_combination_t *combinations = NULL;
             slong num_combinations = 0;
             
-            if (num_nonzero_polys == target_equations) {
+            if (target_equations == 1) {
+                slong best_idx = 0;
+                slong best_degree = LONG_MAX;
+                combinations = (rational_equation_combination_t*) malloc(sizeof(rational_equation_combination_t));
+                combinations[0].equation_indices = (slong*) malloc(sizeof(slong));
+                combinations[0].num_equations = 1;
+                combinations[0].tried = 0;
+                combinations[0].success = 0;
+                for (slong i = 0; i < num_nonzero_polys; i++) {
+                    slong degree = rational_get_variable_max_degree_in_polynomial(reduced_polys[i],
+                                                                                  sorted_vars[1].name);
+                    if (degree < best_degree) {
+                        best_degree = degree;
+                        best_idx = i;
+                    }
+                }
+                combinations[0].equation_indices[0] = best_idx;
+                num_combinations = 1;
+            } else if (num_nonzero_polys == target_equations) {
                 num_combinations = 1;
                 combinations = (rational_equation_combination_t*) malloc(sizeof(rational_equation_combination_t));
                 combinations[0].equation_indices = (slong*) malloc(target_equations * sizeof(slong));
                 combinations[0].num_equations = target_equations;
+                combinations[0].tried = 0;
+                combinations[0].success = 0;
                 for (slong i = 0; i < target_equations; i++) {
                     combinations[0].equation_indices[i] = i;
                 }
@@ -2544,21 +2664,26 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                                                          &combinations, &num_combinations);
             }
             
-            printf("Generated %ld equation combinations to try\n", num_combinations);
+            rational_trace_stdout("Generated %ld equation combinations to try\n", num_combinations);
             
             int found_finite_solution = 0;
+            rational_variable_info_t *remaining_vars = (rational_variable_info_t*) malloc((num_vars - 1) * sizeof(rational_variable_info_t));
+            for (slong i = 1; i < num_vars; i++) {
+                remaining_vars[i - 1] = sorted_vars[i];
+            }
             
             for (slong comb_idx = 0; comb_idx < num_combinations; comb_idx++) {
-                printf("  Trying combination %ld: equations ", comb_idx + 1);
+                rational_trace_stdout("  Trying combination %ld: equations ", comb_idx + 1);
                 for (slong i = 0; i < target_equations; i++) {
-                    if (i > 0) printf(", ");
-                    printf("%ld", combinations[comb_idx].equation_indices[i]);
+                    if (i > 0) rational_trace_stdout(", ");
+                    rational_trace_stdout("%ld", combinations[comb_idx].equation_indices[i]);
                 }
-                printf("\n");
+                rational_trace_stdout("\n");
                 
+                int combination_uses_all_reduced_equations = (num_nonzero_polys == target_equations);
                 char **final_polys = (char**) malloc(target_equations * sizeof(char*));
                 for (slong i = 0; i < target_equations; i++) {
-                    final_polys[i] = strdup(reduced_polys[combinations[comb_idx].equation_indices[i]]);
+                    final_polys[i] = reduced_polys[combinations[comb_idx].equation_indices[i]];
                 }
 
                 {
@@ -2582,10 +2707,6 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                     if (base_str) flint_free(base_str);
                 }
                 
-                rational_variable_info_t *remaining_vars = (rational_variable_info_t*) malloc((num_vars - 1) * sizeof(rational_variable_info_t));
-                for (slong i = 1; i < num_vars; i++) {
-                    remaining_vars[i - 1] = sorted_vars[i];
-                }
 #ifdef _WIN32
                 win_trace("RECURSE base_idx=%ld/%ld base=%s target_eq=%ld comb=%ld/%ld vars=%ld",
                           base_idx + 1, num_base_solutions, sorted_vars[0].name,
@@ -2606,13 +2727,13 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
 #endif
                 
                 if (test_sols && test_sols->is_valid) {
-                    if (test_sols->num_solution_sets > 0) {
+                    if (test_sols->num_solution_sets > 0 && !combination_uses_all_reduced_equations) {
                         rational_filter_solutions_by_verification(test_sols,
                                                                   reduced_polys,
                                                                   num_nonzero_polys,
                                                                   remaining_vars);
                     }
-                    if (test_sols->num_real_solution_sets > 0) {
+                    if (test_sols->num_real_solution_sets > 0 && !combination_uses_all_reduced_equations) {
                         rational_filter_real_solutions_by_verification(test_sols,
                                                                        reduced_polys,
                                                                        remaining_vars);
@@ -2620,12 +2741,12 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
 
                     rational_merge_solver_logs(sols, test_sols);
                     if (test_sols->has_no_solutions == -1) {
-                        printf("  Combination %ld: dimension > 0\n", comb_idx + 1);
+                        rational_trace_stdout("  Combination %ld: dimension > 0\n", comb_idx + 1);
                     } else if (test_sols->num_solution_sets == 0 &&
                                test_sols->num_real_solution_sets == 0) {
-                        printf("  Combination %ld: no solutions\n", comb_idx + 1);
+                        rational_trace_stdout("  Combination %ld: no solutions\n", comb_idx + 1);
                     } else {
-                        printf("  鉁?Combination %ld succeeded with finite solutions!\n", comb_idx + 1);
+                        rational_trace_stdout("  ✓ Combination %ld succeeded with finite solutions!\n", comb_idx + 1);
                         found_finite_solution++;
                         
                         if (test_sols->num_solution_sets > 0) {
@@ -2699,20 +2820,17 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                 rational_solutions_clear(test_sols);
                 free(test_sols);
                 
-                for (slong i = 0; i < target_equations; i++) {
-                    free(final_polys[i]);
-                }
                 free(final_polys);
-                free(remaining_vars);
                 
                 if (found_finite_solution > 0) {
                     break;
                 }
             }
+            free(remaining_vars);
             
             rational_free_equation_combinations(combinations, num_combinations);
 
-            if (found_finite_solution == 0) {
+            if (!rational_solver_exact_only_enabled && found_finite_solution == 0) {
                 slong old_real_count = sols->num_real_solution_sets;
                 arb_t base_real;
                 arb_init(base_real);
@@ -2723,9 +2841,9 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
                 arb_clear(base_real);
 
                 if (sols->num_real_solution_sets > old_real_count) {
-                    printf("  Numerical back-substitution recovered %ld real solution set(s) for base solution %ld\n",
-                           sols->num_real_solution_sets - old_real_count,
-                           base_idx + 1);
+                    rational_trace_stdout("Numerical back-substitution recovered %ld real solution set(s) for base solution %ld\n",
+                                          sols->num_real_solution_sets - old_real_count,
+                                          base_idx + 1);
                 }
             }
         }
@@ -2751,33 +2869,43 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
 #ifdef _WIN32
     win_trace("elim function enter vars=%ld polys=%ld", num_vars, num_polys);
 #endif
-    printf("\n=== Rational Elimination Solver ===\n");
-    printf("Number of variables: %ld\n", num_vars);
-    printf("Number of equations: %ld\n", num_polys);
+    rational_trace_stdout("\n=== Rational Elimination Solver ===\n");
+    rational_trace_stdout("Number of variables: %ld\n", num_vars);
+    rational_trace_stdout("Number of equations: %ld\n", num_polys);
     
-    printf("Sorted variables order:\n");
+    rational_trace_stdout("Sorted variables order:\n");
     for (slong i = 0; i < num_vars; i++) {
-        printf("  [%ld] %s (max_degree=%ld)\n", i, sorted_vars[i].name, sorted_vars[i].max_degree);
+        rational_trace_stdout("  [%ld] %s (max_degree=%ld)\n", i, sorted_vars[i].name, sorted_vars[i].max_degree);
     }
-    fflush(stdout);
+    if (rational_solver_internal_trace_enabled) fflush(stdout);
 #ifdef _WIN32
     win_trace("elim sorted vars printed");
 #endif
     
     if (num_vars == 0) {
-        printf("No variables to solve for.\n");
+        rational_trace_stdout("No variables to solve for.\n");
         return 1;
     }
     
     if (num_vars == 1) {
-        printf("Single variable case: solving directly\n");
+        rational_trace_stdout("Single variable case: solving directly\n");
         slong num_roots = 0;
         fmpq_t *roots = rational_solve_univariate_equation_all_roots(poly_strings[0], sorted_vars[0].name, &num_roots);
         slong num_real_roots = 0;
-        arb_t *real_roots = rational_solve_univariate_equation_all_real_roots(
-            poly_strings[0], sorted_vars[0].name, &num_real_roots, sols->real_solution_precision
-        );
-        sols->num_base_solutions = num_real_roots;
+        arb_t *real_roots = NULL;
+        if (!rational_solver_exact_only_enabled) {
+            real_roots = rational_solve_univariate_equation_all_real_roots(
+                poly_strings[0], sorted_vars[0].name, &num_real_roots, sols->real_solution_precision
+            );
+        }
+        sols->num_base_solutions = rational_solver_exact_only_enabled
+                                   ? num_roots
+                                   : ((num_real_roots > 0) ? num_real_roots : num_roots);
+        if (sols->num_base_solutions > 0) {
+            rational_add_resultant_step(sols,
+                                        "Found %ld value(s) for %s, starting back substitution",
+                                        sols->num_base_solutions, sorted_vars[0].name);
+        }
         
         if (num_roots > 0) {
             sols->solution_sets = (fmpq_t***) calloc(num_roots, sizeof(fmpq_t**));
@@ -2792,7 +2920,7 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
             sols->num_solution_sets = num_roots;
         }
 
-        if (num_real_roots > 0) {
+        if (!rational_solver_exact_only_enabled && num_real_roots > 0) {
             for (slong i = 0; i < num_real_roots; i++) {
                 if (!rational_real_root_matches_rational(real_roots[i], roots, num_roots, sols->real_solution_precision)) {
                     double value = rational_arb_to_double(real_roots[i]);
@@ -2826,13 +2954,13 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
     win_trace("elim vars prepared keep=%s", keep_var);
 #endif
     
-    printf("Eliminating variables: ");
+    rational_trace_stdout("Eliminating variables: ");
     for (slong i = 0; i < num_elim_vars; i++) {
-        if (i > 0) printf(", ");
-        printf("%s", elim_vars[i]);
+        if (i > 0) rational_trace_stdout(", ");
+        rational_trace_stdout("%s", elim_vars[i]);
     }
-    printf("\nKeeping variable: %s\n", keep_var);
-    fflush(stdout);
+    rational_trace_stdout("\nKeeping variable: %s\n", keep_var);
+    if (rational_solver_internal_trace_enabled) fflush(stdout);
     
     slong target_equations = num_vars;
     
@@ -2866,7 +2994,7 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
                                                  &combinations, &num_combinations);
     }
     
-    printf("Generated %ld equation combinations to try\n", num_combinations);
+    rational_trace_stdout("Generated %ld equation combinations to try\n", num_combinations);
     sols->total_combinations = num_combinations;
 #ifdef _WIN32
     win_trace("elim start vars=%ld polys=%ld combs=%ld keep=%s", num_vars, num_polys, num_combinations, keep_var);
@@ -2877,13 +3005,33 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
     slong successful_combinations = 0;
     
     for (slong comb_idx = 0; comb_idx < num_combinations; comb_idx++) {
-        printf("\n=== Trying combination %ld ===\n", comb_idx + 1);
-        printf("Equations: ");
+        rational_trace_stdout("\n=== Trying combination %ld ===\n", comb_idx + 1);
+        rational_trace_stdout("Equations: ");
         for (slong i = 0; i < combinations[comb_idx].num_equations; i++) {
-            if (i > 0) printf(", ");
-            printf("%ld", combinations[comb_idx].equation_indices[i] + 1);
+            if (i > 0) rational_trace_stdout(", ");
+            rational_trace_stdout("%ld", combinations[comb_idx].equation_indices[i] + 1);
         }
-        printf("\n");
+        rational_trace_stdout("\n");
+
+        if (num_vars == 2) {
+            rational_add_resultant_step(sols,
+                                        "Compute resultant of eq(%ld,%ld) eliminating %s",
+                                        combinations[comb_idx].equation_indices[0] + 1,
+                                        combinations[comb_idx].equation_indices[1] + 1,
+                                        elim_vars[0]);
+        } else if (num_combinations == 1 && num_polys == target_equations) {
+            rational_add_resultant_step(sols,
+                                        "Compute Dixon resultant of eq(1..%ld) eliminating %ld variable(s)",
+                                        num_polys, num_elim_vars);
+        } else {
+            char *eq_list = rational_format_equation_index_list(combinations[comb_idx].equation_indices,
+                                                                target_equations);
+            rational_add_resultant_step(sols,
+                                        "Compute Dixon resultant of eq(%s) eliminating %ld variable(s)",
+                                        eq_list ? eq_list : "?",
+                                        num_elim_vars);
+            if (eq_list) free(eq_list);
+        }
         
         combinations[comb_idx].tried = 1;
 #ifdef _WIN32
@@ -2900,11 +3048,30 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
                   resultant ? resultant : "(null)");
 #endif
         
-        printf("Resultant polynomial: %s\n", resultant);
+        rational_trace_stdout("Resultant polynomial: %s\n", resultant);
         
         if (resultant && strcmp(resultant, "0") != 0) {
             combinations[comb_idx].success = 1;
             successful_combinations++;
+            if (num_vars == 2) {
+                rational_add_resultant_step(sols,
+                                            "eq(%ld,%ld) -> non-zero resultant in %s",
+                                            combinations[comb_idx].equation_indices[0] + 1,
+                                            combinations[comb_idx].equation_indices[1] + 1,
+                                            keep_var);
+            } else if (num_combinations == 1 && num_polys == target_equations) {
+                rational_add_resultant_step(sols,
+                                            "eq(1..%ld) -> non-zero resultant in %s",
+                                            num_polys, keep_var);
+            } else {
+                char *eq_list = rational_format_equation_index_list(combinations[comb_idx].equation_indices,
+                                                                    target_equations);
+                rational_add_resultant_step(sols,
+                                            "eq(%s) -> non-zero resultant in %s",
+                                            eq_list ? eq_list : "?",
+                                            keep_var);
+                if (eq_list) free(eq_list);
+            }
             
             if (!working_resultant) {
                 working_resultant = resultant;
@@ -2912,6 +3079,23 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
                 free(resultant);
             }
         } else {
+            if (num_vars == 2) {
+                rational_add_resultant_step(sols,
+                                            "eq(%ld,%ld) -> zero resultant",
+                                            combinations[comb_idx].equation_indices[0] + 1,
+                                            combinations[comb_idx].equation_indices[1] + 1);
+            } else if (num_combinations == 1 && num_polys == target_equations) {
+                rational_add_resultant_step(sols,
+                                            "eq(1..%ld) -> zero resultant",
+                                            num_polys);
+            } else {
+                char *eq_list = rational_format_equation_index_list(combinations[comb_idx].equation_indices,
+                                                                    target_equations);
+                rational_add_resultant_step(sols,
+                                            "eq(%s) -> zero resultant",
+                                            eq_list ? eq_list : "?");
+                if (eq_list) free(eq_list);
+            }
             if (resultant) free(resultant);
         }
     }
@@ -2919,7 +3103,7 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
     free(elim_vars);
     
     if (successful_combinations == 0) {
-        printf("All %ld equation combinations resulted in zero resultant\n", num_combinations);
+        rational_trace_stdout("All %ld equation combinations resulted in zero resultant\n", num_combinations);
         sols->successful_combinations = 0;
         sols->has_no_solutions = -1;
         rational_free_equation_combinations(combinations, num_combinations);
@@ -2927,8 +3111,8 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
     }
     
     sols->successful_combinations = successful_combinations;
-    printf("Found %ld non-zero resultant(s) out of %ld combinations, proceeding with solving...\n", 
-           successful_combinations, num_combinations);
+    rational_trace_stdout("Found %ld non-zero resultant(s) out of %ld combinations, proceeding with solving...\n",
+                          successful_combinations, num_combinations);
     
     if (working_resultant) {
 #ifdef _WIN32
@@ -2940,13 +3124,23 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
         win_trace("solve resultant rational roots done count=%ld", num_roots);
 #endif
         slong num_real_roots = 0;
-        arb_t *real_base_roots = rational_solve_univariate_equation_all_real_roots(
-            working_resultant, keep_var, &num_real_roots, sols->real_solution_precision
-        );
+        arb_t *real_base_roots = NULL;
+        if (!rational_solver_exact_only_enabled) {
+            real_base_roots = rational_solve_univariate_equation_all_real_roots(
+                working_resultant, keep_var, &num_real_roots, sols->real_solution_precision
+            );
+        }
 #ifdef _WIN32
         win_trace("solve resultant real roots done count=%ld", num_real_roots);
 #endif
-        sols->num_base_solutions = (num_real_roots > 0) ? num_real_roots : num_roots;
+        sols->num_base_solutions = rational_solver_exact_only_enabled
+                                   ? num_roots
+                                   : ((num_real_roots > 0) ? num_real_roots : num_roots);
+        if (sols->num_base_solutions > 0) {
+            rational_add_resultant_step(sols,
+                                         "Found %ld value(s) for %s, starting back substitution",
+                                         sols->num_base_solutions, keep_var);
+        }
         
         if (num_roots > 0) {
 #ifdef _WIN32
@@ -2961,10 +3155,10 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
 #endif
             success = 1;
         } else {
-            printf("No rational roots found for the resultant.\n");
+            rational_trace_stdout("No rational roots found for the resultant.\n");
         }
 
-        if (num_real_roots > num_roots) {
+        if (!rational_solver_exact_only_enabled && num_real_roots > num_roots) {
 #ifdef _WIN32
             win_trace("numeric backsolve irrational start extra=%ld", num_real_roots - num_roots);
 #endif

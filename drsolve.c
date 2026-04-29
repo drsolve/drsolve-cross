@@ -29,7 +29,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.2.1"
+#define PROGRAM_VERSION "0.2.2"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -70,9 +70,11 @@ static void print_usage(const char *prog_name)
     printf("  Polynomial system solver:\n");
     printf("    %s \"polynomials\" field_size\n", prog_name);
     printf("    %s --solve \"polynomials\" field_size\n", prog_name);
+    printf("    %s --solve-rational-only \"polynomials\" 0\n", prog_name);
     printf("    %s --solve-verbose \"polynomials\" field_size\n", prog_name);
     printf("    -> Writes all solutions to solution+timestamp.dat\n");
-    printf("    -> `--solve` is optional here; `--solve-verbose` keeps full solver logs\n");
+    printf("    -> `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
+    printf("    -> `--solve-verbose` keeps full solver logs\n");
 
     printf("  Complexity analysis:\n");
     printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
@@ -1861,6 +1863,7 @@ int main(int argc, char *argv[])
     int    silent_mode = 0;
     int    solve_mode  = 0;
     int    solve_verbose_mode = 0;
+    int    solve_rational_only_mode = 0;
     int    comp_mode   = 0;
     int    rand_mode   = 0;   /* --random / -r */
     int    ideal_mode  = 0;   /*  --ideal flag */
@@ -1879,6 +1882,8 @@ int main(int argc, char *argv[])
             silent_mode = 1; arg_offset++;
         } else if (strcmp(argv[i], "--solve-verbose") == 0) {
             solve_mode = 1; solve_verbose_mode = 1; arg_offset++;
+        } else if (strcmp(argv[i], "--solve-rational-only") == 0) {
+            solve_mode = 1; solve_rational_only_mode = 1; arg_offset++;
         } else if (strcmp(argv[i], "--solve") == 0) {
             solve_mode = 1; arg_offset++;
         } else if (strcmp(argv[i], "--comp") == 0 ||
@@ -2292,6 +2297,9 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error: field_size=0 currently does not support --field-equation.\n");
             goto cleanup_fail;
         }
+    } else if (solve_rational_only_mode) {
+        fprintf(stderr, "Error: --solve-rational-only is only supported for field_size=0.\n");
+        goto cleanup_fail;
     }
     if (large_prime_mode) {
         if (ideal_str) {
@@ -2562,7 +2570,9 @@ int main(int argc, char *argv[])
         int suppress_solver_trace = silent_mode;
 
         if (rational_mode) {
-            rational_solver_set_realtime_progress(0);
+            rational_solver_set_realtime_progress(!silent_mode && !solve_verbose_mode);
+            rational_solver_set_internal_trace(!silent_mode && solve_verbose_mode);
+            rational_solver_set_exact_only(solve_rational_only_mode);
 
             if (suppress_solver_trace) {
                 redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
@@ -2578,7 +2588,7 @@ int main(int argc, char *argv[])
                 restore_fd(STDOUT_FILENO, orig_stdout);
             }
         } else if (large_prime_mode) {
-            large_prime_solver_set_realtime_progress(0);
+            large_prime_solver_set_realtime_progress(!silent_mode && !solve_verbose_mode);
 
             if (suppress_solver_trace) {
                 redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
@@ -2594,7 +2604,8 @@ int main(int argc, char *argv[])
                 restore_fd(STDOUT_FILENO, orig_stdout);
             }
         } else {
-            polynomial_solver_set_realtime_progress(0);
+            polynomial_solver_set_realtime_progress(!silent_mode && !solve_verbose_mode);
+            polynomial_solver_set_internal_trace(!silent_mode && solve_verbose_mode);
 
             if (suppress_solver_trace) {
                 redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);

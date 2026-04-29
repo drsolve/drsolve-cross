@@ -66,6 +66,8 @@ typedef struct rational_equation_combination {
 } rational_equation_combination_t;
 
 void rational_solver_set_realtime_progress(int enabled);
+void rational_solver_set_internal_trace(int enabled);
+void rational_solver_set_exact_only(int enabled);
 void rational_solutions_init(rational_solutions_t *sols, slong num_vars);
 void rational_solutions_clear(rational_solutions_t *sols);
 void print_rational_solutions(const rational_solutions_t *sols);

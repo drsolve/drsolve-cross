@@ -79,6 +79,7 @@ void free_equation_combinations(equation_combination_t *combinations, slong num_
 
 // Solution structure management
 void polynomial_solver_set_realtime_progress(int enabled);
+void polynomial_solver_set_internal_trace(int enabled);
 void polynomial_solutions_init(polynomial_solutions_t *sols, slong num_vars, 
                                const fq_nmod_ctx_t ctx);
 void polynomial_solutions_clear(polynomial_solutions_t *sols);

@@ -994,6 +994,7 @@ static int lp_append_current_solution(lp_solver_state_t *state, fmpz_t *current_
         fmpz_set(sols->solution_values[idx][v], current_values[v]);
     }
 
+    lp_progress("Found solution set %ld", idx + 1);
     return 1;
 }
 
@@ -1089,6 +1090,11 @@ static int lp_solve_recursive(lp_solver_state_t *state,
                 return LP_SOLVE_ERROR;
             }
 
+            if (num_vars > 1) {
+                lp_progress("Compute Dixon resultant for %ld variable(s) from %ld equation(s)",
+                            num_vars, target_equations);
+            }
+
             if (num_vars == 1)
                 resultant = strdup(selected_polys);
             else
@@ -1121,6 +1127,8 @@ static int lp_solve_recursive(lp_solver_state_t *state,
                 lp_root_list_clear(&roots);
                 continue;
             }
+
+            lp_progress("Found %ld root(s) for %s", roots.count, vars[0].name);
 
             for (slong r = 0; r < roots.count; r++) {
                 char **reduced_polys = NULL;
@@ -1428,6 +1436,8 @@ large_prime_solutions_t *solve_large_prime_polynomial_system_string(const char *
         free_split_strings(poly_strings, num_polys);
         return NULL;
     }
+
+    lp_progress("Starting large-prime solver: %ld variable(s), %ld equation(s)", num_vars, num_polys);
 
     sols = (large_prime_solutions_t *) malloc(sizeof(large_prime_solutions_t));
     if (!sols) {
