@@ -101,7 +101,7 @@ brew install mingw-w64
 
 ### Option A: Use bundled third-party dependencies (default)
 
-The bundled `third_party/` and `runtime/` directories are used automatically:
+The bundled `mingw/`, `pml_det/`, and `runtime/` directories are used automatically:
 
 ```bash
 cmake -B build-win \
@@ -139,7 +139,7 @@ cmake --build build-win -j$(nproc)
 2. Copy the "Version" and "SHA256" values from each page and update them in `CMakeLists.txt` (lines 94-138)
 
 **Note about PML:**
-PML library is not available in MSYS2 repositories. You still need to provide `PML_ROOT` explicitly or use the bundled version in `third_party/pml/`.
+PML library is not available in MSYS2 repositories. You still need to provide `PML_ROOT` explicitly or use the bundled determinant subset in `pml_det/`.
 
 ### Option C: Use system cross-compiler libraries
 

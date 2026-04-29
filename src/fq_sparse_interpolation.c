@@ -1,5 +1,4 @@
 #include "fq_sparse_interpolation.h"
-#include "nmod_vec_extra.h"
 #include <flint/nmod_vec.h>
 
 #include <limits.h>
@@ -160,6 +159,9 @@ static void sparse_multipoint_tree_init_empty(sparse_multipoint_tree_t* tree);
 static int sparse_bm_inner_timing_enabled(void);
 static int sparse_bm_hist_enabled(void);
 static inline void sparse_bm_axpy(mp_limb_t* res, const mp_limb_t* vec, slong len, mp_limb_t negcoef, nmod_t mod);
+static inline ulong sparse_nmod_vec_dot_product_unbalanced(nn_srcptr v1, nn_srcptr v2,
+                                                           ulong len, ulong max_bits1,
+                                                           ulong max_bits2, nmod_t mod);
 static int sparse_bm_hist_bin(slong len);
 static void sparse_print_bm_histogram(const sparse_interpolation_timing_t* timing, const char* prefix);
 static void sparse_bm_state_init_empty(sparse_bm_state_t* state);
@@ -191,6 +193,20 @@ static inline void sparse_bm_axpy(mp_limb_t* res, const mp_limb_t* vec, slong le
     }
 
     _nmod_vec_scalar_addmul_nmod(res, vec, len, negcoef, mod);
+}
+
+static inline ulong sparse_nmod_vec_dot_product_unbalanced(nn_srcptr v1, nn_srcptr v2,
+                                                           ulong len, ulong max_bits1,
+                                                           ulong max_bits2, nmod_t mod)
+{
+    (void) max_bits1;
+    (void) max_bits2;
+
+    ulong acc = UWORD(0);
+    for (ulong i = 0; i < len; i++) {
+        acc = nmod_add(acc, nmod_mul(v1[i], v2[i], mod), mod);
+    }
+    return acc;
 }
 
 static int sparse_bm_hist_bin(slong len)
@@ -630,12 +646,12 @@ static void BM_timed_incremental(nmod_poly_t C,
         }
         if (state->L > 0) {
             d = nmod_add(d,
-                         nmod_vec_dot_product_unbalanced(state->c + 1,
-                                                         state->s_rev + (2 * N - n),
-                                                         (ulong) state->L,
-                                                         mod_bits,
-                                                         mod_bits,
-                                                         mod),
+                         sparse_nmod_vec_dot_product_unbalanced(state->c + 1,
+                                                                state->s_rev + (2 * N - n),
+                                                                (ulong) state->L,
+                                                                mod_bits,
+                                                                mod_bits,
+                                                                mod),
                          mod);
         }
         if (inner_timing) {

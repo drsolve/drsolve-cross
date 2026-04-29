@@ -2,6 +2,11 @@
 
 #include "fq_poly_mat_det.h"
 
+#ifdef HAVE_PML
+#include <flint/nmod_mat.h>
+#include "pml_det.h"
+#endif
+
 extern int g_dixon_debug_mode;
 
 /* ============================================================================
@@ -347,9 +352,9 @@ static ulong dixonres_nmod_poly_mat_eval_det_at(const nmod_poly_mat_t mat, ulong
     return det_eval;
 }
 
-static int dixonres_nmod_poly_mat_det_generic_exact(nmod_poly_t det,
-                                                    const nmod_poly_mat_t mat) {
-    if (!nmod_poly_mat_det_generic(det, mat))
+static int dixonres_nmod_poly_mat_det_hnf_exact(nmod_poly_t det,
+                                                const nmod_poly_mat_t mat) {
+    if (!nmod_poly_mat_det_hnf(det, mat))
         return 0;
 
     if (nmod_poly_is_zero(det))
@@ -460,7 +465,7 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
         
         /* Call the optimized nmod version */
         clock_t nmod_start = clock();
-        if (!dixonres_nmod_poly_mat_det_generic_exact(nmod_det, nmod_mat)) {
+        if (!dixonres_nmod_poly_mat_det_hnf_exact(nmod_det, nmod_mat)) {
             nmod_poly_mat_det_iter(nmod_det, nmod_mat);
         }
         clock_t nmod_end = clock();

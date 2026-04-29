@@ -36,24 +36,24 @@ INCLUDE_DIR = include
 BUILD_DIR = build
 
 # ============================================================
-# Bundled PML (force use of third_party/pml over any system PML)
+# Bundled PML determinant subset (force use of pml_det over any system PML)
 # ============================================================
-PML_SOURCE_DIR ?= third_party/pml
-PML_BUILD_DIR ?= $(BUILD_DIR)/third_party/pml
+PML_SOURCE_DIR ?= pml_det
+PML_BUILD_DIR ?= $(BUILD_DIR)/pml_det
 PML_OBJ_DIR ?= $(PML_BUILD_DIR)/obj
 PML_BUNDLED_LIB ?= $(PML_BUILD_DIR)/libpml.a
 PML_BUNDLED_AVAILABLE := $(if $(wildcard $(PML_SOURCE_DIR)/src/pml.h),yes,no)
 PML_ORIGIN := configure
 
 ifeq ($(PML_BUNDLED_AVAILABLE),yes)
-PML_ORIGIN := bundled-third_party
+PML_ORIGIN := bundled-pml_det
+PML_INCLUDE_ROOT := $(PML_SOURCE_DIR)
 PML_INCLUDE_PATH := $(PML_SOURCE_DIR)/src
 PML_LIB_PATH := $(PML_BUILD_DIR)
 PML_HEADER_CHECK := yes
 PML_HEADER_PREFIX :=
 PML_HEADER_DIR := $(PML_INCLUDE_PATH)
 NMOD_POLY_MAT_UTILS_CHECK := yes
-NMOD_POLY_MAT_EXTRA_CHECK := yes
 PML_DYNAMIC_LIB_CHECK := no
 PML_STATIC_LIB_CHECK := yes
 PML_SO_PATH :=
@@ -63,16 +63,29 @@ PML_AVAILABLE := yes
 PML_FLAGS := -DHAVE_PML -DPML_HAVE_MACHINE_VECTORS=0
 PML_LIBS := $(PML_BUNDLED_LIB)
 PML_STATIC_LIBS := $(PML_BUNDLED_LIB)
-INCLUDE_FLAGS := $(filter-out -I%/pml -I$(PML_SOURCE_DIR)/src,$(INCLUDE_FLAGS))
-INCLUDE_FLAGS := -I$(PML_INCLUDE_PATH) $(INCLUDE_FLAGS)
+INCLUDE_FLAGS := $(filter-out -I$(PML_INCLUDE_ROOT) -I$(PML_INCLUDE_PATH),$(INCLUDE_FLAGS))
+INCLUDE_FLAGS := -I$(PML_INCLUDE_ROOT) -I$(PML_INCLUDE_PATH) $(INCLUDE_FLAGS)
 RPATH_FLAGS := -Wl,-rpath,.
 ifneq ($(strip $(FLINT_LIB_PATH)),)
 RPATH_FLAGS += -Wl,-rpath,$(FLINT_LIB_PATH)
 endif
-PML_SOURCES := $(shell find $(PML_SOURCE_DIR)/src \
-	\( -path '*/test/*' -o -path '*/profile/*' -o -path '*/timings/*' -o -path '*/tune/*' -o -path '*/mapml/*' -o -path '*/.ipynb_checkpoints/*' \) -prune -o \
-	-name '*.c' -print)
-PML_OBJECTS := $(patsubst $(PML_SOURCE_DIR)/src/%.c,$(PML_OBJ_DIR)/%.o,$(PML_SOURCES))
+PML_REL_SOURCES := \
+	nmod_poly_mat_extra/nmod_poly_mat_det.c \
+	nmod_poly_mat_extra/nmod_poly_mat_weak_popov.c \
+	nmod_poly_mat_extra/nmod_poly_mat_utils.c \
+	nmod_poly_mat_extra/degrees_pivots_leadingmatrix.c \
+	nmod_poly_mat_extra/kernel.c \
+	nmod_poly_mat_extra/approximant_basis.c \
+	nmod_poly_mat_extra/middle_product.c \
+	nmod_mat_poly_extra/nmod_mat_poly_mbasis.c \
+	nmod_mat_poly_extra/nmod_mat_poly_mem.c \
+	nmod_mat_poly_extra/nmod_mat_poly_arith.c \
+	nmod_mat_poly_extra/nmod_mat_poly_set_from.c \
+	nmod_mat_poly_extra/nmod_mat_poly_shift.c \
+	nmod_mat_extra/left_nullspace.c \
+	nmod_extra/nmod_find_root.c
+PML_SOURCES := $(addprefix $(PML_SOURCE_DIR)/src/,$(PML_REL_SOURCES))
+PML_OBJECTS := $(addprefix $(PML_OBJ_DIR)/,$(PML_REL_SOURCES:.c=.o))
 PML_BUILD_PREREQS := $(PML_BUNDLED_LIB)
 else
 PML_BUILD_PREREQS :=
@@ -576,7 +589,6 @@ endif
 	@echo "FLINT directory exists: $(FLINT_DIR_EXISTS) at $(FLINT_INCLUDE_PATH)"
 	@echo "PML headers found: $(PML_HEADER_CHECK)"
 	@echo "nmod_poly_mat_utils.h found: $(NMOD_POLY_MAT_UTILS_CHECK)"
-	@echo "nmod_poly_mat_extra.h found: $(NMOD_POLY_MAT_EXTRA_CHECK)"
 	@echo "PML dynamic library found: $(PML_DYNAMIC_LIB_CHECK)"
 	@echo "PML static library found: $(PML_STATIC_LIB_CHECK)"
 	@echo "PML available (all headers + libraries): $(PML_AVAILABLE)"
@@ -636,8 +648,6 @@ debug-headers:
 	@echo ""
 	@echo -n "nmod_poly_mat_utils.h: $(NMOD_POLY_MAT_UTILS_CHECK)"
 	@echo ""
-	@echo -n "nmod_poly_mat_extra.h: $(NMOD_POLY_MAT_EXTRA_CHECK)"
-	@echo ""
 	@echo "PML Available (all required headers + libraries): $(PML_AVAILABLE)"
 	@echo ""
 	@echo "=== Manual Path Search ==="
@@ -659,13 +669,6 @@ debug-headers:
 			echo "  FOUND: $$path/nmod_poly_mat_utils.h"; \
 		fi; \
 	done
-	@echo "Searching for nmod_poly_mat_extra.h in common locations..."
-	@for path in /usr/include /usr/local/include ~/.local/include $(subst :, ,$(C_INCLUDE_PATH)); do \
-		if [ -f "$$path/nmod_poly_mat_extra.h" ]; then \
-			echo "  FOUND: $$path/nmod_poly_mat_extra.h"; \
-		fi; \
-	done
-
 # Debug library detection
 debug-libs:
 	@echo "=== Library Detection Debug ==="
@@ -699,7 +702,6 @@ debug-libs:
 	@echo "=== Detection Results ==="
 	@echo "PML headers found: $(PML_HEADER_CHECK)"
 	@echo "nmod_poly_mat_utils.h found: $(NMOD_POLY_MAT_UTILS_CHECK)"
-	@echo "nmod_poly_mat_extra.h found: $(NMOD_POLY_MAT_EXTRA_CHECK)"
 	@echo "PML dynamic library found: $(PML_DYNAMIC_LIB_CHECK)"
 	@echo "PML static library found: $(PML_STATIC_LIB_CHECK)"
 	@echo "PML available (all requirements met): $(PML_AVAILABLE)"
@@ -872,10 +874,10 @@ help:
 	@echo "  drsolve library: $(words $(MATH_SOURCES)) math source files"
 	@echo "  Main program: drsolve.c links against drsolve library OR compiles with all sources"
 	@echo "  Attack programs: Each .c in ../Attack compiles with all drsolve sources (LTO optimization)"
-	@echo "  External deps: FLINT (required), PML (bundled from third_party/pml when present)"
+	@echo "  External deps: FLINT (required), PML determinant subset (bundled from pml_det when present)"
 	@echo ""
 	@echo "PML Detection:"
-	@echo "  PML is forced to use the bundled third_party/pml copy when it exists"
+	@echo "  PML is forced to use the bundled pml_det copy when it exists"
 	@echo "  The bundled library is built as $(PML_BUNDLED_LIB)"
 	@echo "  Re-run ./configure for FLINT detection, then 'make test-paths' to verify"
 

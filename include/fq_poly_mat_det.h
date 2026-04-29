@@ -13,12 +13,6 @@
 #include <flint/nmod_poly_mat.h>
 #include <flint/nmod_vec.h>
 
-/* Conditionally include PML headers if available */
-#ifdef HAVE_PML
-#include <nmod_poly_mat_utils.h>
-#include <nmod_poly_mat_extra.h>
-#endif
-
 /* Include specialized implementations */
 #include "gf2n_field.h"
 #include "fq_unified_interface.h"

@@ -273,7 +273,7 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────
   # Windows: cross-compile from Linux via MinGW-w64
-  # Uses bundled third_party/ FLINT & PML — build + smoke-test
+      # Uses bundled mingw/ and pml_det/ dependencies — build + smoke-test
   # No binary upload (Windows installer handled separately)
   # ──────────────────────────────────────────────────────────────
   build-windows:

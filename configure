@@ -48,9 +48,9 @@ MANDIR=""
 
 FLINT_INCLUDE_PATH="${FLINT_INCLUDE_PATH:-$DEFAULT_PREFIX/include}"
 FLINT_LIB_PATH="${FLINT_LIB_PATH:-$DEFAULT_PREFIX/lib}"
-PML_SOURCE_DIR="third_party/pml"
+PML_SOURCE_DIR="pml_det"
 PML_INCLUDE_PATH="$PML_SOURCE_DIR/src"
-PML_LIB_PATH="build/third_party/pml"
+PML_LIB_PATH="build/pml_det"
 
 case "$HOST_OS" in
     Darwin)
@@ -571,15 +571,6 @@ else
     echo "no"
 fi
 
-printf "checking for bundled nmod_poly_mat_extra.h... "
-if [ -f "$PML_INCLUDE_PATH/nmod_poly_mat_extra.h" ]; then
-    NMOD_POLY_MAT_EXTRA_CHECK="yes"
-    echo "yes"
-else
-    NMOD_POLY_MAT_EXTRA_CHECK="no"
-    echo "no"
-fi
-
 printf "checking bundled PML link mode... "
 PML_DYNAMIC_LIB_CHECK="no"
 PML_SO_PATH=""
@@ -639,7 +630,6 @@ echo ""
 PML_AVAILABLE="no"
 if [ "$PML_HEADER_CHECK" = "yes" ] && \
    [ "$NMOD_POLY_MAT_UTILS_CHECK" = "yes" ] && \
-   [ "$NMOD_POLY_MAT_EXTRA_CHECK" = "yes" ] && \
    [ "$PML_STATIC_LIB_CHECK" = "yes" ]; then
     PML_AVAILABLE="yes"
 fi
@@ -656,7 +646,7 @@ fi
 # Include flags
 INCLUDE_FLAGS="-I./include"
 if [ "$PML_AVAILABLE" = "yes" ]; then
-    INCLUDE_FLAGS="-I$PML_INCLUDE_PATH $INCLUDE_FLAGS"
+    INCLUDE_FLAGS="-I$PML_SOURCE_DIR -I$PML_INCLUDE_PATH $INCLUDE_FLAGS"
 fi
 for p in $(build_include_search_paths); do
     if [ -n "$p" ] && [ "$p" != "./include" ]; then
@@ -725,7 +715,6 @@ PML_HEADER_CHECK = $PML_HEADER_CHECK
 PML_HEADER_PREFIX = $PML_HEADER_PREFIX
 PML_HEADER_DIR = $PML_HEADER_DIR
 NMOD_POLY_MAT_UTILS_CHECK = $NMOD_POLY_MAT_UTILS_CHECK
-NMOD_POLY_MAT_EXTRA_CHECK = $NMOD_POLY_MAT_EXTRA_CHECK
 PML_DYNAMIC_LIB_CHECK = $PML_DYNAMIC_LIB_CHECK
 PML_STATIC_LIB_CHECK = $PML_STATIC_LIB_CHECK
 PML_SO_PATH = $PML_SO_PATH

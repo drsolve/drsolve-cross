@@ -9,7 +9,7 @@ project(drsolve
 # ============================================================
 # Build options
 # ============================================================
-option(DRSOLVE_ENABLE_PML       "Use bundled third_party/pml when available" ON)
+option(DRSOLVE_ENABLE_PML       "Use bundled pml_det when available" ON)
 option(DRSOLVE_ENABLE_OPENMP    "Enable OpenMP if available"              ON)
 option(DRSOLVE_ENABLE_LTO       "Enable Link Time Optimization (-flto)"   ON)
 option(DRSOLVE_ENABLE_ASAN      "Enable AddressSanitizer"                 OFF)
@@ -66,14 +66,14 @@ else()
 endif()
 
 # When cross-compiling for Windows from Linux/macOS:
-#   - Optionally use bundled third_party/ directory, OR
+#   - Optionally use bundled mingw/ and pml_det/ directories, OR
 #   - Use system-installed cross-compiler libraries
 # Native Windows builds (MSYS2) should use pacman-installed packages.
 if(DRSOLVE_WINDOWS_CROSS AND DRSOLVE_USE_BUNDLED_DEPS AND NOT FLINT_ROOT)
-  if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/mingw/include/flint/flint.h")
-    set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/mingw")
-  else()
-    set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/third_party/flint")
+  if(EXISTS "${CMAKE_SOURCE_DIR}/mingw/include/flint/flint.h")
+    set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/mingw")
+  elseif(EXISTS "${CMAKE_SOURCE_DIR}/flint/include/flint/flint.h")
+    set(FLINT_ROOT "${CMAKE_SOURCE_DIR}/flint")
   endif()
 endif()
 
@@ -258,10 +258,10 @@ set(_flint_lib_hints
 )
 if(DRSOLVE_WINDOWS)
   list(PREPEND _flint_include_hints
-    "${CMAKE_SOURCE_DIR}/third_party/mingw/include"
+    "${CMAKE_SOURCE_DIR}/mingw/include"
   )
   list(PREPEND _flint_lib_hints
-    "${CMAKE_SOURCE_DIR}/third_party/mingw/lib"
+    "${CMAKE_SOURCE_DIR}/mingw/lib"
   )
 endif()
 list(APPEND _flint_include_hints
@@ -369,7 +369,7 @@ if(DRSOLVE_WINDOWS)
   if(DEFINED mingw-w64-x86_64-openblas_SOURCE_DIR)
     list(APPEND _openblas_hints "${mingw-w64-x86_64-openblas_SOURCE_DIR}/mingw64/lib")
   endif()
-  list(APPEND _openblas_hints "${FLINT_ROOT}/lib" "${CMAKE_SOURCE_DIR}/third_party/flint/lib")
+  list(APPEND _openblas_hints "${FLINT_ROOT}/lib")
   
   find_library(OPENBLAS_LIBRARY NAMES openblas
     HINTS ${_openblas_hints})
@@ -387,38 +387,34 @@ set(PML_AVAILABLE FALSE)
 set(PML_STATUS "disabled")
 
 if(DRSOLVE_ENABLE_PML)
-  set(PML_SOURCE_DIR "${CMAKE_SOURCE_DIR}/third_party/pml")
+  set(PML_SOURCE_DIR "${CMAKE_SOURCE_DIR}/pml_det")
 
   if(EXISTS "${PML_SOURCE_DIR}/src/pml.h")
-    message(STATUS "PML: using bundled source from ${PML_SOURCE_DIR}")
+    message(STATUS "PML: using bundled determinant subset from ${PML_SOURCE_DIR}")
 
-    # Collect PML source files (exclude test, profile, timing, and mapml)
-    file(GLOB_RECURSE PML_SOURCES
-      "${PML_SOURCE_DIR}/src/fmpz_extra/*.c"
-      "${PML_SOURCE_DIR}/src/fmpz_mat_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod32_vec/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_mat_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_poly_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/*.c"
-      "${PML_SOURCE_DIR}/src/nmod_vec_extra/*.c"
-      "${PML_SOURCE_DIR}/src/sagemath_extra/*.c"
+    set(PML_FILTERED_SOURCES
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/nmod_poly_mat_det.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/nmod_poly_mat_weak_popov.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/nmod_poly_mat_utils.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/degrees_pivots_leadingmatrix.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/kernel.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/approximant_basis.c"
+      "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/middle_product.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_mbasis.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_mem.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_arith.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_set_from.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_shift.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_extra/left_nullspace.c"
+      "${PML_SOURCE_DIR}/src/nmod_extra/nmod_find_root.c"
     )
-
-    # Filter out test, profile, and timing files
-    set(PML_FILTERED_SOURCES "")
-    foreach(_src ${PML_SOURCES})
-      if(NOT _src MATCHES "/test/" AND NOT _src MATCHES "/profile/" AND NOT _src MATCHES "/timings/")
-        list(APPEND PML_FILTERED_SOURCES ${_src})
-      endif()
-    endforeach()
 
     # Create PML library target
     add_library(pml STATIC ${PML_FILTERED_SOURCES})
 
     # PML include directories
     target_include_directories(pml PUBLIC
+      "${PML_SOURCE_DIR}"
       "${PML_SOURCE_DIR}/src"
     )
 
@@ -461,7 +457,7 @@ if(DRSOLVE_ENABLE_PML)
     # Create alias target
     add_library(PML::PML ALIAS pml)
     set(PML_AVAILABLE TRUE)
-    set(PML_STATUS "bundled: ${PML_SOURCE_DIR}")
+    set(PML_STATUS "bundled subset: ${PML_SOURCE_DIR}")
   else()
     message(STATUS "PML: bundled source not found under ${PML_SOURCE_DIR}; trying system installation...")
 
@@ -596,6 +592,7 @@ set(MATH_SOURCES
 function(drsolve_target_common _tgt)
   target_include_directories(${_tgt} PUBLIC
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/pml_det>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/drsolve>
   )
   target_link_libraries(${_tgt} PUBLIC ${_drsolve_deps})

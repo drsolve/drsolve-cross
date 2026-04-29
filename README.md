@@ -78,7 +78,7 @@ cmake --build build -j$(nproc)
 ```
 
 **Option C — cross-compile from Linux/macOS (MinGW-w64)**  
-Bundled `third_party/` libraries are used automatically:
+Bundled `mingw/` and `pml_det/` dependencies are used automatically:
 
 ```bash
 cmake -B build-win \
