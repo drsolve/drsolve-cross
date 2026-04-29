@@ -409,6 +409,10 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
             
             fq_compute_det_by_interpolation(result, coeff_matrix, size,
                                            0, npars, ctx, res_deg_bound);
+        } else if (method == DET_METHOD_HUANG) {
+            dixon_debug_log("  Method: sparse interpolation\n");
+
+            compute_fq_det_huang_interpolation(result, coeff_matrix, size);
         } else {
             fq_mvpoly_init(result, 0, npars, ctx);
             
@@ -2203,7 +2207,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     det_method_t step1_method = DET_METHOD_RECURSIVE;
     if (dixon_global_method_step1 != -1) {
         step1_method = dixon_global_method_step1;
-        printf("Step 1 method override active: %d (%s)\n",
+        printf("  Step 1 method override active: %d (%s)\n",
                dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
     }
     dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
@@ -2270,7 +2274,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         //coeff_method = DET_METHOD_INTERPOLATION;
         if (dixon_global_method_step4 != -1) {
             coeff_method = dixon_global_method_step4;
-            printf("Step 4 method override active: %d (%s)\n",
+            printf("  Step 4 method override active: %d (%s)\n",
                    dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
         }
         
@@ -2330,7 +2334,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     det_method_t step1_method = DET_METHOD_RECURSIVE;
     if (dixon_global_method_step1 != -1) {
         step1_method = dixon_global_method_step1;
-        printf("Step 1 method override active: %d (%s)\n",
+        printf("  Step 1 method override active: %d (%s)\n",
                dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
     }
     dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
@@ -2381,7 +2385,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         }
         if (dixon_global_method_step4 != -1) {
             coeff_method = dixon_global_method_step4;
-            printf("Step 4 method override active: %d (%s)\n",
+            printf("  Step 4 method override active: %d (%s)\n",
                    dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
         }
         
