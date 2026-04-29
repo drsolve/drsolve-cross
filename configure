@@ -25,6 +25,12 @@
 
 set -e
 
+cleanup_configure_temp() {
+    rm -rf build-temp
+}
+
+trap cleanup_configure_temp EXIT
+
 # ============================================================
 # Defaults
 # ============================================================
@@ -240,8 +246,11 @@ detect_flint_version() {
 try_compile_with_flags() {
     _flags="$1"
     _code="$2"
-    _src=".configure_flag_test.c"
-    _obj=".configure_flag_test.o"
+    _tmp_dir="build-temp/configure"
+    _src="$_tmp_dir/.configure_flag_test.c"
+    _obj="$_tmp_dir/.configure_flag_test.o"
+
+    mkdir -p "$_tmp_dir" || return 1
 
     printf '%s\n' "$_code" > "$_src"
     if eval "$CC $_flags -c -o $_obj $_src" >/dev/null 2>&1; then
@@ -256,8 +265,11 @@ try_compile_with_flags() {
 try_link_with_flags() {
     _flags="$1"
     _code="$2"
-    _src=".configure_flag_test.c"
-    _exe=".configure_flag_test"
+    _tmp_dir="build-temp/configure"
+    _src="$_tmp_dir/.configure_flag_test.c"
+    _exe="$_tmp_dir/.configure_flag_test"
+
+    mkdir -p "$_tmp_dir" || return 1
 
     printf '%s\n' "$_code" > "$_src"
     if eval "$CC $_flags -o $_exe $_src" >/dev/null 2>&1; then

@@ -2,8 +2,21 @@
 .DEFAULT_GOAL := default
 
 # ============================================================
-# Include generated configuration (run ./configure if missing)
+# Include generated configuration (run ./configure if needed)
+# but do not auto-configure for clean/help-only invocations.
 # ============================================================
+NO_CONFIG_GOALS := clean clean-build distclean help
+ifneq ($(filter $(NO_CONFIG_GOALS),$(MAKECMDGOALS)),)
+ifneq ($(filter-out $(NO_CONFIG_GOALS),$(MAKECMDGOALS)),)
+NEED_CONFIG := yes
+else
+NEED_CONFIG := no
+endif
+else
+NEED_CONFIG := yes
+endif
+
+ifeq ($(NEED_CONFIG),yes)
 ifeq ($(wildcard config.mk),)
 $(info config.mk not found, running ./configure...)
 _DUMMY := $(shell chmod +x configure && ./configure >&2)
@@ -12,6 +25,17 @@ $(error ./configure did not generate config.mk)
 endif
 endif
 include config.mk
+else
+HOST_OS ?= unknown
+SHARED_LIB_EXT ?= so
+DEFAULT_LINK_MODE ?= dynamic
+PREFIX ?= /usr/local
+EXEC_PREFIX ?= $(PREFIX)
+BINDIR ?= $(EXEC_PREFIX)/bin
+LIBDIR ?= $(EXEC_PREFIX)/lib
+INCLUDEDIR ?= $(PREFIX)/include/drsolve
+MANDIR ?= $(PREFIX)/share/man/man1
+endif
 
 # ============================================================
 # Compiler flags (configured for the current toolchain)
@@ -518,7 +542,9 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR) $(PML_BUILD_PREREQS)
 # ============================================================
 clean: clean-attack
 	rm -f $(DIXON_TARGET) $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) dixon libdixon.a libdixon.so libdixon.dylib
+	rm -f .configure_flag_test .configure_flag_test.c .configure_flag_test.o
 	rm -rf $(BUILD_DIR)
+	rm -rf build-temp
 	@echo "Cleaned all build artifacts"
 
 # Clean only build directory (keep executables and libraries)
@@ -919,11 +945,17 @@ check: $(DIXON_TARGET)
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@PASS=0; FAIL=0; FAILED_TESTS=""; \
+	CHECK_TMP_ROOT="$(BUILD_DIR)/check-tmp"; \
+	mkdir -p "$$CHECK_TMP_ROOT"; \
+	CHECK_DIR=$$(mktemp -d "$$CHECK_TMP_ROOT/run.XXXXXX"); \
+	EXEC_PATH="$(CURDIR)/$(DIXON_TARGET)"; \
+	trap 'rm -rf "$$CHECK_DIR"' EXIT INT TERM; \
+	cd "$$CHECK_DIR" || exit 1; \
 	\
 	echo "--- Basic Dixon resultant ---"; \
 	\
 	printf "  %-60s" "Dixon: x+y+z, x*y+y*z+z*x, x*y*z+1 over F_257"; \
-	if ./$(DIXON_TARGET) "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -931,7 +963,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Dixon: x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1 over F_257"; \
-	if ./$(DIXON_TARGET) "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" "x,y" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" "x,y" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -939,7 +971,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Dixon: extension field 2^8 (silent)"; \
-	if ./$(DIXON_TARGET) --silent "x+y^2+t, x*y+t*y+1" "x" "2^8" >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --silent "x+y^2+t, x*y+t*y+1" "x" "2^8" >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -950,7 +982,7 @@ check: $(DIXON_TARGET)
 	echo "--- Complexity analysis (--comp / -c) ---"; \
 	\
 	printf "  %-60s" "Comp: x+y+z, x*y+y*z+z*x, x*y*z+1 over F_257"; \
-	if ./$(DIXON_TARGET) --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -958,7 +990,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Comp -c: x^2+y^2+1, x*y+z, x+y+z^2 over F_257"; \
-	if ./$(DIXON_TARGET) -c "x^2+y^2+1, x*y+z, x+y+z^2" "x,y" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" -c "x^2+y^2+1, x*y+z, x+y+z^2" "x,y" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -966,7 +998,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Comp --omega: [4]*4 over F_65537"; \
-	if ./$(DIXON_TARGET) --comp --omega 2.81 "x^4+y^4+z^4+w^4+1, x^3*y+z+1, x+y^3+z^2+w, x*y*z*w+1" "x,y,z" 65537 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --comp --omega 2.81 "x^4+y^4+z^4+w^4+1, x^3*y+z+1, x+y^3+z^2+w, x*y*z*w+1" "x,y,z" 65537 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -977,7 +1009,7 @@ check: $(DIXON_TARGET)
 	echo "--- Polynomial solver (--solve) ---"; \
 	\
 	printf "  %-60s" "Solve: x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1 over F_257"; \
-	if ./$(DIXON_TARGET) --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -985,7 +1017,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Solve: simple linear x+y-3, x-y+1 over F_257"; \
-	if ./$(DIXON_TARGET) --solve "x+y-3, x-y+1" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --solve "x+y-3, x-y+1" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -996,7 +1028,7 @@ check: $(DIXON_TARGET)
 	echo "--- Random mode (--random / -r) ---"; \
 	\
 	printf "  %-60s" "Random Dixon: [3,3,2] over F_257"; \
-	if ./$(DIXON_TARGET) --random "[3,3,2]" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --random "[3,3,2]" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -1004,7 +1036,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Random solve -r: [2]*3 over F_257"; \
-	if ./$(DIXON_TARGET) -r --solve "[2]*3" 257 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" -r --solve "[2]*3" 257 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -1012,7 +1044,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "Random comp -r: [3,2]*2 over F_65537"; \
-	if ./$(DIXON_TARGET) -r --comp "[3,2]*2" 65537 >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" -r --comp "[3,2]*2" 65537 >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -1023,30 +1055,30 @@ check: $(DIXON_TARGET)
 	echo "--- File input ---"; \
 	\
 	printf "  %-60s" "File: basic Dixon from generated file"; \
-	printf "x,y\n257\nx+y+z, x*y+y*z+z*x, x*y*z+1\n" > /tmp/dixon_check_test.dat; \
-	if ./$(DIXON_TARGET) /tmp/dixon_check_test.dat >/dev/null 2>&1; then \
+	printf "x,y\n257\nx+y+z, x*y+y*z+z*x, x*y*z+1\n" > dixon_check_test.dat; \
+	if "$$EXEC_PATH" dixon_check_test.dat >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
 		FAILED_TESTS="$$FAILED_TESTS\n    File: basic Dixon from file"; \
 	fi; \
-	rm -f /tmp/dixon_check_test.dat; \
+	rm -f dixon_check_test.dat; \
 	\
 	printf "  %-60s" "File: solver from generated file"; \
-	printf "257\nx^2+y^2-5\nx+y-3\n" > /tmp/dixon_check_solver.dat; \
-	if ./$(DIXON_TARGET) /tmp/dixon_check_solver.dat >/dev/null 2>&1; then \
+	printf "257\nx^2+y^2-5\nx+y-3\n" > dixon_check_solver.dat; \
+	if "$$EXEC_PATH" dixon_check_solver.dat >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
 		FAILED_TESTS="$$FAILED_TESTS\n    File: solver from file"; \
 	fi; \
-	rm -f /tmp/dixon_check_solver.dat; \
+	rm -f dixon_check_solver.dat; \
 	\
 	echo ""; \
 	echo "--- Error / edge cases ---"; \
 	\
 	printf "  %-60s" "Help flag exits cleanly"; \
-	if ./$(DIXON_TARGET) --help >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" --help >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_RED)[FAIL]$(_NC)\n"; FAIL=$$((FAIL+1)); \
@@ -1054,7 +1086,7 @@ check: $(DIXON_TARGET)
 	fi; \
 	\
 	printf "  %-60s" "No args prints usage (exit 0)"; \
-	if ./$(DIXON_TARGET) >/dev/null 2>&1; then \
+	if "$$EXEC_PATH" >/dev/null 2>&1; then \
 		printf "$(_GREEN)[PASS]$(_NC)\n"; PASS=$$((PASS+1)); \
 	else \
 		printf "$(_YELLOW)[SKIP/WARN]$(_NC) (non-zero exit with no args)\n"; \
@@ -1071,7 +1103,6 @@ check: $(DIXON_TARGET)
 	fi; \
 	echo "════════════════════════════════════════════════════════════════"; \
 	echo ""; \
-	rm -f solution_*.dat comp_*.dat; \
 	exit $$FAIL
 
 # Verbose check: same tests but shows full output of each command
@@ -1080,26 +1111,31 @@ check-verbose: $(DIXON_TARGET)
 	@echo "=== Verbose Test Run ==="
 	@echo ""
 	@set -e; \
+	CHECK_TMP_ROOT="$(BUILD_DIR)/check-tmp"; \
+	mkdir -p "$$CHECK_TMP_ROOT"; \
+	CHECK_DIR=$$(mktemp -d "$$CHECK_TMP_ROOT/run.XXXXXX"); \
+	EXEC_PATH="$(CURDIR)/$(DIXON_TARGET)"; \
+	trap 'rm -rf "$$CHECK_DIR"' EXIT INT TERM; \
+	cd "$$CHECK_DIR"; \
 	echo "--- Test 1: Basic Dixon ---"; \
-	./$(DIXON_TARGET) "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257; \
+	"$$EXEC_PATH" "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257; \
 	echo ""; \
 	echo "--- Test 2: Complexity analysis ---"; \
-	./$(DIXON_TARGET) --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257; \
+	"$$EXEC_PATH" --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257; \
 	echo ""; \
 	echo "--- Test 3: Solver ---"; \
-	./$(DIXON_TARGET) --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257; \
+	"$$EXEC_PATH" --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257; \
 	echo ""; \
 	echo "--- Test 4: Random Dixon [3,3,2] ---"; \
-	./$(DIXON_TARGET) --random "[3,3,2]" 257; \
+	"$$EXEC_PATH" --random "[3,3,2]" 257; \
 	echo ""; \
 	echo "--- Test 5: Random solver [2]*3 ---"; \
-	./$(DIXON_TARGET) -r --solve "[2]*3" 257; \
+	"$$EXEC_PATH" -r --solve "[2]*3" 257; \
 	echo ""; \
 	echo "--- Test 6: Extension field 2^8 (silent) ---"; \
-	./$(DIXON_TARGET) --silent "x+y^2+t, x*y+t*y+1" "y" "2^8"; \
+	"$$EXEC_PATH" --silent "x+y^2+t, x*y+t*y+1" "y" "2^8"; \
 	echo ""; \
-	echo "=== All verbose tests passed ==="; \
-	rm -f solution_*.dat comp_*.dat
+	echo "=== All verbose tests passed ==="
 
 .PHONY: default all lto dynamic static static-all dynamic-lib static-lib \
         attack-programs attack-programs-verbose attack-static clean-attack \
