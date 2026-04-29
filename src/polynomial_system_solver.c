@@ -3,6 +3,7 @@
 #include <stdarg.h>
 
 static int solver_realtime_progress_enabled = 0;
+static const slong solver_candidate_print_limit = 10;
 
 void polynomial_solver_set_realtime_progress(int enabled) {
     solver_realtime_progress_enabled = enabled;
@@ -267,6 +268,23 @@ int contains_variable(const char *poly_str, const char *var_name) {
         }
         ptr++;
     }
+    return 0;
+}
+
+static int polynomial_depends_on_any_variable(const char *poly_str,
+                                              variable_info_t *vars,
+                                              slong num_vars)
+{
+    if (!poly_str || !vars || num_vars <= 0) {
+        return 0;
+    }
+
+    for (slong i = 0; i < num_vars; i++) {
+        if (contains_variable(poly_str, vars[i].name)) {
+            return 1;
+        }
+    }
+
     return 0;
 }
 
@@ -655,12 +673,16 @@ void print_polynomial_solutions(const polynomial_solutions_t *sols) {
     }
 
     if (sols->num_candidate_solution_lines > 0) {
-        printf("Candidate sets:\n");
-        for (slong i = 0; i < sols->num_candidate_solution_lines; i++) {
-            printf("  [%ld] %s [%s]\n",
-                   i + 1,
-                   sols->candidate_solution_lines[i],
-                   sols->candidate_solution_pass[i] ? "PASS" : "FAIL");
+        if (sols->num_candidate_solution_lines > solver_candidate_print_limit) {
+            printf("Candidate sets: %ld\n", sols->num_candidate_solution_lines);
+        } else {
+            printf("Candidate sets:\n");
+            for (slong i = 0; i < sols->num_candidate_solution_lines; i++) {
+                printf("  [%ld] %s [%s]\n",
+                       i + 1,
+                       sols->candidate_solution_lines[i],
+                       sols->candidate_solution_pass[i] ? "PASS" : "FAIL");
+            }
         }
     }
     printf("Found %ld solution set(s):\n", sols->num_solution_sets);
@@ -1233,6 +1255,7 @@ int solve_by_back_substitution_recursive_enhanced(char **original_polys, slong n
         // Substitute base solution
         char **reduced_polys = (char**) malloc(num_polys * sizeof(char*));
         slong num_nonzero_polys = 0;
+        int inconsistent_branch = 0;
         
         for (slong poly_idx = 0; poly_idx < num_polys; poly_idx++) {
             char *substituted = substitute_variable_in_polynomial(original_polys[poly_idx],
@@ -1243,12 +1266,27 @@ int solve_by_back_substitution_recursive_enhanced(char **original_polys, slong n
                    poly_idx, sorted_vars[0].name, substituted);
             
             if (strcmp(substituted, "0") != 0) {
+                if (!polynomial_depends_on_any_variable(substituted, sorted_vars + 1, num_vars - 1)) {
+                    printf("Equation %ld reduced to nonzero constant %s, so this base solution is impossible\n",
+                           poly_idx, substituted);
+                    free(substituted);
+                    inconsistent_branch = 1;
+                    break;
+                }
                 reduced_polys[num_nonzero_polys] = substituted;
                 num_nonzero_polys++;
             } else {
                 printf("Equation %ld became zero (satisfied)\n", poly_idx);
                 free(substituted);
             }
+        }
+
+        if (inconsistent_branch) {
+            for (slong i = 0; i < num_nonzero_polys; i++) {
+                free(reduced_polys[i]);
+            }
+            free(reduced_polys);
+            continue;
         }
         
         if (num_nonzero_polys == 0) {

@@ -13,6 +13,7 @@ static int rational_solver_realtime_progress_enabled = 0;
 #define RATIONAL_NUMERIC_NEWTON_TOL 1e-10
 #define RATIONAL_NUMERIC_VERIFY_TOL 1e-7
 #define RATIONAL_NUMERIC_NEWTON_MAX_ITER 60
+static const slong rational_candidate_print_limit = 10;
 
 typedef struct {
     const char *cursor;
@@ -1450,13 +1451,17 @@ void print_rational_solutions(const rational_solutions_t *sols) {
         return;
     }
 
-    if (sols->num_candidate_solution_lines > 0 && sols->num_solution_sets > 0) {
-        printf("Candidate sets:\n");
-        for (slong i = 0; i < sols->num_candidate_solution_lines; i++) {
-            printf("  [%ld] %s [%s]\n",
-                   i + 1,
-                   sols->candidate_solution_lines[i],
-                   sols->candidate_solution_pass[i] ? "PASS" : "FAIL");
+    if (sols->num_candidate_solution_lines > 0) {
+        if (sols->num_candidate_solution_lines > rational_candidate_print_limit) {
+            printf("Candidate sets: %ld\n", sols->num_candidate_solution_lines);
+        } else {
+            printf("Candidate sets:\n");
+            for (slong i = 0; i < sols->num_candidate_solution_lines; i++) {
+                printf("  [%ld] %s [%s]\n",
+                       i + 1,
+                       sols->candidate_solution_lines[i],
+                       sols->candidate_solution_pass[i] ? "PASS" : "FAIL");
+            }
         }
     }
 

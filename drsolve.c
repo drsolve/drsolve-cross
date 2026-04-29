@@ -37,6 +37,12 @@
 #define DIXON_NULL_DEVICE "/dev/null"
 #endif
 
+static int auto_adjust_elimination_vars_for_msolve_compat(const char *polys_str,
+                                                          const char *field_str,
+                                                          const char *input_vars_str,
+                                                          char **vars_str_out,
+                                                          int silent_mode);
+
 /* =========================================================================
  * Print usage
  * ========================================================================= */
@@ -99,6 +105,7 @@ static void print_usage(const char *prog_name)
     printf("    %s input_file\n", prog_name);
     printf("    %s --solve input_file\n", prog_name);
     printf("    -> Without flags, auto-detects solver mode when line 1 starts with a digit; otherwise uses elimination mode\n");
+    printf("    -> If elimination vars count equals equation count n, auto-adjusts to eliminate the first n-1 variables\n");
     printf("    -> Output saved as input_file_solution+timestamp.dat\n");
 
     printf("  Silent mode:\n");
@@ -135,6 +142,7 @@ static void print_usage(const char *prog_name)
     printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
     printf("    Line 2 : field size (prime or p^k; generator defaults to 't')\n");
     printf("    Line 3+: polynomials (comma-separated, may span multiple lines)\n");
+    printf("    -> If line 1 lists n vars for n equations, compatibility mode uses the first n-1 variables\n");
 
     printf("EXAMPLES:\n");
     printf("  %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
@@ -1034,14 +1042,14 @@ static int read_auto_input_file(FILE *fp, int *solve_mode_out,
     *allvars_str = NULL;
 
     if (line_starts_with_digit(lines[0])) {
-        *solve_mode_out = 1;
-        *vars_str = NULL;
         *field_str = lines[0];
         *polys_str = join_polynomial_lines(lines, 1, line_count);
         if (!*polys_str) {
             free_input_lines(lines, line_count);
             return 0;
         }
+        *solve_mode_out = 1;
+        *vars_str = NULL;
         for (int i = 1; i < line_count; i++) free(lines[i]);
         free(lines);
         return 1;
@@ -1120,6 +1128,9 @@ static void save_solver_result_to_file(const char *filename,
         fprintf(out_fp, "No solutions found\n"); fclose(out_fp); return;
     }
 
+    if (sols->num_candidate_solution_lines > 0) {
+        fprintf(out_fp, "Candidate sets: %ld\n", sols->num_candidate_solution_lines);
+    }
     fprintf(out_fp, "Found %ld complete solution set(s):\n", sols->num_solution_sets);
     for (slong set = 0; set < sols->num_solution_sets; set++) {
         fprintf(out_fp, "\nSolution set %ld:\n", set + 1);
@@ -1210,6 +1221,9 @@ static void save_rational_solver_result_to_file(const char *filename,
         fprintf(out_fp, "No variables\n"); fclose(out_fp); return;
     }
     if (sols->num_solution_sets > 0) {
+        if (sols->num_candidate_solution_lines > 0) {
+            fprintf(out_fp, "Candidate sets: %ld\n", sols->num_candidate_solution_lines);
+        }
         fprintf(out_fp, "Found %ld exact rational solution set(s):\n", sols->num_solution_sets);
         for (slong set = 0; set < sols->num_solution_sets; set++) {
             fprintf(out_fp, "\nSolution set %ld:\n", set + 1);
@@ -1247,6 +1261,9 @@ static void save_rational_solver_result_to_file(const char *filename,
     }
 
     if (sols->num_real_solution_sets > 0) {
+        if (sols->num_solution_sets == 0 && sols->num_candidate_solution_lines > 0) {
+            fprintf(out_fp, "Candidate sets: %ld\n", sols->num_candidate_solution_lines);
+        }
         fprintf(out_fp, "Found %ld approximate real solution set(s):\n", sols->num_real_solution_sets);
         for (slong set = 0; set < sols->num_real_solution_sets; set++) {
             fprintf(out_fp, "\nSolution set %ld:\n", set + 1);
@@ -1551,6 +1568,59 @@ static int count_comma_separated_items(const char *str)
     for (const char *p = str; *p; p++)
         if (*p == ',') count++;
     return count;
+}
+
+static int auto_adjust_elimination_vars_for_msolve_compat(const char *polys_str,
+                                                          const char *field_str,
+                                                          const char *input_vars_str,
+                                                          char **vars_str_out,
+                                                          int silent_mode)
+{
+    slong num_polys = 0;
+    char **poly_arr = NULL;
+    char **input_vars = NULL;
+    char *vars_str = NULL;
+    int ok = 0;
+
+    slong num_input_vars = 0;
+
+    if (vars_str_out) *vars_str_out = NULL;
+
+    if (!polys_str || !input_vars_str || !vars_str_out) return 0;
+
+    poly_arr = split_string(polys_str, &num_polys);
+    if (!poly_arr || num_polys <= 0) goto cleanup;
+
+    input_vars = split_string(input_vars_str, &num_input_vars);
+    if (!input_vars) goto cleanup;
+
+    (void) field_str;
+
+    if (num_input_vars == num_polys && num_polys > 1) {
+        size_t total_len = 1;
+        for (slong i = 0; i < num_polys - 1; i++)
+            total_len += strlen(input_vars[i]) + 2;
+
+        vars_str = (char *) malloc(total_len);
+        if (!vars_str) goto cleanup;
+
+        vars_str[0] = '\0';
+        for (slong i = 0; i < num_polys - 1; i++) {
+            if (i > 0) strcat(vars_str, ",");
+            strcat(vars_str, input_vars[i]);
+        }
+
+    }
+
+    *vars_str_out = vars_str;
+    vars_str = NULL;
+    ok = 1;
+
+cleanup:
+    if (poly_arr) free_split_strings(poly_arr, num_polys);
+    if (input_vars) free_split_strings(input_vars, num_input_vars);
+    free(vars_str);
+    return ok;
 }
 
 static int parse_x_index_alias(const char *name, slong *idx_out)
@@ -1945,6 +2015,7 @@ int main(int argc, char *argv[])
     char *allvars_str   = NULL;
     char *field_str     = NULL;
     char *vars_str_override = NULL;
+    int   vars_str_generated = 0;
     int   need_free     = 0;
     int   rand_generated = 0;  /* 1 = polys_str/vars_str were malloc'd by random gen */
     char *deg_str       = NULL; /* degree list string when rand_mode */
@@ -2060,6 +2131,7 @@ int main(int argc, char *argv[])
     } else if (solve_mode) {
         if (effective_argc == 2) {
             FILE *fp = fopen(effective_argv[1], "r");
+            int detected_solve_mode = 0;
             if (!fp) {
                 if (!silent_mode)
                     fprintf(stderr, "Error: Cannot open file '%s'\n",
@@ -2073,11 +2145,25 @@ int main(int argc, char *argv[])
             input_filename  = strdup(effective_argv[1]);
             output_filename = generate_tagged_filename(input_filename, "_solution");
 
-            if (!read_solver_file(fp, &field_str, &polys_str)) {
+            if (!read_auto_input_file(fp, &detected_solve_mode, &field_str, &polys_str,
+                                      &vars_str, &ideal_str, &allvars_str)) {
                 fclose(fp); return 1;
             }
             fclose(fp);
             need_free = 1;
+
+            if (vars_str) {
+                free(vars_str);
+                vars_str = NULL;
+            }
+            if (ideal_str) {
+                free(ideal_str);
+                ideal_str = NULL;
+            }
+            if (allvars_str) {
+                free(allvars_str);
+                allvars_str = NULL;
+            }
 
         } else if (effective_argc == 3) {
             polys_str = effective_argv[1];
@@ -2346,11 +2432,29 @@ int main(int argc, char *argv[])
         rand_generated = 1;
     }
 
+    if (!solve_mode && polys_str && vars_str) {
+        char *compat_vars = NULL;
+        if (!auto_adjust_elimination_vars_for_msolve_compat(polys_str, field_str, vars_str,
+                                                            &compat_vars, silent_mode)) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: Failed to analyze elimination variables for msolve compatibility\n");
+            goto cleanup_fail;
+        }
+        if (compat_vars) {
+            if (need_free || rand_generated || vars_str_generated) {
+                free(vars_str);
+            }
+            vars_str_generated = 1;
+            vars_str = compat_vars;
+        }
+    }
+
     if (polys_str && vars_str) {
         char *normalized_vars = normalize_elimination_vars(polys_str, vars_str, silent_mode);
         if (normalized_vars) {
-            if (need_free || rand_generated) {
+            if (need_free || rand_generated || vars_str_generated) {
                 free(vars_str);
+                vars_str_generated = 1;
             } else {
                 vars_str_override = normalized_vars;
             }
@@ -2718,6 +2822,8 @@ int main(int argc, char *argv[])
     }
     if (!need_free && !rand_generated && vars_str_override)
         free(vars_str_override);
+    if (!need_free && !rand_generated && vars_str_generated && vars_str)
+        free(vars_str);
     if (input_filename)  free(input_filename);
     if (output_filename) free(output_filename);
 
@@ -2739,6 +2845,8 @@ cleanup_fail:
     }
     if (!need_free && !rand_generated && vars_str_override)
         free(vars_str_override);
+    if (!need_free && !rand_generated && vars_str_generated && vars_str)
+        free(vars_str);
     if (input_filename)  free(input_filename);
     if (output_filename) free(output_filename);
     flint_cleanup();
