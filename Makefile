@@ -107,7 +107,8 @@ PML_REL_SOURCES := \
 	nmod_mat_poly_extra/nmod_mat_poly_set_from.c \
 	nmod_mat_poly_extra/nmod_mat_poly_shift.c \
 	nmod_mat_extra/left_nullspace.c \
-	nmod_extra/nmod_find_root.c
+	nmod_extra/nmod_find_root.c \
+	nmod_vec_extra/nmod_vec_dot_product.c
 PML_SOURCES := $(addprefix $(PML_SOURCE_DIR)/src/,$(PML_REL_SOURCES))
 PML_OBJECTS := $(addprefix $(PML_OBJ_DIR)/,$(PML_REL_SOURCES:.c=.o))
 PML_BUILD_PREREQS := $(PML_BUNDLED_LIB)

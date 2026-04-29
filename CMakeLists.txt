@@ -407,6 +407,7 @@ if(DRSOLVE_ENABLE_PML)
       "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_shift.c"
       "${PML_SOURCE_DIR}/src/nmod_mat_extra/left_nullspace.c"
       "${PML_SOURCE_DIR}/src/nmod_extra/nmod_find_root.c"
+      "${PML_SOURCE_DIR}/src/nmod_vec_extra/nmod_vec_dot_product.c"
     )
 
     # Create PML library target

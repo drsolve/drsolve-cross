@@ -34,6 +34,7 @@ The retained source files under `pml_det/src/` are:
 - `nmod_mat_poly_extra/nmod_mat_poly_shift.c`
 - `nmod_mat_extra/left_nullspace.c`
 - `nmod_extra/nmod_find_root.c`
+- `nmod_vec_extra/nmod_vec_dot_product.c`
 
 ## Local interface
 
@@ -155,11 +156,12 @@ fits drsolve cleanly:
 - the old `third_party/pml` layout was replaced by this smaller root-level
   `pml_det/` layout.
 
-There is also one drsolve-side compatibility change outside the vendored PML
-tree:
+There is also one drsolve-side integration change outside the determinant chain:
 
-- `src/fq_sparse_interpolation.c` no longer depends on the removed
-  `nmod_vec_extra` module; the tiny helper it needed is implemented locally.
+- `src/fq_sparse_interpolation.c` now uses the restored
+  `nmod_vec_dot_product_unbalanced` implementation from a minimal vendored
+  `nmod_vec_extra` subset, since the temporary local fallback was noticeably
+  worse for sparse interpolation performance.
 
 ## Windows notes
 
