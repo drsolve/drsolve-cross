@@ -710,7 +710,13 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
 
     switch (request->mode) {
         case DIXON_GUI_MODE_SOLVE:
-            if (!append_arg(&command, request->solve_verbose ? "--solve-verbose" : "--solve")) {
+            if (request->solve_verbose) {
+                if (!append_arg(&command, "-v") || !append_arg(&command, "2")) {
+                    set_error(error_message, error_message_size, "Out of memory while adding the verbose option to the solve command line.");
+                    goto cleanup;
+                }
+            }
+            if (!append_arg(&command, "-s")) {
                 set_error(error_message, error_message_size, "Out of memory while building the solve command line.");
                 goto cleanup;
             }
@@ -789,7 +795,7 @@ int dixon_gui_run_request(const dixon_gui_request_t *request,
             break;
         case DIXON_GUI_MODE_RANDOM:
             if (request->random_mode == DIXON_GUI_RANDOM_SOLVE) {
-                if (!append_arg(&command, "--solve")) {
+                if (!append_arg(&command, "-s")) {
                     set_error(error_message, error_message_size, "Out of memory while building the random solve command line.");
                     goto cleanup;
                 }

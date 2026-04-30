@@ -14,6 +14,7 @@ det_method_t dixon_global_method_step1 = -1;
 det_method_t dixon_global_method_step4 = -1;
 det_method_t dixon_global_method = -1; // deprecated compatibility alias
 resultant_method_t g_resultant_method = RESULTANT_METHOD_DIXON;
+int g_dixon_verbose_level = 1;
 int g_dixon_debug_mode = 0;
 int g_dixon_show_step_timing = 0;
 
@@ -51,12 +52,25 @@ int dixon_get_effective_interpolation_threads(void)
     return threads;
 }
 
-void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed)
+static void dixon_info_log(const char *fmt, ...)
 {
-    if (!g_dixon_show_step_timing) {
+    va_list args;
+
+    if (g_dixon_verbose_level < 1) {
         return;
     }
-    printf("%s time: %.3f seconds\n", step_label, wall_elapsed);
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed)
+{
+    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
+        return;
+    }
+    dixon_info_log("%s time: %.3f seconds\n", step_label, wall_elapsed);
 }
 
 void dixon_maybe_print_step_method_time(const char *step_label,
@@ -66,7 +80,7 @@ void dixon_maybe_print_step_method_time(const char *step_label,
 {
     int show_parallel_style = 0;
 
-    if (!g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
         return;
     }
 
@@ -75,11 +89,11 @@ void dixon_maybe_print_step_method_time(const char *step_label,
                            method == DET_METHOD_RECURSIVE);
 
     if (show_parallel_style) {
-        printf("%s time: CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
-               step_label, cpu_elapsed, wall_elapsed,
-               dixon_get_effective_interpolation_threads());
+        dixon_info_log("%s time: CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
+                       step_label, cpu_elapsed, wall_elapsed,
+                       dixon_get_effective_interpolation_threads());
     } else {
-        printf("%s time: %.3f seconds\n", step_label, wall_elapsed);
+        dixon_info_log("%s time: %.3f seconds\n", step_label, wall_elapsed);
     }
 }
 
@@ -1533,8 +1547,8 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         *num_cols = 0;
     } else {
         if (!selection_stable) {
-            printf("Warning: using best available submatrix after %ld attempts.\n",
-                   MAX_SELECTION_ATTEMPTS);
+            dixon_info_log("Warning: using best available submatrix after %ld attempts.\n",
+                           MAX_SELECTION_ATTEMPTS);
         }
         *row_indices_out = accepted_rows;
         *col_indices_out = accepted_cols;
@@ -1783,7 +1797,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                               slong *matrix_size,
                                               const fq_mvpoly_t *dixon_poly,
                                               slong nvars, slong npars) {
-    printf("\nStep 2: Construct Dixon matrix\n");
+    dixon_info_log("\nStep 2: Construct Dixon matrix\n");
     double step2_wall_start = get_wall_time();
     double phase_start = step2_wall_start;
     
@@ -1832,10 +1846,10 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     dixon_debug_log("  Collected %ld row monomials and %ld dual monomials in %.3f seconds\n",
                     nx_monoms, ndual_monoms, get_wall_time() - phase_start);
 
-    printf("  Dixon matrix size: %ld x %ld\n", nx_monoms, ndual_monoms);
+    dixon_info_log("  Dixon matrix size: %ld x %ld\n", nx_monoms, ndual_monoms);
     
     if (nx_monoms == 0 || ndual_monoms == 0) {
-        printf("Warning: Empty coefficient matrix\n");
+        dixon_info_log("Warning: Empty coefficient matrix\n");
         *matrix_size = 0;
         dixon_maybe_print_step_time("Step 2", get_wall_time() - step2_wall_start);
         flint_free(d0);
@@ -1861,7 +1875,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
 
     clock_t step3_cpu_start = clock();
     double step3_wall_start = get_wall_time();
-    printf("\nStep 3: Extract maximal-rank submatrix\n");
+    dixon_info_log("\nStep 3: Extract maximal-rank submatrix\n");
     slong *row_idx_array = NULL;
     slong *col_idx_array = NULL;
     slong num_rows, num_cols;
@@ -1922,7 +1936,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     slong submat_rank = FLINT_MIN(num_rows, num_cols);
     
     if (submat_rank == 0) {
-        printf("Warning: Matrix has rank 0\n");
+        dixon_info_log("Warning: Matrix has rank 0\n");
         *matrix_size = 0;
         (void) step3_cpu_start;
         dixon_maybe_print_step_time("Step 3", get_wall_time() - step3_wall_start);
@@ -1951,7 +1965,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         return;
     }
 
-    printf("  Submatrix size: %ld x %ld\n", submat_rank, submat_rank);
+    dixon_info_log("  Submatrix size: %ld x %ld\n", submat_rank, submat_rank);
     dixon_debug_log("  Copying %ld x %ld submatrix...\n",
                     submat_rank, submat_rank);
     
@@ -2072,7 +2086,7 @@ static void dixon_add_generic_monomials(fq_mvpoly_t *poly,
 
 // Calculate actual Dixon matrix size by building the system and extracting matrix
 slong dixon_matrix_size(slong nvars, slong degree, ulong prime, slong field_degree) {
-    printf("\nCalculating Dixon matrix size for n=%ld, d=%ld\n", nvars, degree);
+    dixon_info_log("\nCalculating Dixon matrix size for n=%ld, d=%ld\n", nvars, degree);
     
     // Initialize field context
     fq_nmod_ctx_t ctx;
@@ -2153,7 +2167,7 @@ slong dixon_matrix_size(slong nvars, slong degree, ulong prime, slong field_degr
     // The actual matrix size (should be square, so take minimum)
     slong matrix_size = FLINT_MAX(nx_monoms, ndual_monoms);
     
-    printf("Dixon matrix actual size: %ld x %ld\n", nx_monoms, ndual_monoms);
+    dixon_info_log("Dixon matrix actual size: %ld x %ld\n", nx_monoms, ndual_monoms);
     
     // Cleanup
     if (x_monoms) flint_free(x_monoms);
@@ -2189,7 +2203,7 @@ slong dixon_matrix_size(slong nvars, slong degree, ulong prime, slong field_degr
 void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys, 
                        slong nvars, slong npars) {
     cleanup_unified_workspace();
-    printf("\nStep 1: Build Dixon polynomial\n");
+    dixon_info_log("\nStep 1: Build Dixon polynomial\n");
     clock_t step1_cpu_start = clock();
     double step1_wall_start = get_wall_time();
     fq_mvpoly_t **M_mvpoly;
@@ -2207,18 +2221,18 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     det_method_t step1_method = DET_METHOD_RECURSIVE;
     if (dixon_global_method_step1 != -1) {
         step1_method = dixon_global_method_step1;
-        printf("  Step 1 method override active: %d (%s)\n",
-               dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
+        dixon_info_log("  Step 1 method override active: %d (%s)\n",
+                       dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
     }
     dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
                     dixon_det_method_name(step1_method));
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
     if (d_poly.nterms <= 100) {
-        printf("  Dixon polynomial: %ld terms\n", d_poly.nterms);
+        dixon_info_log("  Dixon polynomial: %ld terms\n", d_poly.nterms);
         fq_mvpoly_print_expanded(&d_poly, "DixonPoly", 1);
     } else {
-        printf("  Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
+        dixon_info_log("  Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
     if (g_dixon_debug_mode) {
         print_dixon_poly_actual_degrees(&d_poly, nvars, npars, NULL, NULL);
@@ -2248,7 +2262,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                             &matrix_size, &d_poly, nvars, npars);
     
     if (matrix_size > 0) {
-        printf("\nStep 4: Compute resultant\n");
+        dixon_info_log("\nStep 4: Compute resultant\n");
         clock_t step4_cpu_start = clock();
         double step4_wall_start = get_wall_time();
         
@@ -2274,8 +2288,8 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         //coeff_method = DET_METHOD_INTERPOLATION;
         if (dixon_global_method_step4 != -1) {
             coeff_method = dixon_global_method_step4;
-            printf("  Step 4 method override active: %d (%s)\n",
-                   dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
+            dixon_info_log("  Step 4 method override active: %d (%s)\n",
+                           dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
         }
         
         compute_fq_coefficient_matrix_det(result, coeff_matrix, matrix_size,
@@ -2288,7 +2302,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         if (result->nterms <= 100) {
             fq_mvpoly_print(result, "Final Resultant");
         } else {
-            printf("Final resultant too large to display (%ld terms)\n", result->nterms);
+            dixon_info_log("Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
         // Cleanup coefficient matrix
@@ -2301,7 +2315,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         flint_free(coeff_matrix);
     } else {
         fq_mvpoly_init(result, 0, npars, polys[0].ctx);
-        printf("Warning: Empty coefficient matrix, resultant is 0\n");
+        dixon_info_log("Warning: Empty coefficient matrix, resultant is 0\n");
     }
     
     // Cleanup
@@ -2310,7 +2324,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     
     fq_mvpoly_clear(&d_poly);
 
-    printf("\n=== Dixon Resultant Computation Complete ===\n");
+    dixon_info_log("\n=== Dixon Resultant Computation Complete ===\n");
 }
 
 void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys, 
@@ -2319,7 +2333,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                   const char *gen_name) {
     cleanup_unified_workspace();
     
-    printf("\nStep 1: Build Dixon polynomial\n");
+    dixon_info_log("\nStep 1: Build Dixon polynomial\n");
     clock_t step1_cpu_start = clock();
     double step1_wall_start = get_wall_time();
     fq_mvpoly_t **M_mvpoly;
@@ -2334,18 +2348,18 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     det_method_t step1_method = DET_METHOD_RECURSIVE;
     if (dixon_global_method_step1 != -1) {
         step1_method = dixon_global_method_step1;
-        printf("  Step 1 method override active: %d (%s)\n",
-               dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
+        dixon_info_log("  Step 1 method override active: %d (%s)\n",
+                       dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
     }
     dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
                     dixon_det_method_name(step1_method));
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
     if (d_poly.nterms <= 100) {
-        printf("  Dixon polynomial: %ld terms\n", d_poly.nterms);
+        dixon_info_log("  Dixon polynomial: %ld terms\n", d_poly.nterms);
         fq_mvpoly_print_with_names(&d_poly, "DixonPoly", var_names, par_names, gen_name, 1);
     } else {
-        printf("  Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
+        dixon_info_log("  Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
     if (g_dixon_debug_mode) {
         print_dixon_poly_actual_degrees(&d_poly, nvars, npars, var_names, par_names);
@@ -2365,7 +2379,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                             &matrix_size, &d_poly, nvars, npars);
     
     if (matrix_size > 0) {
-        printf("\nStep 4: Compute resultant\n");
+        dixon_info_log("\nStep 4: Compute resultant\n");
         clock_t step4_cpu_start = clock();
         double step4_wall_start = get_wall_time();
         
@@ -2385,8 +2399,8 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         }
         if (dixon_global_method_step4 != -1) {
             coeff_method = dixon_global_method_step4;
-            printf("  Step 4 method override active: %d (%s)\n",
-                   dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
+            dixon_info_log("  Step 4 method override active: %d (%s)\n",
+                           dixon_global_method_step4, dixon_det_method_name(dixon_global_method_step4));
         }
         
         compute_fq_coefficient_matrix_det(result, coeff_matrix, matrix_size,
@@ -2399,7 +2413,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         if (result->nterms <= 100) {
             fq_mvpoly_print_with_names(result, "Final Resultant", NULL, par_names, gen_name, 0);
         } else {
-            printf("Final resultant too large to display (%ld terms)\n", result->nterms);
+            dixon_info_log("Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
         
@@ -2412,7 +2426,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         flint_free(coeff_matrix);
     } else {
         fq_mvpoly_init(result, 0, npars, polys[0].ctx);
-        printf("Warning: Empty coefficient matrix, resultant is 0\n");
+        dixon_info_log("Warning: Empty coefficient matrix, resultant is 0\n");
     }
     
     flint_free(row_indices);
@@ -2431,7 +2445,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     flint_free(M_mvpoly);
     flint_free(modified_M_mvpoly);
 
-    printf("\n=== Dixon Resultant Computation Complete ===\n");
+    dixon_info_log("\n=== Dixon Resultant Computation Complete ===\n");
 }
 
 

@@ -59,29 +59,30 @@ static void print_usage(const char *prog_name)
     printf("USAGE:\n");
     printf("  Basic Dixon:\n");
     printf("    %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
-    printf("    -> Default output file: solution+timestamp.dat\n");
+    printf("    %s -o output.dr \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
+    printf("    -> Default output file: solution_YYYYMMDD_HHMMSS.dr\n");
 
     printf("  Polynomial system solver:\n");
     printf("    %s \"polynomials\" field_size\n", prog_name);
-    printf("    %s --solve \"polynomials\" field_size\n", prog_name);
+    printf("    %s -s \"polynomials\" field_size\n", prog_name);
     printf("    %s --solve-rational-only \"polynomials\" 0\n", prog_name);
-    printf("    %s --solve-verbose \"polynomials\" field_size\n", prog_name);
-    printf("    -> Writes all solutions to solution+timestamp.dat\n");
-    printf("    -> `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
-    printf("    -> `--solve-verbose` keeps full solver logs\n");
+    printf("    %s -v 2 -s \"polynomials\" field_size\n", prog_name);
+    printf("    -> Writes all solutions to solution_YYYYMMDD_HHMMSS.dr\n");
+    printf("    -> `-s` / `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
+    printf("    -> `-v 2` matches the old debug / verbose solver output\n");
 
     printf("  Complexity analysis:\n");
     printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -c    \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
-    printf("    %s --comp input_file\n", prog_name);
-    printf("    -> Prints complexity info; saves to comp+timestamp.dat\n");
+    printf("    %s --comp -f input.dr\n", prog_name);
+    printf("    -> Prints complexity info; saves to comp_YYYYMMDD_HHMMSS.dr by default\n");
     printf("    Add --omega <value> (or -w <value>) to set omega (default: %.4g)\n",
            DIXON_OMEGA);
-    printf("    Add --time to print per-step timing; add --debug for extra diagnostics\n");
+    printf("    Add --time to print per-step timing; use -v 2 for the old debug-level diagnostics\n");
 
     printf("  Dixon with ideal reduction:\n");
     printf("    %s --ideal \"ideal_generators\" \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
-    printf("    %s --ideal input_file\n", prog_name);
+    printf("    %s --ideal -f input.dr\n", prog_name);
     printf("    -> ideal_generators: comma-separated relations with '=' (e.g. \"a2^3=2*a1+1, a3^3=a1*a2+3\")\n");
     printf("    -> In file mode, lines after the first two lines containing '=' are ideal generators; others are polynomials\n");
     
@@ -94,25 +95,32 @@ static void print_usage(const char *prog_name)
     printf("  Random mode (combine with any compute flag):\n");
     printf("    %s --random \"[d1,d2,...,dn]\" field_size\n", prog_name);
     printf("    %s -r       \"[d]*n\"          field_size\n", prog_name);
-    printf("    %s -r --solve \"[d1,...,dn]\" field_size\n", prog_name);
+    printf("    %s -r -s    \"[d1,...,dn]\" field_size\n", prog_name);
     printf("    %s -r --comp  \"[d]*n\"        field_size\n", prog_name);
 
     printf("  File input:\n");
     printf("    %s input_file\n", prog_name);
-    printf("    %s --solve input_file\n", prog_name);
+    printf("    %s -f input_file\n", prog_name);
+    printf("    %s -s input_file\n", prog_name);
+    printf("    %s -s -f input_file -o output.dr\n", prog_name);
     printf("    -> Without flags, auto-detects solver mode when line 1 starts with a digit; otherwise uses elimination mode\n");
     printf("    -> If elimination vars count equals equation count n, auto-adjusts to eliminate the first n-1 variables\n");
-    printf("    -> Output saved as input_file_solution+timestamp.dat\n");
+    printf("    -> Input file may be given directly or with `-f`; output file must be given with `-o` when overriding the default\n");
+    printf("    -> Default file-mode outputs are input_file_solution.dr or input_file_comp.dr\n");
 
-    printf("  Silent mode:\n");
-    printf("    %s --silent [--solve|--comp|-c] <args>\n", prog_name);
-    printf("    -> No console output; solution file is still generated\n");
+    printf("  Verbosity:\n");
+    printf("    %s -v 0 <args>\n", prog_name);
+    printf("    %s -v 1 <args>\n", prog_name);
+    printf("    %s -v 2 <args>\n", prog_name);
+    printf("    -> `-v 0` matches `--silent` and prints nothing\n");
+    printf("    -> `-v 1` is the default output level\n");
+    printf("    -> `-v 2` matches the old `--debug` output and also enables per-step timing\n");
 
     printf("  Diagnostics:\n");
     printf("    %s --time <args>\n", prog_name);
-    printf("    %s --debug <args>\n", prog_name);
+    printf("    %s -v 2 <args>\n", prog_name);
     printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
-    printf("    -> --debug enables extra internal diagnostics and also turns on per-step timing\n");
+    printf("    -> `--silent`, `--debug`, `--solve-verbose` and `--solve` remain accepted for compatibility\n");
 
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
@@ -143,18 +151,19 @@ static void print_usage(const char *prog_name)
     printf("EXAMPLES:\n");
     printf("  %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("  %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
-    printf("  %s \"x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1\" 257\n", prog_name);
+    printf("  %s -s \"x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1\" 257\n", prog_name);
     printf("  %s --comp \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
     printf("  %s --random \"[3,3,2]\" 257\n", prog_name);
     printf("  %s -r \"[3]*3\" 0\n", prog_name);
-    printf("  %s -r --solve \"[2]*3\" 257\n", prog_name);
+    printf("  %s -r -s \"[2]*3\" 257\n", prog_name);
     printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
     printf("  %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
     printf("  %s --field-eqution \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
-    printf("  %s --silent \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
+    printf("  %s -v 0 \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
     printf("  %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("  (AES polynomial for GF(2^8), 't' is the field extension generator)\n");
     printf("  %s example.dr\n", prog_name);
+    printf("  %s -v 2 -f in.dr -o out.dr\n", prog_name);
     printf("  %s example_solve.dr\n", prog_name);
 }
 
@@ -537,6 +546,37 @@ static char *generate_timestamped_filename(const char *prefix)
     }
 
     return strdup(buffer);
+}
+
+static char *choose_output_filename(const char *requested_output,
+                                    const char *input_filename,
+                                    const char *timestamp_prefix,
+                                    const char *tag)
+{
+    if (requested_output) {
+        return strdup(requested_output);
+    }
+    if (input_filename && tag) {
+        return generate_tagged_filename(input_filename, tag);
+    }
+    if (timestamp_prefix) {
+        return generate_timestamped_filename(timestamp_prefix);
+    }
+    return NULL;
+}
+
+static int parse_verbose_level(const char *value, int *verbose_level)
+{
+    char *endptr = NULL;
+    long parsed = strtol(value, &endptr, 10);
+
+    if (!value || !verbose_level) return 0;
+    if (!endptr || *endptr != '\0' || parsed < 0 || parsed > 2) {
+        return 0;
+    }
+
+    *verbose_level = (int) parsed;
+    return 1;
 }
 
 static void print_field_label(FILE *out, const fmpz_t prime, ulong power)
@@ -1852,52 +1892,68 @@ int main(int argc, char *argv[])
 
     if (argc == 1) { print_version(); print_usage(prog_name); return 0; }
 
-    /* ---- parse leading flags ---- */
-    int    silent_mode = 0;
+    /* ---- parse flags ---- */
+    int    verbose_level = 1;
     int    solve_mode  = 0;
-    int    solve_verbose_mode = 0;
     int    solve_rational_only_mode = 0;
     int    comp_mode   = 0;
     int    rand_mode   = 0;   /* --random / -r */
     int    ideal_mode  = 0;   /*  --ideal flag */
     int    field_eq_mode = 0; /* --field-equation */
     int    time_mode   = 0;   /* --time */
-    int    debug_mode  = 0;   /* --debug */
-    int    arg_offset  = 0;
     double omega       = DIXON_OMEGA;   /* default, overridden by --omega */
     int    det_method_step1 = -1;  /* determinant method override for step 1 */
     int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
     resultant_method_t resultant_method = RESULTANT_METHOD_DIXON;
+    const char *cli_input_filename = NULL;
+    const char *cli_output_filename = NULL;
+    char *positional_args[argc];
+    int positional_count = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
-            silent_mode = 1; arg_offset++;
+            verbose_level = 0;
         } else if (strcmp(argv[i], "--solve-verbose") == 0) {
-            solve_mode = 1; solve_verbose_mode = 1; arg_offset++;
+            solve_mode = 1;
+            verbose_level = 2;
         } else if (strcmp(argv[i], "--solve-rational-only") == 0) {
-            solve_mode = 1; solve_rational_only_mode = 1; arg_offset++;
-        } else if (strcmp(argv[i], "--solve") == 0) {
-            solve_mode = 1; arg_offset++;
+            solve_mode = 1;
+            solve_rational_only_mode = 1;
+        } else if (strcmp(argv[i], "--solve") == 0 ||
+                   strcmp(argv[i], "-s")      == 0) {
+            solve_mode = 1;
         } else if (strcmp(argv[i], "--comp") == 0 ||
                    strcmp(argv[i], "-c")     == 0) {
-            comp_mode = 1; arg_offset++;
+            comp_mode = 1;
         } else if (strcmp(argv[i], "--random") == 0 ||
                    strcmp(argv[i], "-r")       == 0) {
-            rand_mode = 1; arg_offset++;
+            rand_mode = 1;
         } else if (strcmp(argv[i], "--ideal") == 0) {  /* <<< NEW >>> */
-            ideal_mode = 1; arg_offset++;
+            ideal_mode = 1;
         } else if (strcmp(argv[i], "--field-equation") == 0 ||
                    strcmp(argv[i], "--field-eqution")  == 0) {
-            field_eq_mode = 1; arg_offset++;
+            field_eq_mode = 1;
         } else if (strcmp(argv[i], "--time") == 0) {
-            time_mode = 1; arg_offset++;
+            time_mode = 1;
         } else if (strcmp(argv[i], "--debug") == 0) {
-            debug_mode = 1; arg_offset++;
+            verbose_level = 2;
+        } else if ((strcmp(argv[i], "--verbose") == 0 ||
+                    strcmp(argv[i], "-v")        == 0) && i + 1 < argc) {
+            if (!parse_verbose_level(argv[i + 1], &verbose_level)) {
+                fprintf(stderr, "Error: invalid verbose level '%s'; expected 0, 1, or 2.\n",
+                        argv[i + 1]);
+                return 1;
+            }
+            i++;
+        } else if (strcmp(argv[i], "--verbose") == 0 ||
+                   strcmp(argv[i], "-v")        == 0) {
+            fprintf(stderr, "Error: %s requires an integer argument 0, 1, or 2.\n", argv[i]);
+            return 1;
         } else if (strcmp(argv[i], "--macaulay") == 0) {
-            resultant_method = RESULTANT_METHOD_MACAULAY; arg_offset++;
+            resultant_method = RESULTANT_METHOD_MACAULAY;
         } else if (strcmp(argv[i], "--subres") == 0) {
-            resultant_method = RESULTANT_METHOD_SUBRES; arg_offset++;
+            resultant_method = RESULTANT_METHOD_SUBRES;
         } else if ((strcmp(argv[i], "--resultant") == 0 ||
                     strcmp(argv[i], "--resultant-method") == 0) && i + 1 < argc) {
             if (strcmp(argv[i + 1], "macaulay") == 0) {
@@ -1910,7 +1966,6 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid resultant method '%s', using dixon.\n",
                                 argv[i + 1]);
             }
-            arg_offset += 2;
             i++;
         } else if ((strcmp(argv[i], "--omega") == 0 ||
                     strcmp(argv[i], "-w")      == 0) && i + 1 < argc) {
@@ -1922,7 +1977,6 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid --omega value '%s', "
                                 "using default %.4g\n", argv[i + 1], omega);
             }
-            arg_offset += 2;
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--method") == 0) && i + 1 < argc) {
             char *endptr = NULL;
@@ -1934,7 +1988,6 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid --method value '%s', "
                                 "must be 0-3. Using default.\n", argv[i + 1]);
             }
-            arg_offset += 2;
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--step1") == 0) && i + 1 < argc) {
             char *endptr = NULL;
@@ -1945,7 +1998,6 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid --step1 value '%s', "
                                 "must be 0-3. Using default.\n", argv[i + 1]);
             }
-            arg_offset += 2;
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--step4") == 0) && i + 1 < argc) {
             char *endptr = NULL;
@@ -1956,7 +2008,6 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid --step4 value '%s', "
                                 "must be 0-3. Using default.\n", argv[i + 1]);
             }
-            arg_offset += 2;
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--threads") == 0) && i + 1 < argc) {
             char *endptr = NULL;
@@ -1967,22 +2018,34 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid --threads value '%s', "
                                 "must be positive integer. Using default.\n", argv[i + 1]);
             }
-            arg_offset += 2;
             i++;          /* skip the value token */
+        } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
+            cli_input_filename = argv[i + 1];
+            i++;
+        } else if (strcmp(argv[i], "-f") == 0) {
+            fprintf(stderr, "Error: -f requires an input filename.\n");
+            return 1;
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            cli_output_filename = argv[i + 1];
+            i++;
+        } else if (strcmp(argv[i], "-o") == 0) {
+            fprintf(stderr, "Error: -o requires an output filename.\n");
+            return 1;
         } else {
-            break;
+            positional_args[positional_count++] = argv[i];
         }
     }
 
-    int    effective_argc = argc - arg_offset;
-    char **effective_argv = argv + arg_offset;
+    int silent_mode = (verbose_level == 0);
+    int solve_verbose_mode = (verbose_level >= 2);
+    int debug_mode = (verbose_level >= 2);
 
 
     
     /* ---- help ---- */
-    if (effective_argc >= 2 &&
-        (strcmp(effective_argv[1], "--help") == 0 ||
-         strcmp(effective_argv[1], "-h")     == 0)) {
+    if (positional_count >= 1 &&
+        (strcmp(positional_args[0], "--help") == 0 ||
+         strcmp(positional_args[0], "-h")     == 0)) {
         if (!silent_mode)  { print_version(); print_usage(prog_name); }
         return 0;
     }
@@ -1993,15 +2056,15 @@ int main(int argc, char *argv[])
     }
 
     /* ---- test modes ---- */
-    if (argc >= 2 && strcmp(argv[1], "--test") == 0) {
+    if (positional_count >= 1 && strcmp(positional_args[0], "--test") == 0) {
         if (!silent_mode) {
-            if (argc >= 3) test_dixon(atoi(argv[2]));
+            if (positional_count >= 2) test_dixon(atoi(positional_args[1]));
             else           test_dixon(0);
         }
         return 0;
     }
-    if (effective_argc >= 2 &&
-        strcmp(effective_argv[1], "--test-solver") == 0) {
+    if (positional_count >= 1 &&
+        strcmp(positional_args[0], "--test-solver") == 0) {
         if (!silent_mode) test_polynomial_solver();
         return 0;
     }
@@ -2021,37 +2084,47 @@ int main(int argc, char *argv[])
     char *output_filename = NULL;
     mp_limb_t prime = 0;
     ulong     power = 0;
+    const char *file_input_arg = cli_input_filename;
 
     /* ---- determine input mode ---- */
     if (rand_mode) {
         /* --random / -r: positional args are "d1,d2,...,dn" field_size */
-        if (effective_argc != 3) {
+        if (file_input_arg || positional_count != 2) {
             if (!silent_mode) {
                 fprintf(stderr, "Error: Random mode requires exactly:\n");
-                fprintf(stderr, "  %s [--solve|--comp] --random \"d1,d2,...,dn\" field_size\n",
+                fprintf(stderr, "  %s [-s|--comp] --random \"d1,d2,...,dn\" field_size\n",
                         prog_name);
             }
             return 1;
         }
-        deg_str   = effective_argv[1];
-        field_str = effective_argv[2];
+        deg_str   = positional_args[0];
+        field_str = positional_args[1];
 
-        output_filename = generate_timestamped_filename(comp_mode ? "comp" : "solution");
+        output_filename = choose_output_filename(cli_output_filename, NULL,
+                                                 comp_mode ? "comp" : "solution", NULL);
     /*  --ideal mode */
     } else if (ideal_mode) {
-        if (effective_argc == 2) {
+        if (file_input_arg && positional_count > 0) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: use either -f input_file or a bare input_file, not both.\n");
+            return 1;
+        }
+
+        if (file_input_arg || positional_count == 1) {
             /* File input: auto-detect ideal generators by '=' */
-            FILE *fp = fopen(effective_argv[1], "r");
+            const char *input_arg = file_input_arg ? file_input_arg : positional_args[0];
+            FILE *fp = fopen(input_arg, "r");
             if (!fp) {
                 if (!silent_mode)
-                    fprintf(stderr, "Error: Cannot open file '%s'\n", effective_argv[1]);
+                    fprintf(stderr, "Error: Cannot open file '%s'\n", input_arg);
                 return 1;
             }
             if (!silent_mode)
-                printf("Reading from file (--ideal mode): %s\n", effective_argv[1]);
+                printf("Reading from file (--ideal mode): %s\n", input_arg);
 
-            input_filename  = strdup(effective_argv[1]);
-            output_filename = generate_tagged_filename(input_filename, "_solution");
+            input_filename  = strdup(input_arg);
+            output_filename = choose_output_filename(cli_output_filename, input_filename,
+                                                     NULL, "_solution");
 
             if (!read_ideal_file(fp, &field_str, &polys_str,
                                  &vars_str, &ideal_str)) {
@@ -2066,40 +2139,49 @@ int main(int argc, char *argv[])
                                     "(no lines with '='). Running basic Dixon.\n");
             }
 
-        } else if (effective_argc == 5) {
+        } else if (positional_count == 4) {
             /* CLI: --ideal "generators" "polys" "elim_vars" field_size */
-            ideal_str = effective_argv[1];
-            polys_str = effective_argv[2];
-            vars_str  = effective_argv[3];
-            field_str = effective_argv[4];
+            ideal_str = positional_args[0];
+            polys_str = positional_args[1];
+            vars_str  = positional_args[2];
+            field_str = positional_args[3];
 
-            output_filename = generate_timestamped_filename("solution");
+            output_filename = choose_output_filename(cli_output_filename, NULL,
+                                                     "solution", NULL);
 
         } else {
             if (!silent_mode) {
                 fprintf(stderr, "Error: --ideal mode requires either:\n");
                 fprintf(stderr, "  %s --ideal \"ideal_generators\" \"polynomials\" \"eliminate_vars\" field_size\n",
                         prog_name);
-                fprintf(stderr, "  %s --ideal input_file\n", prog_name);
+                fprintf(stderr, "  %s --ideal [-f] input_file\n", prog_name);
             }
             return 1;
         }
     } else if (comp_mode) {
         /* Complexity analysis mode: same argument format as basic Dixon */
-        if (effective_argc == 2) {
+        if (file_input_arg && positional_count > 0) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: use either -f input_file or a bare input_file, not both.\n");
+            return 1;
+        }
+
+        if (file_input_arg || positional_count == 1) {
             /* file input */
-            FILE *fp = fopen(effective_argv[1], "r");
+            const char *input_arg = file_input_arg ? file_input_arg : positional_args[0];
+            FILE *fp = fopen(input_arg, "r");
             if (!fp) {
                 if (!silent_mode)
                     fprintf(stderr, "Error: Cannot open file '%s'\n",
-                            effective_argv[1]);
+                            input_arg);
                 return 1;
             }
             if (!silent_mode)
-                printf("Reading from file: %s\n", effective_argv[1]);
+                printf("Reading from file: %s\n", input_arg);
 
-            input_filename  = strdup(effective_argv[1]);
-            output_filename = generate_tagged_filename(input_filename, "_comp");
+            input_filename  = strdup(input_arg);
+            output_filename = choose_output_filename(cli_output_filename, input_filename,
+                                                     NULL, "_comp");
 
             if (!read_multiline_file(fp, &field_str, &polys_str,
                                      &vars_str, &ideal_str, &allvars_str)) {
@@ -2108,40 +2190,49 @@ int main(int argc, char *argv[])
             fclose(fp);
             need_free = 1;
 
-        } else if (effective_argc == 4) {
+        } else if (positional_count == 3) {
             /* command line: polys vars field_size */
-            polys_str = effective_argv[1];
-            vars_str  = effective_argv[2];
-            field_str = effective_argv[3];
+            polys_str = positional_args[0];
+            vars_str  = positional_args[1];
+            field_str = positional_args[2];
 
-            output_filename = generate_timestamped_filename("comp");
+            output_filename = choose_output_filename(cli_output_filename, NULL,
+                                                     "comp", NULL);
 
         } else {
             if (!silent_mode) {
                 fprintf(stderr, "Error: Complexity mode requires:\n");
                 fprintf(stderr, "  %s --comp \"polynomials\" \"eliminate_vars\" field_size\n",
                         prog_name);
-                fprintf(stderr, "  %s --comp input_file\n", prog_name);
+                fprintf(stderr, "  %s --comp [-f] input_file\n", prog_name);
             }
             return 1;
         }
 
     } else if (solve_mode) {
-        if (effective_argc == 2) {
-            FILE *fp = fopen(effective_argv[1], "r");
+        if (file_input_arg && positional_count > 0) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: use either -f input_file or a bare input_file, not both.\n");
+            return 1;
+        }
+
+        if (file_input_arg || positional_count == 1) {
+            const char *input_arg = file_input_arg ? file_input_arg : positional_args[0];
+            FILE *fp = fopen(input_arg, "r");
             int detected_solve_mode = 0;
             if (!fp) {
                 if (!silent_mode)
                     fprintf(stderr, "Error: Cannot open file '%s'\n",
-                            effective_argv[1]);
+                            input_arg);
                 return 1;
             }
             if (!silent_mode)
                 printf("Reading polynomial system from file: %s\n",
-                       effective_argv[1]);
+                       input_arg);
 
-            input_filename  = strdup(effective_argv[1]);
-            output_filename = generate_tagged_filename(input_filename, "_solution");
+            input_filename  = strdup(input_arg);
+            output_filename = choose_output_filename(cli_output_filename, input_filename,
+                                                     NULL, "_solution");
 
             if (!read_auto_input_file(fp, &detected_solve_mode, &field_str, &polys_str,
                                       &vars_str, &ideal_str, &allvars_str)) {
@@ -2163,42 +2254,52 @@ int main(int argc, char *argv[])
                 allvars_str = NULL;
             }
 
-        } else if (effective_argc == 3) {
-            polys_str = effective_argv[1];
-            field_str = effective_argv[2];
-            output_filename = generate_timestamped_filename("solution");
+        } else if (positional_count == 2) {
+            polys_str = positional_args[0];
+            field_str = positional_args[1];
+            output_filename = choose_output_filename(cli_output_filename, NULL,
+                                                     "solution", NULL);
 
         } else {
             if (!silent_mode) {
                 fprintf(stderr, "Error: Solver mode requires either:\n");
-                fprintf(stderr, "  %s --solve \"polynomials\" field_size\n", prog_name);
-                fprintf(stderr, "  %s --solve input_file\n", prog_name);
+                fprintf(stderr, "  %s -s \"polynomials\" field_size\n", prog_name);
+                fprintf(stderr, "  %s -s [-f] input_file\n", prog_name);
             }
             return 1;
         }
 
     } else {
         /* Basic Dixon, or auto-detect solve/file mode when flags are omitted */
-        if (effective_argc == 3) {
+        if (file_input_arg && positional_count > 0) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: use either -f input_file or a bare input_file, not both.\n");
+            return 1;
+        }
+
+        if (positional_count == 2) {
             /* Auto-detect solve mode: only polynomials and field size */
             solve_mode = 1;
-            polys_str = effective_argv[1];
-            field_str = effective_argv[2];
-            output_filename = generate_timestamped_filename("solution");
-        } else if (effective_argc == 2) {
-            FILE *fp = fopen(effective_argv[1], "r");
+            polys_str = positional_args[0];
+            field_str = positional_args[1];
+            output_filename = choose_output_filename(cli_output_filename, NULL,
+                                                     "solution", NULL);
+        } else if (file_input_arg || positional_count == 1) {
+            const char *input_arg = file_input_arg ? file_input_arg : positional_args[0];
+            FILE *fp = fopen(input_arg, "r");
             int detected_solve_mode = 0;
             if (!fp) {
                 if (!silent_mode)
                     fprintf(stderr, "Error: Cannot open file '%s'\n",
-                            effective_argv[1]);
+                            input_arg);
                 return 1;
             }
             if (!silent_mode)
-                printf("Reading from file: %s\n", effective_argv[1]);
+                printf("Reading from file: %s\n", input_arg);
 
-            input_filename  = strdup(effective_argv[1]);
-            output_filename = generate_tagged_filename(input_filename, "_solution");
+            input_filename  = strdup(input_arg);
+            output_filename = choose_output_filename(cli_output_filename, input_filename,
+                                                     NULL, "_solution");
 
             if (!read_auto_input_file(fp, &detected_solve_mode, &field_str, &polys_str,
                                       &vars_str, &ideal_str, &allvars_str)) {
@@ -2211,16 +2312,17 @@ int main(int argc, char *argv[])
             if (!silent_mode)
                 printf("Detected file mode: %s\n", solve_mode ? "solver" : "elimination");
 
-        } else if (effective_argc == 4 || effective_argc == 5) {
-            polys_str = effective_argv[1];
-            vars_str  = effective_argv[2];
-            if (effective_argc == 5) {
-                ideal_str = effective_argv[3];
-                field_str = effective_argv[4];
+        } else if (positional_count == 3 || positional_count == 4) {
+            polys_str = positional_args[0];
+            vars_str  = positional_args[1];
+            if (positional_count == 4) {
+                ideal_str = positional_args[2];
+                field_str = positional_args[3];
             } else {
-                field_str = effective_argv[3];
+                field_str = positional_args[2];
             }
-            output_filename = generate_timestamped_filename("solution");
+            output_filename = choose_output_filename(cli_output_filename, NULL,
+                                                     "solution", NULL);
 
         } else {
             if (!silent_mode) print_usage(prog_name);
@@ -2496,7 +2598,8 @@ int main(int argc, char *argv[])
     dixon_global_method_step4 = -1;
     dixon_global_method = -1;
     g_resultant_method = resultant_method;
-    g_dixon_show_step_timing = time_mode || debug_mode;
+    g_dixon_verbose_level = verbose_level;
+    g_dixon_show_step_timing = (!silent_mode) && (time_mode || debug_mode);
     g_dixon_debug_mode = debug_mode;
     if (det_method_step1 != -1) {
         dixon_global_method_step1 = (det_method_t)det_method_step1;
@@ -2559,59 +2662,46 @@ int main(int argc, char *argv[])
         }
 
         int orig_stdout = -1, orig_stderr = -1;
-        int suppress_solver_stdout = !silent_mode && !solve_verbose_mode;
-        int suppress_solver_trace = silent_mode;
+        int suppress_solver_internal_output = !solve_verbose_mode;
 
         if (rational_mode) {
-            rational_solver_set_realtime_progress(!silent_mode && !solve_verbose_mode);
-            rational_solver_set_internal_trace(!silent_mode && solve_verbose_mode);
+            rational_solver_set_realtime_progress(solve_verbose_mode);
+            rational_solver_set_internal_trace(solve_verbose_mode);
             rational_solver_set_exact_only(solve_rational_only_mode);
 
-            if (suppress_solver_trace) {
+            if (suppress_solver_internal_output) {
                 redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
-            } else if (suppress_solver_stdout) {
-                redirect_fd_to_devnull(STDOUT_FILENO, &orig_stdout);
             }
 
             rational_solutions = solve_rational_polynomial_system_string(polys_str);
 
-            if (suppress_solver_trace) {
+            if (suppress_solver_internal_output) {
                 restore_stdio(orig_stdout, orig_stderr);
-            } else if (suppress_solver_stdout) {
-                restore_fd(STDOUT_FILENO, orig_stdout);
             }
         } else if (large_prime_mode) {
-            large_prime_solver_set_realtime_progress(!silent_mode && !solve_verbose_mode);
+            large_prime_solver_set_realtime_progress(solve_verbose_mode);
 
-            if (suppress_solver_trace) {
+            if (suppress_solver_internal_output) {
                 redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
-            } else if (suppress_solver_stdout) {
-                redirect_fd_to_devnull(STDOUT_FILENO, &orig_stdout);
             }
 
             large_prime_solutions = solve_large_prime_polynomial_system_string(polys_str, p_fmpz);
 
-            if (suppress_solver_trace) {
+            if (suppress_solver_internal_output) {
                 restore_stdio(orig_stdout, orig_stderr);
-            } else if (suppress_solver_stdout) {
-                restore_fd(STDOUT_FILENO, orig_stdout);
             }
         } else {
-            polynomial_solver_set_realtime_progress(!silent_mode && !solve_verbose_mode);
-            polynomial_solver_set_internal_trace(!silent_mode && solve_verbose_mode);
+            polynomial_solver_set_realtime_progress(solve_verbose_mode);
+            polynomial_solver_set_internal_trace(solve_verbose_mode);
 
-            if (suppress_solver_trace) {
+            if (suppress_solver_internal_output) {
                 redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
-            } else if (suppress_solver_stdout) {
-                redirect_fd_to_devnull(STDOUT_FILENO, &orig_stdout);
             }
 
             solutions = solve_polynomial_system_string(polys_str, ctx);
 
-            if (suppress_solver_trace) {
+            if (suppress_solver_internal_output) {
                 restore_stdio(orig_stdout, orig_stderr);
-            } else if (suppress_solver_stdout) {
-                restore_fd(STDOUT_FILENO, orig_stdout);
             }
         }
 
@@ -2622,7 +2712,17 @@ int main(int argc, char *argv[])
             printf("Ideal: %s\n", ideal_str);
             printf("--------------------------------\n");
         }
+
+        int orig_stdout = -1, orig_stderr = -1;
+        if (silent_mode) {
+            redirect_stdio_to_devnull(&orig_stdout, &orig_stderr);
+        }
+
         result = dixon_with_ideal_reduction_str(polys_str, vars_str, ideal_str, ctx);
+
+        if (silent_mode) {
+            restore_stdio(orig_stdout, orig_stderr);
+        }
 
     } else {
         /* ---- Basic resultant ---- */
@@ -2803,8 +2903,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    printf("Total - CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", 
-           cpu_time, wall_time, total_threads);
+    if (!silent_mode) {
+        printf("Total - CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
+               cpu_time, wall_time, total_threads);
+    }
 
     /* ---- cleanup ---- */
     if (ctx_initialized) fq_nmod_ctx_clear(ctx);

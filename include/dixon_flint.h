@@ -64,6 +64,7 @@ extern det_method_t dixon_global_method_step1;
 extern det_method_t dixon_global_method_step4;
 extern det_method_t dixon_global_method; // deprecated compatibility alias
 extern resultant_method_t g_resultant_method;
+extern int g_dixon_verbose_level;
 extern int g_dixon_debug_mode;
 extern int g_dixon_show_step_timing;
 extern int g_matrix_transpose_threshold;
