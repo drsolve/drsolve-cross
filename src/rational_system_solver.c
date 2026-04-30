@@ -1539,7 +1539,8 @@ static void rational_filter_real_solutions_by_verification(rational_solutions_t 
 static void rational_recover_exact_solutions_from_real_approximations(rational_solutions_t *sols,
                                                                       char **poly_strings,
                                                                       rational_variable_info_t *sorted_vars) {
-    if (!sols || !poly_strings || !sorted_vars || sols->num_real_solution_sets <= 0) {
+    if (!sols || !poly_strings || !sorted_vars ||
+        sols->num_real_solution_sets <= 0 || sols->num_variables <= 0) {
         return;
     }
 
@@ -1595,7 +1596,11 @@ static void rational_recover_exact_solutions_from_real_approximations(rational_s
                                          sols->num_variables, candidate_ptrs)) {
             if (!rational_exact_solution_already_present(sols, candidate_values, sols->num_variables)) {
                 if (rational_append_exact_solution_values(sols, candidate_values, sols->num_variables)) {
-                    slong *candidate_counts = (slong *) calloc(sols->num_variables, sizeof(slong));
+                    size_t candidate_count_len = (size_t) sols->num_variables;
+                    slong *candidate_counts = NULL;
+                    if (candidate_count_len <= SIZE_MAX / sizeof(slong)) {
+                        candidate_counts = (slong *) malloc(candidate_count_len * sizeof(slong));
+                    }
                     if (candidate_counts) {
                         for (slong var = 0; var < sols->num_variables; var++) {
                             candidate_counts[var] = 1;
