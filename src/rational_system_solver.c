@@ -739,6 +739,91 @@ static int rational_append_real_solution_values(rational_solutions_t *sols,
     return 1;
 }
 
+static int rational_append_exact_solution_values(rational_solutions_t *sols,
+                                                 fmpq_t *values,
+                                                 slong num_values) {
+    if (!sols || !values || num_values != sols->num_variables) {
+        return 0;
+    }
+
+    slong new_count = sols->num_solution_sets + 1;
+    fmpq_t ***new_sets = (fmpq_t ***) realloc(sols->solution_sets, new_count * sizeof(fmpq_t **));
+    slong *new_counts = (slong *) realloc(sols->solutions_per_var, new_count * sols->num_variables * sizeof(slong));
+    arb_t **new_residuals = (arb_t **) realloc(sols->solution_residuals, new_count * sizeof(arb_t *));
+    if (!new_sets || !new_counts || !new_residuals) {
+        if (new_sets) sols->solution_sets = new_sets;
+        if (new_counts) sols->solutions_per_var = new_counts;
+        if (new_residuals) sols->solution_residuals = new_residuals;
+        return 0;
+    }
+
+    sols->solution_sets = new_sets;
+    sols->solutions_per_var = new_counts;
+    sols->solution_residuals = new_residuals;
+
+    slong set_idx = sols->num_solution_sets;
+    sols->solution_sets[set_idx] = (fmpq_t **) calloc(sols->num_variables, sizeof(fmpq_t *));
+    sols->solution_residuals[set_idx] = NULL;
+    if (!sols->solution_sets[set_idx]) {
+        return 0;
+    }
+
+    for (slong var = 0; var < sols->num_variables; var++) {
+        sols->solution_sets[set_idx][var] = (fmpq_t *) malloc(sizeof(fmpq_t));
+        if (!sols->solution_sets[set_idx][var]) {
+            return 0;
+        }
+        fmpq_init(sols->solution_sets[set_idx][var][0]);
+        fmpq_set(sols->solution_sets[set_idx][var][0], values[var]);
+        sols->solutions_per_var[set_idx * sols->num_variables + var] = 1;
+    }
+
+    sols->num_solution_sets = new_count;
+    return 1;
+}
+
+static int rational_exact_solution_already_present(const rational_solutions_t *sols,
+                                                   fmpq_t *values,
+                                                   slong num_values) {
+    if (!sols || !values || num_values != sols->num_variables) {
+        return 0;
+    }
+
+    for (slong set = 0; set < sols->num_solution_sets; set++) {
+        int match = 1;
+        for (slong var = 0; var < sols->num_variables; var++) {
+            if (sols->solutions_per_var[set * sols->num_variables + var] != 1 ||
+                !sols->solution_sets[set][var] ||
+                !fmpq_equal(sols->solution_sets[set][var][0], values[var])) {
+                match = 0;
+                break;
+            }
+        }
+        if (match) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int rational_recover_fmpq_from_double(double value, long max_den, double tol, fmpq_t out) {
+    if (!isfinite(value) || max_den <= 0 || tol < 0.0) {
+        return 0;
+    }
+
+    for (long den = 1; den <= max_den; den++) {
+        long num = lround(value * (double) den);
+        double diff = fabs(value - ((double) num / (double) den));
+        if (diff <= tol) {
+            fmpq_set_si(out, num, den);
+            fmpq_canonicalise(out);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static void rational_clear_residual_array(arb_t **residuals, slong num_sets, slong num_equations) {
     if (!residuals) {
         return;
@@ -1446,6 +1531,185 @@ static void rational_filter_real_solutions_by_verification(rational_solutions_t 
     free(values);
 }
 
+static void rational_recover_exact_solutions_from_real_approximations(rational_solutions_t *sols,
+                                                                      char **poly_strings,
+                                                                      rational_variable_info_t *sorted_vars) {
+    if (!sols || !poly_strings || !sorted_vars || sols->num_real_solution_sets <= 0) {
+        return;
+    }
+
+    int *keep_real = (int *) calloc(sols->num_real_solution_sets, sizeof(int));
+    if (!keep_real) {
+        return;
+    }
+    for (slong set = 0; set < sols->num_real_solution_sets; set++) {
+        keep_real[set] = 1;
+    }
+
+    fmpq_t *candidate_values = (fmpq_t *) malloc(sols->num_variables * sizeof(fmpq_t));
+    fmpq_t **candidate_ptrs = (fmpq_t **) malloc(sols->num_variables * sizeof(fmpq_t *));
+    if (!candidate_values || !candidate_ptrs) {
+        free(keep_real);
+        free(candidate_values);
+        free(candidate_ptrs);
+        return;
+    }
+
+    for (slong var = 0; var < sols->num_variables; var++) {
+        fmpq_init(candidate_values[var]);
+        candidate_ptrs[var] = &candidate_values[var];
+    }
+
+    slong recovered_count = 0;
+    for (slong set = 0; set < sols->num_real_solution_sets; set++) {
+        int complete = 1;
+        for (slong var = 0; var < sols->num_variables; var++) {
+            if (sols->real_solutions_per_var[set * sols->num_variables + var] != 1 ||
+                !sols->real_solution_sets[set][var]) {
+                complete = 0;
+                break;
+            }
+        }
+        if (!complete) {
+            continue;
+        }
+
+        int recovered = 1;
+        for (slong var = 0; var < sols->num_variables; var++) {
+            double approx = rational_arb_to_double(sols->real_solution_sets[set][var][0]);
+            if (!rational_recover_fmpq_from_double(approx, 100000L, 1e-4, candidate_values[var])) {
+                recovered = 0;
+                break;
+            }
+        }
+        if (!recovered) {
+            continue;
+        }
+
+        if (rational_verify_solution_set(poly_strings, sols->num_equations, sorted_vars,
+                                         sols->num_variables, candidate_ptrs)) {
+            if (!rational_exact_solution_already_present(sols, candidate_values, sols->num_variables)) {
+                if (rational_append_exact_solution_values(sols, candidate_values, sols->num_variables)) {
+                    slong *candidate_counts = (slong *) calloc(sols->num_variables, sizeof(slong));
+                    if (candidate_counts) {
+                        for (slong var = 0; var < sols->num_variables; var++) {
+                            candidate_counts[var] = 1;
+                        }
+                    }
+                    char *candidate_line = rational_format_solution_set_line_from_arrays(
+                        sols->variable_names, sols->num_variables,
+                        candidate_ptrs, candidate_counts
+                    );
+                    rational_add_candidate_solution(sols, candidate_line, 1);
+                    free(candidate_counts);
+                    recovered_count++;
+                }
+            }
+            keep_real[set] = 0;
+        }
+    }
+
+    if (recovered_count > 0) {
+        sols->has_no_solutions = 0;
+    }
+
+    slong keep_count = 0;
+    for (slong set = 0; set < sols->num_real_solution_sets; set++) {
+        if (keep_real[set]) {
+            keep_count++;
+        }
+    }
+
+    if (keep_count < sols->num_real_solution_sets) {
+        arb_t ***new_sets = keep_count > 0 ? (arb_t ***) calloc(keep_count, sizeof(arb_t **)) : NULL;
+        slong *new_counts = keep_count > 0 ? (slong *) calloc(keep_count * sols->num_variables, sizeof(slong)) : NULL;
+        arb_t **new_residuals = keep_count > 0 ? (arb_t **) calloc(keep_count, sizeof(arb_t *)) : NULL;
+        if (keep_count == 0 || (new_sets && new_counts && new_residuals)) {
+            slong out = 0;
+            for (slong set = 0; set < sols->num_real_solution_sets; set++) {
+                if (keep_real[set]) {
+                    new_sets[out] = sols->real_solution_sets[set];
+                    new_residuals[out] = sols->real_solution_residuals ? sols->real_solution_residuals[set] : NULL;
+                    for (slong var = 0; var < sols->num_variables; var++) {
+                        new_counts[out * sols->num_variables + var] =
+                            sols->real_solutions_per_var[set * sols->num_variables + var];
+                    }
+                    if (sols->real_solution_residuals) {
+                        sols->real_solution_residuals[set] = NULL;
+                    }
+                    sols->real_solution_sets[set] = NULL;
+                    out++;
+                } else if (sols->real_solution_sets[set]) {
+                    for (slong var = 0; var < sols->num_variables; var++) {
+                        if (sols->real_solution_sets[set][var]) {
+                            for (slong sol = 0; sol < sols->real_solutions_per_var[set * sols->num_variables + var]; sol++) {
+                                arb_clear(sols->real_solution_sets[set][var][sol]);
+                            }
+                            free(sols->real_solution_sets[set][var]);
+                        }
+                    }
+                    free(sols->real_solution_sets[set]);
+                }
+            }
+            free(sols->real_solution_sets);
+            free(sols->real_solutions_per_var);
+            rational_clear_residual_array(sols->real_solution_residuals,
+                                          sols->num_real_solution_sets,
+                                          sols->num_equations);
+            sols->real_solution_sets = new_sets;
+            sols->real_solutions_per_var = new_counts;
+            sols->real_solution_residuals = new_residuals;
+            sols->num_real_solution_sets = keep_count;
+        } else {
+            free(new_sets);
+            free(new_counts);
+            free(new_residuals);
+        }
+    }
+
+    for (slong var = 0; var < sols->num_variables; var++) {
+        fmpq_clear(candidate_values[var]);
+    }
+    free(candidate_values);
+    free(candidate_ptrs);
+    free(keep_real);
+}
+
+static void rational_discard_remaining_real_solutions(rational_solutions_t *sols) {
+    if (!sols) {
+        return;
+    }
+
+    if (sols->real_solution_sets) {
+        for (slong set = 0; set < sols->num_real_solution_sets; set++) {
+            if (sols->real_solution_sets[set]) {
+                for (slong var = 0; var < sols->num_variables; var++) {
+                    if (sols->real_solution_sets[set][var]) {
+                        for (slong sol = 0; sol < sols->real_solutions_per_var[set * sols->num_variables + var]; sol++) {
+                            arb_clear(sols->real_solution_sets[set][var][sol]);
+                        }
+                        free(sols->real_solution_sets[set][var]);
+                    }
+                }
+                free(sols->real_solution_sets[set]);
+            }
+        }
+        free(sols->real_solution_sets);
+        sols->real_solution_sets = NULL;
+    }
+
+    free(sols->real_solutions_per_var);
+    sols->real_solutions_per_var = NULL;
+    rational_clear_residual_array(sols->real_solution_residuals, sols->num_real_solution_sets, sols->num_equations);
+    sols->real_solution_residuals = NULL;
+    sols->num_real_solution_sets = 0;
+
+    if (sols->real_root_summary) {
+        free(sols->real_root_summary);
+        sols->real_root_summary = NULL;
+    }
+}
+
 void print_rational_solutions(const rational_solutions_t *sols) {
     if (!sols) {
         printf("No solution data available.\n");
@@ -1645,140 +1909,200 @@ static int rational_parse_string_to_fmpq_poly(const char *poly_str, const char *
     }
     
     const char *ptr = poly_str;
-    fmpq_t coeff, exp_val;
-    fmpq_init(coeff);
-    fmpq_init(exp_val);
+    size_t var_len = strlen(var_name);
     
     while (*ptr) {
-        while (isspace(*ptr)) ptr++;
+        while (isspace((unsigned char) *ptr)) ptr++;
+        while (*ptr == ')') {
+            ptr++;
+            while (isspace((unsigned char) *ptr)) ptr++;
+        }
         
         if (*ptr == '\0') break;
-        
-        // Skip any parentheses
-        if (*ptr == '(' || *ptr == ')') {
-            ptr++;
-            continue;
-        }
         
         int sign = 1;
         if (*ptr == '+') {
             ptr++;
-            while (isspace(*ptr)) ptr++;
         } else if (*ptr == '-') {
             sign = -1;
             ptr++;
-            while (isspace(*ptr)) ptr++;
         }
+        while (isspace((unsigned char) *ptr)) ptr++;
         
         fmpq_t term_coeff;
         fmpq_init(term_coeff);
-        fmpq_set_si(term_coeff, 1, 1);
-        
+        fmpq_one(term_coeff);
         slong term_degree = 0;
-        int wrapped_numeric = 0;
-        int inner_sign = 1;
-
-        if (*ptr == '(') {
-            const char *scan = ptr + 1;
-            while (isspace((unsigned char) *scan)) scan++;
-            if (*scan == '+') {
-                scan++;
-                while (isspace((unsigned char) *scan)) scan++;
-            } else if (*scan == '-') {
-                inner_sign = -1;
-                scan++;
-                while (isspace((unsigned char) *scan)) scan++;
-            }
-            if (isdigit((unsigned char) *scan) || *scan == '.') {
-                ptr = scan;
-                wrapped_numeric = 1;
-            }
-        }
+        int parsed_factor = 0;
         
-        if (isdigit((unsigned char) *ptr) || *ptr == '.') {
-            const char *num_start = ptr;
-            while (isdigit(*ptr) || *ptr == '.' || *ptr == '/') ptr++;
-            size_t num_len = ptr - num_start;
-            char *num_str = (char*) malloc(num_len + 1);
-            strncpy(num_str, num_start, num_len);
-            num_str[num_len] = '\0';
-            
-            char *slash = strchr(num_str, '/');
-            if (slash) {
-                *slash = '\0';
-                fmpz_t num, den;
-                fmpz_init(num);
-                fmpz_init(den);
-                fmpz_set_str(num, num_str, 10);
-                fmpz_set_str(den, slash + 1, 10);
-                fmpq_set_fmpz_frac(term_coeff, num, den);
-                fmpz_clear(num);
-                fmpz_clear(den);
-            } else {
-                fmpz_t num;
-                fmpz_init(num);
-                fmpz_set_str(num, num_str, 10);
-                fmpq_set_fmpz(term_coeff, num);
-                fmpz_clear(num);
-            }
-            free(num_str);
-        }
-
-        if (wrapped_numeric) {
+        while (*ptr) {
             while (isspace((unsigned char) *ptr)) ptr++;
+            
             if (*ptr == ')') {
                 ptr++;
+                continue;
             }
-            if (inner_sign < 0) {
-                fmpq_neg(term_coeff, term_coeff);
-            }
-        }
-        
-        while (isspace(*ptr)) ptr++;
-        
-        if (*ptr == '*') {
-            ptr++;
-            while (isspace(*ptr)) ptr++;
-        }
-        
-        if (strncmp(ptr, var_name, strlen(var_name)) == 0) {
-            ptr += strlen(var_name);
-            term_degree = 1;
             
-            while (isspace(*ptr)) ptr++;
-            if (*ptr == '^') {
-                ptr++;
-                while (isspace(*ptr)) ptr++;
-                if (isdigit(*ptr)) {
-                    term_degree = strtol(ptr, (char**)&ptr, 10);
+            if (*ptr == '(') {
+                const char *factor_ptr = ptr + 1;
+                int factor_sign = 1;
+                while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
+                if (*factor_ptr == '+') {
+                    factor_ptr++;
+                    while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
+                } else if (*factor_ptr == '-') {
+                    factor_sign = -1;
+                    factor_ptr++;
+                    while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
                 }
+                
+                if (strncmp(factor_ptr, var_name, var_len) == 0 &&
+                    !isalnum((unsigned char) factor_ptr[var_len])) {
+                    factor_ptr += var_len;
+                    slong factor_degree = 1;
+                    while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
+                    if (*factor_ptr == '^') {
+                        factor_ptr++;
+                        while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
+                        if (isdigit((unsigned char) *factor_ptr)) {
+                            factor_degree = strtol(factor_ptr, (char **) &factor_ptr, 10);
+                        }
+                    }
+                    while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
+                    if (*factor_ptr == ')') {
+                        factor_ptr++;
+                        term_degree += factor_degree;
+                        if (factor_sign < 0) {
+                            fmpq_neg(term_coeff, term_coeff);
+                        }
+                        ptr = factor_ptr;
+                        parsed_factor = 1;
+                    } else {
+                        break;
+                    }
+                } else if (isdigit((unsigned char) *factor_ptr) || *factor_ptr == '.') {
+                    const char *num_start = factor_ptr;
+                    while (isdigit((unsigned char) *factor_ptr) || *factor_ptr == '.' || *factor_ptr == '/') factor_ptr++;
+                    while (isspace((unsigned char) *factor_ptr)) factor_ptr++;
+                    if (*factor_ptr == ')') {
+                        size_t num_len = (size_t) (factor_ptr - num_start);
+                        while (num_len > 0 && isspace((unsigned char) num_start[num_len - 1])) num_len--;
+                        char *num_str = (char *) malloc(num_len + 1);
+                        fmpq_t factor_coeff;
+                        fmpq_init(factor_coeff);
+                        strncpy(num_str, num_start, num_len);
+                        num_str[num_len] = '\0';
+                        char *slash = strchr(num_str, '/');
+                        if (slash) {
+                            *slash = '\0';
+                            fmpz_t num, den;
+                            fmpz_init(num);
+                            fmpz_init(den);
+                            fmpz_set_str(num, num_str, 10);
+                            fmpz_set_str(den, slash + 1, 10);
+                            fmpq_set_fmpz_frac(factor_coeff, num, den);
+                            fmpz_clear(num);
+                            fmpz_clear(den);
+                        } else {
+                            fmpz_t num;
+                            fmpz_init(num);
+                            fmpz_set_str(num, num_str, 10);
+                            fmpq_set_fmpz(factor_coeff, num);
+                            fmpz_clear(num);
+                        }
+                        if (factor_sign < 0) {
+                            fmpq_neg(factor_coeff, factor_coeff);
+                        }
+                        fmpq_mul(term_coeff, term_coeff, factor_coeff);
+                        fmpq_clear(factor_coeff);
+                        free(num_str);
+                        ptr = factor_ptr + 1;
+                        parsed_factor = 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            } else if (isdigit((unsigned char) *ptr) || *ptr == '.') {
+                const char *num_start = ptr;
+                while (isdigit((unsigned char) *ptr) || *ptr == '.' || *ptr == '/') ptr++;
+                size_t num_len = (size_t) (ptr - num_start);
+                char *num_str = (char *) malloc(num_len + 1);
+                fmpq_t factor_coeff;
+                fmpq_init(factor_coeff);
+                strncpy(num_str, num_start, num_len);
+                num_str[num_len] = '\0';
+                char *slash = strchr(num_str, '/');
+                if (slash) {
+                    *slash = '\0';
+                    fmpz_t num, den;
+                    fmpz_init(num);
+                    fmpz_init(den);
+                    fmpz_set_str(num, num_str, 10);
+                    fmpz_set_str(den, slash + 1, 10);
+                    fmpq_set_fmpz_frac(factor_coeff, num, den);
+                    fmpz_clear(num);
+                    fmpz_clear(den);
+                } else {
+                    fmpz_t num;
+                    fmpz_init(num);
+                    fmpz_set_str(num, num_str, 10);
+                    fmpq_set_fmpz(factor_coeff, num);
+                    fmpz_clear(num);
+                }
+                fmpq_mul(term_coeff, term_coeff, factor_coeff);
+                fmpq_clear(factor_coeff);
+                free(num_str);
+                parsed_factor = 1;
+            } else if (strncmp(ptr, var_name, var_len) == 0 &&
+                       !isalnum((unsigned char) ptr[var_len])) {
+                ptr += var_len;
+                slong factor_degree = 1;
+                while (isspace((unsigned char) *ptr)) ptr++;
+                if (*ptr == '^') {
+                    ptr++;
+                    while (isspace((unsigned char) *ptr)) ptr++;
+                    if (isdigit((unsigned char) *ptr)) {
+                        factor_degree = strtol(ptr, (char **) &ptr, 10);
+                    }
+                }
+                term_degree += factor_degree;
+                parsed_factor = 1;
+            } else {
+                break;
             }
-        } else if (*ptr == '^') {
-            // Skip constant exponentiation: const^exp is still a const
-            ptr++;
-            while (isspace(*ptr)) ptr++;
-            if (isdigit(*ptr)) {
-                while (isdigit(*ptr)) ptr++;
+            
+            while (isspace((unsigned char) *ptr)) ptr++;
+            if (*ptr == '*') {
+                ptr++;
+                continue;
             }
+            break;
+        }
+        
+        if (!parsed_factor) {
+            if (*ptr) {
+                ptr++;
+                fmpq_clear(term_coeff);
+                continue;
+            }
+            fmpq_clear(term_coeff);
+            break;
         }
         
         if (sign < 0) {
             fmpq_neg(term_coeff, term_coeff);
         }
         
-        // Add to the existing coefficient instead of replacing
         fmpq_t existing_coeff;
         fmpq_init(existing_coeff);
         fmpq_poly_get_coeff_fmpq(existing_coeff, poly, term_degree);
         fmpq_add(existing_coeff, existing_coeff, term_coeff);
         fmpq_poly_set_coeff_fmpq(poly, term_degree, existing_coeff);
         fmpq_clear(existing_coeff);
-        
         fmpq_clear(term_coeff);
     }
-    
-    fmpq_clear(coeff);
-    fmpq_clear(exp_val);
     
     return 1;
 }
@@ -1917,9 +2241,7 @@ char* rational_substitute_variable_in_polynomial(const char *poly_str, const cha
                 }
             }
 
-            strcat(result, "(");
             strcat(result, val_str ? val_str : "0");
-            strcat(result, ")");
             ptr += var_len;
         } else {
             size_t len = strlen(result);
@@ -2830,7 +3152,7 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
             
             rational_free_equation_combinations(combinations, num_combinations);
 
-            if (!rational_solver_exact_only_enabled && found_finite_solution == 0) {
+            if (found_finite_solution == 0) {
                 slong old_real_count = sols->num_real_solution_sets;
                 arb_t base_real;
                 arb_init(base_real);
@@ -2892,15 +3214,10 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
         slong num_roots = 0;
         fmpq_t *roots = rational_solve_univariate_equation_all_roots(poly_strings[0], sorted_vars[0].name, &num_roots);
         slong num_real_roots = 0;
-        arb_t *real_roots = NULL;
-        if (!rational_solver_exact_only_enabled) {
-            real_roots = rational_solve_univariate_equation_all_real_roots(
-                poly_strings[0], sorted_vars[0].name, &num_real_roots, sols->real_solution_precision
-            );
-        }
-        sols->num_base_solutions = rational_solver_exact_only_enabled
-                                   ? num_roots
-                                   : ((num_real_roots > 0) ? num_real_roots : num_roots);
+        arb_t *real_roots = rational_solve_univariate_equation_all_real_roots(
+            poly_strings[0], sorted_vars[0].name, &num_real_roots, sols->real_solution_precision
+        );
+        sols->num_base_solutions = (num_real_roots > 0) ? num_real_roots : num_roots;
         if (sols->num_base_solutions > 0) {
             rational_add_resultant_step(sols,
                                         "Found %ld value(s) for %s, starting back substitution",
@@ -2920,7 +3237,7 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
             sols->num_solution_sets = num_roots;
         }
 
-        if (!rational_solver_exact_only_enabled && num_real_roots > 0) {
+        if (num_real_roots > 0) {
             for (slong i = 0; i < num_real_roots; i++) {
                 if (!rational_real_root_matches_rational(real_roots[i], roots, num_roots, sols->real_solution_precision)) {
                     double value = rational_arb_to_double(real_roots[i]);
@@ -3124,18 +3441,13 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
         win_trace("solve resultant rational roots done count=%ld", num_roots);
 #endif
         slong num_real_roots = 0;
-        arb_t *real_base_roots = NULL;
-        if (!rational_solver_exact_only_enabled) {
-            real_base_roots = rational_solve_univariate_equation_all_real_roots(
-                working_resultant, keep_var, &num_real_roots, sols->real_solution_precision
-            );
-        }
+        arb_t *real_base_roots = rational_solve_univariate_equation_all_real_roots(
+            working_resultant, keep_var, &num_real_roots, sols->real_solution_precision
+        );
 #ifdef _WIN32
         win_trace("solve resultant real roots done count=%ld", num_real_roots);
 #endif
-        sols->num_base_solutions = rational_solver_exact_only_enabled
-                                   ? num_roots
-                                   : ((num_real_roots > 0) ? num_real_roots : num_roots);
+        sols->num_base_solutions = (num_real_roots > 0) ? num_real_roots : num_roots;
         if (sols->num_base_solutions > 0) {
             rational_add_resultant_step(sols,
                                          "Found %ld value(s) for %s, starting back substitution",
@@ -3158,7 +3470,7 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
             rational_trace_stdout("No rational roots found for the resultant.\n");
         }
 
-        if (!rational_solver_exact_only_enabled && num_real_roots > num_roots) {
+        if (num_real_roots > num_roots) {
 #ifdef _WIN32
             win_trace("numeric backsolve irrational start extra=%ld", num_real_roots - num_roots);
 #endif
@@ -3223,6 +3535,13 @@ rational_solutions_t* solve_rational_polynomial_system_array_with_vars(char **po
     }
     if (sols->num_real_solution_sets > 0) {
         rational_filter_real_solutions_by_verification(sols, poly_strings, original_vars);
+    }
+    if (sols->num_real_solution_sets > 0) {
+        rational_recover_exact_solutions_from_real_approximations(sols, poly_strings, original_vars);
+    }
+    if (rational_solver_exact_only_enabled) {
+        rational_discard_remaining_real_solutions(sols);
+        sols->has_no_solutions = (sols->num_solution_sets > 0) ? 0 : 1;
     }
     if (sols->num_solution_sets > 0) {
         rational_compute_exact_solution_residuals(sols, poly_strings, original_vars);
