@@ -749,7 +749,12 @@ static int rational_append_exact_solution_values(rational_solutions_t *sols,
     slong new_count = sols->num_solution_sets + 1;
     fmpq_t ***new_sets = (fmpq_t ***) realloc(sols->solution_sets, new_count * sizeof(fmpq_t **));
     slong *new_counts = (slong *) realloc(sols->solutions_per_var, new_count * sols->num_variables * sizeof(slong));
-    arb_t **new_residuals = (arb_t **) realloc(sols->solution_residuals, new_count * sizeof(arb_t *));
+    arb_t **new_residuals = NULL;
+    if (sols->solution_residuals) {
+        new_residuals = (arb_t **) realloc(sols->solution_residuals, new_count * sizeof(arb_t *));
+    } else {
+        new_residuals = (arb_t **) calloc(new_count, sizeof(arb_t *));
+    }
     if (!new_sets || !new_counts || !new_residuals) {
         if (new_sets) sols->solution_sets = new_sets;
         if (new_counts) sols->solutions_per_var = new_counts;
