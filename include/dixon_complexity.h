@@ -117,6 +117,19 @@ void run_complexity_analysis(const char *polys_str,
                              double comp_time,
                              double omega);
 
+void run_complexity_analysis_from_degrees(const long *degrees,
+                                          slong num_polys,
+                                          slong num_all_vars,
+                                          slong num_elim_vars,
+                                          const fmpz_t prime,
+                                          ulong power,
+                                          const fq_nmod_ctx_t ctx,
+                                          const char *output_filename,
+                                          int silent_mode,
+                                          double comp_time,
+                                          double omega,
+                                          const char *system_spec);
+
 void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                           const long *degrees,
                                           slong num_polys,

@@ -1148,6 +1148,7 @@ void run_complexity_analysis(
     dixon_complexity_report_t report;
     fmpz_t field_characteristic;
     fmpz_t field_order;
+    int fmpz_initialized = 0;
 
     collect_variables((const char **) poly_arr, num_polys,
                       gen_name, &all_vars, &num_all_vars);
@@ -1183,6 +1184,7 @@ void run_complexity_analysis(
     fmpz_init(matrix_size);
     fmpz_init(field_characteristic);
     fmpz_init(field_order);
+    fmpz_initialized = 1;
     dixon_size(matrix_size, degrees, (int) num_polys, 0);
     if (ctx != NULL) {
         fmpz_set_ui(field_characteristic, fq_nmod_ctx_prime(ctx));
@@ -1247,6 +1249,177 @@ void run_complexity_analysis(
     }
     free_split_strings(poly_arr, num_polys);
     free_split_strings(elim_arr, num_elim);
+}
+
+void run_complexity_analysis_from_degrees(
+        const long      *degrees,
+        slong            num_polys,
+        slong            num_all_vars,
+        slong            num_elim_vars,
+        const fmpz_t     prime,
+        ulong            power,
+        const fq_nmod_ctx_t ctx,
+        const char      *output_filename,
+        int              silent_mode,
+        double           comp_time,
+        double           omega,
+        const char      *system_spec) {
+    char **all_vars = NULL;
+    char **elim_arr = NULL;
+    char *elim_str = NULL;
+    slong num_parameter_vars;
+    long bezout = 1;
+    fmpz_t matrix_size;
+    dixon_complexity_report_t report;
+    fmpz_t field_characteristic;
+    fmpz_t field_order;
+    int fmpz_initialized = 0;
+
+    if (!degrees || num_polys <= 0) {
+        if (!silent_mode) {
+            fprintf(stderr, "Error: no degree data to analyze\n");
+        }
+        return;
+    }
+
+    if (num_all_vars < 0 || num_elim_vars < 0 || num_elim_vars > num_all_vars) {
+        if (!silent_mode) {
+            fprintf(stderr, "Error: inconsistent variable counts for degree-based complexity analysis\n");
+        }
+        return;
+    }
+
+    if (num_all_vars > 0) {
+        all_vars = (char **) calloc((size_t) num_all_vars, sizeof(char *));
+        if (!all_vars) goto cleanup;
+    }
+    if (num_elim_vars > 0) {
+        elim_arr = (char **) calloc((size_t) num_elim_vars, sizeof(char *));
+        if (!elim_arr) goto cleanup;
+    }
+
+    for (slong i = 0; i < num_all_vars; i++) {
+        char name_buf[64];
+        snprintf(name_buf, sizeof(name_buf), "x%ld", i);
+        all_vars[i] = strdup(name_buf);
+        if (!all_vars[i]) goto cleanup;
+    }
+
+    for (slong i = 0; i < num_elim_vars; i++) {
+        elim_arr[i] = strdup(all_vars[i]);
+        if (!elim_arr[i]) goto cleanup;
+    }
+
+    {
+        size_t elim_len = 1;
+        for (slong i = 0; i < num_elim_vars; i++) {
+            elim_len += strlen(elim_arr[i]) + 2;
+        }
+        elim_str = (char *) malloc(elim_len);
+        if (!elim_str) goto cleanup;
+        elim_str[0] = '\0';
+        for (slong i = 0; i < num_elim_vars; i++) {
+            if (i > 0) strcat(elim_str, ",");
+            strcat(elim_str, elim_arr[i]);
+        }
+    }
+
+    num_parameter_vars = num_all_vars - num_elim_vars;
+    for (slong i = 0; i < num_polys; i++) {
+        long di = degrees[i];
+        if (di <= 0) {
+            bezout = 0;
+            break;
+        }
+        if (bezout > 0 && di > LONG_MAX / bezout) {
+            bezout = LONG_MAX;
+            break;
+        }
+        bezout *= di;
+    }
+
+    fmpz_init(matrix_size);
+    fmpz_init(field_characteristic);
+    fmpz_init(field_order);
+    fmpz_initialized = 1;
+    dixon_size(matrix_size, degrees, (int) num_polys, 0);
+    if (ctx != NULL) {
+        fmpz_set_ui(field_characteristic, fq_nmod_ctx_prime(ctx));
+        fq_nmod_ctx_order(field_order, ctx);
+    } else if (power <= 1) {
+        fmpz_set(field_characteristic, prime);
+        fmpz_set(field_order, prime);
+    } else {
+        fmpz_set(field_characteristic, prime);
+        fmpz_pow_ui(field_order, prime, power);
+    }
+
+    dixon_complexity_report_from_degrees(&report,
+                                         degrees,
+                                         num_polys,
+                                         num_all_vars,
+                                         num_elim_vars,
+                                         num_parameter_vars,
+                                         field_order,
+                                         omega);
+
+    if (!silent_mode) {
+        printf("\n=== Complexity Analysis ===\n");
+        dixon_complexity_write_report_body(stdout,
+                                           num_polys,
+                                           num_all_vars,
+                                           all_vars,
+                                           elim_arr,
+                                           num_elim_vars,
+                                           num_parameter_vars,
+                                           degrees,
+                                           field_characteristic,
+                                           field_order,
+                                           matrix_size,
+                                           bezout,
+                                           &report,
+                                           omega);
+        if (output_filename) {
+            printf("\nReport saved to: %s\n", output_filename);
+        }
+        printf("===========================\n");
+    }
+
+    if (output_filename) {
+        save_comp_result_to_file(output_filename,
+                                 system_spec ? system_spec : "(degree-based system specification)",
+                                 elim_str ? elim_str : "",
+                                 num_polys,
+                                 num_all_vars,
+                                 all_vars,
+                                 elim_arr,
+                                 num_elim_vars,
+                                 num_parameter_vars,
+                                 degrees,
+                                 field_characteristic,
+                                 field_order,
+                                 matrix_size,
+                                 bezout,
+                                 &report,
+                                 omega,
+                                 comp_time);
+    }
+
+cleanup:
+    if (all_vars) {
+        for (slong i = 0; i < num_all_vars; i++) free(all_vars[i]);
+        free(all_vars);
+    }
+    if (elim_arr) {
+        for (slong i = 0; i < num_elim_vars; i++) free(elim_arr[i]);
+        free(elim_arr);
+    }
+    free(elim_str);
+    if (fmpz_initialized) {
+        fmpz_clear(matrix_size);
+        fmpz_clear(field_characteristic);
+        fmpz_clear(field_order);
+    }
 }
 
 // Initialize polynomial analysis structure

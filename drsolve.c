@@ -29,7 +29,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.2.2"
+#define PROGRAM_VERSION "0.2.3"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -95,8 +95,12 @@ static void print_usage(const char *prog_name)
     printf("  Random mode (combine with any compute flag):\n");
     printf("    %s --random \"[d1,d2,...,dn]\" field_size\n", prog_name);
     printf("    %s -r       \"[d]*n\"          field_size\n", prog_name);
+    printf("    %s -r -n 4 --density 0.5 \"[d]*3\" field_size\n", prog_name);
     printf("    %s -r -s    \"[d1,...,dn]\" field_size\n", prog_name);
     printf("    %s -r --comp  \"[d]*n\"        field_size\n", prog_name);
+    printf("    -> Add -n <num_vars> to set the total variable count (must satisfy num_vars >= #equations-1)\n");
+    printf("    -> Add --density <ratio> with 0 <= ratio <= 1 to choose the fraction of all monomials used (default: 1)\n");
+    printf("    -> Mixed degree specs such as \"[2]*5+[3]*6\" are supported\n");
 
     printf("  File input:\n");
     printf("    %s input_file\n", prog_name);
@@ -155,6 +159,8 @@ static void print_usage(const char *prog_name)
     printf("  %s --comp \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
     printf("  %s --random \"[3,3,2]\" 257\n", prog_name);
     printf("  %s -r \"[3]*3\" 0\n", prog_name);
+    printf("  %s -r -n 4 --density 0.5 \"[3]*3\" 257\n", prog_name);
+    printf("  %s -r \"[2]*4+[3]*2\" 257\n", prog_name);
     printf("  %s -r -s \"[2]*3\" 257\n", prog_name);
     printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
     printf("  %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
@@ -579,6 +585,121 @@ static int parse_verbose_level(const char *value, int *verbose_level)
     return 1;
 }
 
+static int parse_positive_slong_option(const char *value, slong *out)
+{
+    char *endptr = NULL;
+    long parsed = strtol(value, &endptr, 10);
+
+    if (!value || !out) return 0;
+    if (!endptr || *endptr != '\0' || parsed <= 0) return 0;
+
+    *out = (slong) parsed;
+    return 1;
+}
+
+static int parse_density_option(const char *value, double *density_out)
+{
+    char *endptr = NULL;
+    double density = strtod(value, &endptr);
+
+    if (!value || !density_out) return 0;
+    if (!endptr || *endptr != '\0' || density < 0.0 || density > 1.0) return 0;
+
+    *density_out = density;
+    return 1;
+}
+
+static int append_text(char **buffer, size_t *capacity, size_t *length,
+                       const char *text)
+{
+    size_t text_len;
+    char *grown;
+
+    if (!buffer || !capacity || !length || !text) return 0;
+
+    text_len = strlen(text);
+    if (*capacity == 0) {
+        *capacity = text_len + 32;
+        *buffer = (char *) malloc(*capacity);
+        if (!*buffer) return 0;
+        (*buffer)[0] = '\0';
+        *length = 0;
+    }
+
+    if (*length + text_len + 1 > *capacity) {
+        while (*length + text_len + 1 > *capacity) {
+            *capacity *= 2;
+        }
+        grown = (char *) realloc(*buffer, *capacity);
+        if (!grown) return 0;
+        *buffer = grown;
+    }
+
+    memcpy(*buffer + *length, text, text_len + 1);
+    *length += text_len;
+    return 1;
+}
+
+static char *join_x_var_range(slong start, slong end_exclusive)
+{
+    char *result = NULL;
+    size_t capacity = 0;
+    size_t length = 0;
+
+    if (end_exclusive < start) end_exclusive = start;
+
+    for (slong i = start; i < end_exclusive; i++) {
+        char piece[64];
+
+        if (i > start && !append_text(&result, &capacity, &length, ",")) {
+            free(result);
+            return NULL;
+        }
+
+        snprintf(piece, sizeof(piece), "x%ld", i);
+        if (!append_text(&result, &capacity, &length, piece)) {
+            free(result);
+            return NULL;
+        }
+    }
+
+    if (!result) {
+        result = strdup("");
+    }
+
+    return result;
+}
+
+static int build_random_system_strings(slong nvars,
+                                       slong num_elim_vars,
+                                       char **elim_vars_out,
+                                       char **all_vars_out,
+                                       char **remaining_vars_out)
+{
+    char *all_vars = NULL;
+    char *elim_vars = NULL;
+    char *remaining_vars = NULL;
+
+    if (!elim_vars_out || !all_vars_out || !remaining_vars_out) return 0;
+    if (nvars <= 0 || num_elim_vars < 0 || num_elim_vars > nvars) return 0;
+
+    all_vars = join_x_var_range(0, nvars);
+    elim_vars = join_x_var_range(0, num_elim_vars);
+    remaining_vars = join_x_var_range(num_elim_vars, nvars);
+
+    if (!all_vars || !elim_vars || !remaining_vars) {
+        free(all_vars);
+        free(elim_vars);
+        free(remaining_vars);
+        return 0;
+    }
+
+    *elim_vars_out = elim_vars;
+    *all_vars_out = all_vars;
+    *remaining_vars_out = remaining_vars;
+    return 1;
+}
+
 static void print_field_label(FILE *out, const fmpz_t prime, ulong power)
 {
     if (fmpz_is_zero(prime)) {
@@ -616,95 +737,135 @@ static void print_field_label(FILE *out, const fmpz_t prime, ulong power)
 
 /*
  * Parse degree list in any of:
- *   "3,3,2"          plain comma-separated
- *   "[3,3,2]"        with brackets
- *   "[3]*5"          repeat shorthand → [3,3,3,3,3]
- *   "[3,2]*4"        repeat a sub-list → [3,2,3,2,3,2,3,2]
+ *   "3,3,2"              plain comma-separated
+ *   "[3,3,2]"            with brackets
+ *   "[3]*5"              repeat shorthand
+ *   "[3,2]*4"            repeat a sub-list
+ *   "[2]*5+[3]*6"        sum of repeated blocks
  *
  * Returns malloc'd array; caller frees.  *count_out = number of entries.
  */
 static long *parse_degree_list(const char *deg_str, slong *count_out)
 {
     slong cap = 32;
-    long *degs = malloc((size_t)cap * sizeof(long));
     slong count = 0;
-
-    /* Helper: append one value */
-#define PUSH(v) do { \
-    if (count >= cap) { cap *= 2; degs = realloc(degs, (size_t)cap * sizeof(long)); } \
-    degs[count++] = (v); } while(0)
-
-    /* Strip optional outer brackets and scan for "[...]*N" repeat syntax */
+    long *degs = (long *) malloc((size_t) cap * sizeof(long));
     const char *p = deg_str;
-    while (isspace((unsigned char)*p)) p++;
 
-    /* Check for [...]* repeat */
-    if (*p == '[') {
-        const char *bracket_start = p + 1;
-        /* find matching ']' */
-        const char *bracket_end = strchr(bracket_start, ']');
-        if (bracket_end) {
-            /* collect base list between brackets */
-            slong base_cap = 16;
-            long *base = malloc((size_t)base_cap * sizeof(long));
-            slong base_n = 0;
+    if (count_out) *count_out = 0;
+    if (!deg_str || !degs) return NULL;
 
-            const char *q = bracket_start;
-            while (q < bracket_end) {
-                while (q < bracket_end &&
-                       (isspace((unsigned char)*q) || *q == ',')) q++;
-                if (q >= bracket_end) break;
-                char *end;
-                long d = strtol(q, &end, 10);
-                if (end == q) break;
-                if (d > 0) {
-                    if (base_n >= base_cap) { base_cap *= 2; base = realloc(base, (size_t)base_cap * sizeof(long)); }
-                    base[base_n++] = d;
+#define PUSH(v) do {     if (count >= cap) {         long *grown;         cap *= 2;         grown = (long *) realloc(degs, (size_t) cap * sizeof(long));         if (!grown) { free(degs); return NULL; }         degs = grown;     }     degs[count++] = (v); } while (0)
+
+    while (*p) {
+        while (*p && (isspace((unsigned char) *p) || *p == ',' || *p == '+')) p++;
+        if (!*p) break;
+
+        if (*p == '[') {
+            const char *bracket_end = strchr(p + 1, ']');
+            slong base_cap = 8;
+            slong base_count = 0;
+            long *base = NULL;
+
+            if (!bracket_end) {
+                fprintf(stderr, "Warning: malformed degree block '%s'\n", p);
+                break;
+            }
+
+            base = (long *) malloc((size_t) base_cap * sizeof(long));
+            if (!base) {
+                free(degs);
+                return NULL;
+            }
+
+            {
+                const char *q = p + 1;
+                while (q < bracket_end) {
+                    char *endptr = NULL;
+                    long d;
+
+                    while (q < bracket_end &&
+                           (isspace((unsigned char) *q) || *q == ',')) q++;
+                    if (q >= bracket_end) break;
+
+                    d = strtol(q, &endptr, 10);
+                    if (endptr == q) {
+                        q++;
+                        continue;
+                    }
+
+                    if (d > 0) {
+                        if (base_count >= base_cap) {
+                            long *grown;
+                            base_cap *= 2;
+                            grown = (long *) realloc(base, (size_t) base_cap * sizeof(long));
+                            if (!grown) {
+                                free(base);
+                                free(degs);
+                                return NULL;
+                            }
+                            base = grown;
+                        }
+                        base[base_count++] = d;
+                    } else {
+                        fprintf(stderr, "Warning: degree %ld ignored (must be > 0)\n", d);
+                    }
+                    q = endptr;
                 }
-                q = end;
             }
 
-            /* check for '*N' after ']' */
-            const char *after = bracket_end + 1;
-            while (isspace((unsigned char)*after)) after++;
-            long repeat = 1;
-            if (*after == '*') {
-                char *end;
-                repeat = strtol(after + 1, &end, 10);
-                if (repeat <= 0) repeat = 1;
-            } else if (base_n == 1) {
-                /* "[d]*N" only makes sense with an explicit repeat;
-                   without '*', treat as a regular bracketed list        */
-                repeat = 1;
-            }
+            if (base_count > 0) {
+                long repeat = 1;
+                const char *after = bracket_end + 1;
 
-            for (long r = 0; r < repeat; r++)
-                for (slong j = 0; j < base_n; j++)
-                    PUSH(base[j]);
+                while (isspace((unsigned char) *after)) after++;
+                if (*after == '*') {
+                    char *endptr = NULL;
+                    repeat = strtol(after + 1, &endptr, 10);
+                    if (repeat <= 0) repeat = 1;
+                    p = (endptr && endptr != after + 1) ? endptr : after + 1;
+                } else {
+                    p = after;
+                }
+
+                for (long r = 0; r < repeat; r++) {
+                    for (slong j = 0; j < base_count; j++) {
+                        PUSH(base[j]);
+                    }
+                }
+            } else {
+                p = bracket_end + 1;
+            }
 
             free(base);
-            *count_out = count;
-            return degs;
+            continue;
         }
-        /* malformed bracket — fall through to plain parsing */
-        p++;  /* skip the '[' */
-    }
 
-    /* Plain comma-separated parsing (also handles "[3,3,2]" without '*') */
-    while (*p) {
-        /* skip non-digit (brackets, spaces, commas) */
-        while (*p && !isdigit((unsigned char)*p) && *p != '-') p++;
-        if (!*p) break;
-        char *end;
-        long d = strtol(p, &end, 10);
-        if (end == p) { p++; continue; }
-        if (d > 0) PUSH(d);
-        else fprintf(stderr, "Warning: degree %ld ignored (must be > 0)\n", d);
-        p = end;
+        {
+            char *endptr = NULL;
+            long d = strtol(p, &endptr, 10);
+
+            if (endptr == p) {
+                p++;
+                continue;
+            }
+
+            if (d > 0) {
+                PUSH(d);
+            } else {
+                fprintf(stderr, "Warning: degree %ld ignored (must be > 0)\n", d);
+            }
+            p = endptr;
+        }
     }
 #undef PUSH
 
-    *count_out = count;
+    if (count == 0) {
+        free(degs);
+        return NULL;
+    }
+
+    if (count_out) *count_out = count;
     return degs;
 }
 
@@ -712,95 +873,177 @@ static long *parse_degree_list(const char *deg_str, slong *count_out)
 /*
  * Generate a random polynomial system and return it as strings.
  *
- * solve_mode=0 (Dixon/comp): n polys in n vars; elim_vars = x0..x_{n-2}
- * solve_mode=1 (solver):     n polys in n vars; elim_vars = all (solver ignores it)
- *
  * All three output strings are malloc'd; caller must free them.
  * Returns 1 on success, 0 on failure.
  */
+static void free_enumerated_monomials(monomial_t *monomials, slong count)
+{
+    if (!monomials) return;
+    for (slong i = 0; i < count; i++) {
+        free(monomials[i].exponents);
+    }
+    free(monomials);
+}
+
+static int append_signed_monomial_text(char **buffer,
+                                       size_t *capacity,
+                                       size_t *length,
+                                       int coeff,
+                                       const slong *exp,
+                                       slong nvars,
+                                       int *first_term)
+{
+    int abs_coeff;
+    int has_var = 0;
+
+    if (!buffer || !capacity || !length || !first_term) return 0;
+    if (coeff == 0) return 0;
+
+    abs_coeff = coeff < 0 ? -coeff : coeff;
+    for (slong j = 0; j < nvars; j++) {
+        if (exp[j] != 0) {
+            has_var = 1;
+            break;
+        }
+    }
+
+    if (*first_term) {
+        if (coeff < 0 && !append_text(buffer, capacity, length, "-")) return 0;
+    } else {
+        if (!append_text(buffer, capacity, length, coeff < 0 ? " - " : " + ")) return 0;
+    }
+
+    if (abs_coeff != 1 || !has_var) {
+        char coeff_buf[32];
+        snprintf(coeff_buf, sizeof(coeff_buf), "%d", abs_coeff);
+        if (!append_text(buffer, capacity, length, coeff_buf)) return 0;
+    }
+
+    if (has_var) {
+        int wrote_any_var = 0;
+        for (slong j = 0; j < nvars; j++) {
+            char piece[64];
+            if (exp[j] == 0) continue;
+
+            if ((abs_coeff != 1) || wrote_any_var) {
+                if (!append_text(buffer, capacity, length, "*")) return 0;
+            }
+
+            snprintf(piece, sizeof(piece), "x%ld", j);
+            if (!append_text(buffer, capacity, length, piece)) return 0;
+
+            if (exp[j] != 1) {
+                snprintf(piece, sizeof(piece), "^%ld", exp[j]);
+                if (!append_text(buffer, capacity, length, piece)) return 0;
+            }
+            wrote_any_var = 1;
+        }
+    }
+
+    *first_term = 0;
+    return 1;
+}
+
+static char *build_random_system_spec(const char *deg_spec,
+                                      slong nvars,
+                                      double density_ratio)
+{
+    size_t spec_len;
+    char *spec;
+
+    if (!deg_spec) return strdup("random system");
+
+    spec_len = strlen(deg_spec) + 128;
+    spec = (char *) malloc(spec_len);
+    if (!spec) return NULL;
+
+    snprintf(spec, spec_len,
+             "random system spec: degrees=%s, variables=%ld, density=%.6g",
+             deg_spec, nvars, density_ratio);
+    return spec;
+}
+
 static int generate_random_poly_strings(
         const long *degrees, slong npolys,
+        slong nvars,
+        slong num_elim_vars,
+        double density_ratio,
         const fq_nmod_ctx_t ctx,
-        int is_solve_mode,
         int silent_mode,
         char **polys_str_out,
         char **elim_vars_str_out,
         char **all_vars_str_out)
 {
-    slong nvars = npolys;
     slong npars = 0;
-
-    /* ---- x0, x1, ..., x_{n-1} ---- */
-    char **var_names = malloc((size_t)nvars * sizeof(char *));
-    for (slong i = 0; i < nvars; i++) {
-        var_names[i] = malloc(16);
-        snprintf(var_names[i], 16, "x%ld", i);
-    }
-
-    /* ---- all_vars ---- */
-    size_t av_cap = (size_t)nvars * 8 + 2;
-    char  *all_vars = malloc(av_cap);
-    all_vars[0] = '\0';
-    for (slong i = 0; i < nvars; i++) {
-        if (i > 0) strcat(all_vars, ",");
-        strcat(all_vars, var_names[i]);
-    }
-
-    /* ---- elim_vars ---- */
-    char *elim_vars;
-    if (!is_solve_mode && nvars >= 2) {
-        size_t ev_cap = (size_t)(nvars - 1) * 8 + 2;
-        elim_vars = malloc(ev_cap);
-        elim_vars[0] = '\0';
-        for (slong i = 0; i < nvars - 1; i++) {
-            if (i > 0) strcat(elim_vars, ",");
-            strcat(elim_vars, var_names[i]);
-        }
-    } else {
-        elim_vars = strdup(all_vars);
-    }
-
-    slong *slong_deg = malloc((size_t)npolys * sizeof(slong));
-    for (slong i = 0; i < npolys; i++) slong_deg[i] = (slong)degrees[i];
-
+    char *all_vars = NULL;
+    char *elim_vars = NULL;
+    char *remaining_vars = NULL;
+    slong *slong_deg = NULL;
+    fq_mvpoly_t *polys = NULL;
+    char *gen_name = NULL;
+    char **poly_strs = NULL;
+    char *polys_str = NULL;
+    size_t total_len = 4;
     flint_rand_t rstate;
+    int orig_stdout = -1;
+    int devnull = -1;
+    int rand_initialized = 0;
+
+    if (!degrees || npolys <= 0 || nvars <= 0 || num_elim_vars < 0 || num_elim_vars > nvars)
+        return 0;
+
+    if (!build_random_system_strings(nvars, num_elim_vars,
+                                     &elim_vars, &all_vars, &remaining_vars)) {
+        return 0;
+    }
+
+    slong_deg = (slong *) malloc((size_t) npolys * sizeof(slong));
+    if (!slong_deg) goto fail;
+    for (slong i = 0; i < npolys; i++) slong_deg[i] = (slong) degrees[i];
+
     flint_rand_init(rstate);
-    flint_rand_set_seed(rstate, (ulong)time(NULL),
-                        (ulong)time(NULL) ^ (ulong)clock());
+    rand_initialized = 1;
+    flint_rand_set_seed(rstate, (ulong) time(NULL),
+                        (ulong) time(NULL) ^ (ulong) clock());
 
     if (!silent_mode) printf("Generating random polynomial system...\n");
 
     fflush(stdout);
-    int orig_stdout = dup(STDOUT_FILENO);
-    int devnull = open(DIXON_NULL_DEVICE, O_WRONLY);
-    if (devnull != -1) { dup2(devnull, STDOUT_FILENO); close(devnull); }
+    orig_stdout = dup(STDOUT_FILENO);
+    devnull = open(DIXON_NULL_DEVICE, O_WRONLY);
+    if (devnull != -1) {
+        dup2(devnull, STDOUT_FILENO);
+        close(devnull);
+    }
 
-    fq_mvpoly_t *polys = NULL;
     generate_polynomial_system(&polys, nvars, npolys, npars,
-                               slong_deg, 0.8, ctx, rstate);
+                               slong_deg, density_ratio, ctx, rstate);
 
     fflush(stdout);
-    dup2(orig_stdout, STDOUT_FILENO);
-    close(orig_stdout);
+    if (orig_stdout != -1) {
+        dup2(orig_stdout, STDOUT_FILENO);
+        close(orig_stdout);
+        orig_stdout = -1;
+    }
 
-    char *gen_name = get_generator_name(ctx);
+    gen_name = get_generator_name(ctx);
+    poly_strs = (char **) malloc((size_t) npolys * sizeof(char *));
+    if (!poly_strs) goto fail;
 
-    size_t total_len = 4;
-    char **poly_strs = malloc((size_t)npolys * sizeof(char *));
     for (slong i = 0; i < npolys; i++) {
         char *s = fq_mvpoly_to_string(&polys[i], NULL, gen_name);
         poly_strs[i] = (s && strlen(s) > 0) ? s : (free(s), strdup("0"));
+        if (!poly_strs[i]) goto fail;
         total_len += strlen(poly_strs[i]) + 3;
     }
 
-    char *polys_str = malloc(total_len);
+    polys_str = (char *) malloc(total_len);
+    if (!polys_str) goto fail;
     polys_str[0] = '\0';
     for (slong i = 0; i < npolys; i++) {
         if (i > 0) strcat(polys_str, ", ");
         strcat(polys_str, poly_strs[i]);
-        free(poly_strs[i]);
     }
-    free(poly_strs);
 
     if (!silent_mode) {
         printf("System: %ld equations, %ld variables\n", npolys, nvars);
@@ -810,24 +1053,52 @@ static int generate_random_poly_strings(
             printf("%ld", slong_deg[i]);
         }
         printf("]\n");
-        if (!is_solve_mode)
-            printf("Eliminate: %s  |  Remaining: %s\n",
-                   elim_vars, var_names[nvars - 1]);
+        printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
+               density_ratio * 100.0);
+        if (num_elim_vars > 0) {
+            printf("Eliminate: %s\n", elim_vars);
+        }
+        if (strlen(remaining_vars) > 0) {
+            printf("Remaining: %s\n", remaining_vars);
+        }
     }
 
-    /* ---- clear ---- */
+    for (slong i = 0; i < npolys; i++) free(poly_strs[i]);
+    free(poly_strs);
     for (slong i = 0; i < npolys; i++) fq_mvpoly_clear(&polys[i]);
     free(polys);
     free(slong_deg);
     if (gen_name) free(gen_name);
-    for (slong i = 0; i < nvars; i++) free(var_names[i]);
-    free(var_names);
-    flint_rand_clear(rstate);
+    free(remaining_vars);
+    if (rand_initialized) flint_rand_clear(rstate);
 
-    *polys_str_out      = polys_str;
-    *elim_vars_str_out  = elim_vars;
-    *all_vars_str_out   = all_vars;
+    *polys_str_out = polys_str;
+    *elim_vars_str_out = elim_vars;
+    *all_vars_str_out = all_vars;
     return 1;
+
+fail:
+    if (orig_stdout != -1) {
+        fflush(stdout);
+        dup2(orig_stdout, STDOUT_FILENO);
+        close(orig_stdout);
+    }
+    if (poly_strs) {
+        for (slong i = 0; i < npolys; i++) free(poly_strs[i]);
+        free(poly_strs);
+    }
+    if (polys) {
+        for (slong i = 0; i < npolys; i++) fq_mvpoly_clear(&polys[i]);
+        free(polys);
+    }
+    free(polys_str);
+    free(slong_deg);
+    free(all_vars);
+    free(elim_vars);
+    free(remaining_vars);
+    if (gen_name) free(gen_name);
+    if (rand_initialized) flint_rand_clear(rstate);
+    return 0;
 }
 
 /* =========================================================================
@@ -1740,120 +2011,150 @@ static char *normalize_elimination_vars(const char *polys_str,
     return result;
 }
 
+
 static int generate_random_poly_strings_rational(
         const long *degrees, slong npolys,
-        int is_solve_mode,
+        slong nvars,
+        slong num_elim_vars,
+        double density_ratio,
         int silent_mode,
         char **polys_str_out,
         char **elim_vars_str_out,
         char **all_vars_str_out)
 {
-    slong nvars = npolys;
-    char **var_names = malloc((size_t) nvars * sizeof(char *));
-    char coeff_chars[] = { -2, -1, 0, 1, 2 };
+    const int coeff_choices[] = { -2, -1, 1, 2 };
     char *all_vars = NULL;
     char *elim_vars = NULL;
+    char *remaining_vars = NULL;
     char *polys_str = NULL;
-    size_t all_cap, elim_cap, polys_cap = 256;
+    size_t polys_cap = 0;
+    size_t polys_len = 0;
+
+    if (!degrees || npolys <= 0 || nvars <= 0 || num_elim_vars < 0 || num_elim_vars > nvars)
+        return 0;
+
+    if (!build_random_system_strings(nvars, num_elim_vars,
+                                     &elim_vars, &all_vars, &remaining_vars)) {
+        return 0;
+    }
 
     srand((unsigned) (time(NULL) ^ clock()));
 
-    for (slong i = 0; i < nvars; i++) {
-        var_names[i] = malloc(16);
-        snprintf(var_names[i], 16, "x%ld", i);
-    }
-
-    all_cap = (size_t) nvars * 8 + 2;
-    all_vars = malloc(all_cap);
-    all_vars[0] = '\0';
-    for (slong i = 0; i < nvars; i++) {
-        if (i > 0) strcat(all_vars, ",");
-        strcat(all_vars, var_names[i]);
-    }
-
-    if (!is_solve_mode && nvars >= 2) {
-        elim_cap = (size_t) (nvars - 1) * 8 + 2;
-        elim_vars = malloc(elim_cap);
-        elim_vars[0] = '\0';
-        for (slong i = 0; i < nvars - 1; i++) {
-            if (i > 0) strcat(elim_vars, ",");
-            strcat(elim_vars, var_names[i]);
-        }
-    } else {
-        elim_vars = strdup(all_vars);
-    }
-
-    polys_str = malloc(polys_cap);
-    polys_str[0] = '\0';
-
     if (!silent_mode) printf("Generating random polynomial system over Q...\n");
 
-    fflush(stdout);
     for (slong i = 0; i < npolys; i++) {
-        char poly_buf[8192];
-        int first_term = 1;
+        monomial_t *monomials = NULL;
+        slong monomial_count = 0;
         slong degree = degrees[i] > 0 ? degrees[i] : 1;
-        slong term_count = FLINT_MAX(3, degree + 2);
+        slong target_terms;
+        slong *indices = NULL;
+        slong leading_idx = -1;
+        char *poly_buf = NULL;
+        size_t poly_cap = 0;
+        size_t poly_len = 0;
+        int first_term = 1;
+        slong selected = 0;
 
-        poly_buf[0] = '\0';
-        for (slong t = 0; t < term_count; t++) {
-            int coeff = 0;
-            slong *exp = calloc((size_t) nvars, sizeof(slong));
-            slong total_deg;
-            char term_buf[512];
-            int has_var = 0;
-
-            while (coeff == 0) {
-                coeff = coeff_chars[rand() % 5];
-            }
-
-            if (t == 0) {
-                exp[i % nvars] = degree;
-            } else {
-                total_deg = rand() % (degree + 1);
-                for (slong left = total_deg; left > 0; left--) {
-                    exp[rand() % nvars]++;
-                }
-            }
-
-            term_buf[0] = '\0';
-            if (first_term) {
-                if (coeff < 0) strcat(term_buf, "-");
-            } else {
-                strcat(term_buf, coeff < 0 ? " - " : " + ");
-            }
-
-            if (abs(coeff) != 1) {
-                char coeff_buf[32];
-                snprintf(coeff_buf, sizeof(coeff_buf), "%d", abs(coeff));
-                strcat(term_buf, coeff_buf);
-            }
-
-            for (slong j = 0; j < nvars; j++) {
-                if (exp[j] == 0) continue;
-                if (abs(coeff) != 1 || has_var) strcat(term_buf, "*");
-                strcat(term_buf, var_names[j]);
-                if (exp[j] != 1) {
-                    char exp_buf[32];
-                    snprintf(exp_buf, sizeof(exp_buf), "^%ld", exp[j]);
-                    strcat(term_buf, exp_buf);
-                }
-                has_var = 1;
-            }
-
-            if (!has_var && abs(coeff) == 1) strcat(term_buf, "1");
-            strcat(poly_buf, term_buf);
-            first_term = 0;
-            free(exp);
+        enumerate_all_monomials(&monomials, &monomial_count, nvars, degree);
+        if (!monomials || monomial_count <= 0) {
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            free(polys_str);
+            free(all_vars);
+            free(elim_vars);
+            free(remaining_vars);
+            return 0;
         }
 
-        if (strlen(polys_str) + strlen(poly_buf) + 4 > polys_cap) {
-            while (strlen(polys_str) + strlen(poly_buf) + 4 > polys_cap)
-                polys_cap *= 2;
-            polys_str = realloc(polys_str, polys_cap);
+        target_terms = (slong) (density_ratio * monomial_count);
+        if (target_terms < 1) target_terms = 1;
+        if (target_terms > monomial_count) target_terms = monomial_count;
+
+        indices = (slong *) malloc((size_t) monomial_count * sizeof(slong));
+        if (!indices) {
+            free_enumerated_monomials(monomials, monomial_count);
+            free(polys_str);
+            free(all_vars);
+            free(elim_vars);
+            free(remaining_vars);
+            return 0;
         }
-        if (i > 0) strcat(polys_str, ", ");
-        strcat(polys_str, poly_buf);
+
+        for (slong j = 0; j < monomial_count; j++) indices[j] = j;
+        for (slong j = monomial_count - 1; j > 0; j--) {
+            slong k = (slong) (rand() % (j + 1));
+            slong tmp = indices[j];
+            indices[j] = indices[k];
+            indices[k] = tmp;
+        }
+
+        for (slong j = 0; j < monomial_count; j++) {
+            if (monomials[indices[j]].total_degree == degree) {
+                leading_idx = indices[j];
+                break;
+            }
+        }
+        if (leading_idx < 0) leading_idx = indices[0];
+
+        if (!append_signed_monomial_text(&poly_buf, &poly_cap, &poly_len,
+                                         coeff_choices[rand() % 4],
+                                         monomials[leading_idx].exponents,
+                                         nvars, &first_term)) {
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            free(polys_str);
+            free(all_vars);
+            free(elim_vars);
+            free(remaining_vars);
+            return 0;
+        }
+        selected++;
+
+        for (slong j = 0; j < monomial_count && selected < target_terms; j++) {
+            slong idx = indices[j];
+            if (idx == leading_idx) continue;
+            if (!append_signed_monomial_text(&poly_buf, &poly_cap, &poly_len,
+                                             coeff_choices[rand() % 4],
+                                             monomials[idx].exponents,
+                                             nvars, &first_term)) {
+                free(indices);
+                free(poly_buf);
+                free_enumerated_monomials(monomials, monomial_count);
+                free(polys_str);
+                free(all_vars);
+                free(elim_vars);
+                free(remaining_vars);
+                return 0;
+            }
+            selected++;
+        }
+
+        if (i > 0 && !append_text(&polys_str, &polys_cap, &polys_len, ", ")) {
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            free(polys_str);
+            free(all_vars);
+            free(elim_vars);
+            free(remaining_vars);
+            return 0;
+        }
+        if (!append_text(&polys_str, &polys_cap, &polys_len, poly_buf ? poly_buf : "0")) {
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            free(polys_str);
+            free(all_vars);
+            free(elim_vars);
+            free(remaining_vars);
+            return 0;
+        }
+
+        free(indices);
+        free(poly_buf);
+        free_enumerated_monomials(monomials, monomial_count);
     }
 
     if (!silent_mode) {
@@ -1864,14 +2165,17 @@ static int generate_random_poly_strings_rational(
             printf("%ld", degrees[i]);
         }
         printf("]\n");
-        if (!is_solve_mode)
-            printf("Eliminate: %s  |  Remaining: %s\n",
-                   elim_vars, var_names[nvars - 1]);
+        printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
+               density_ratio * 100.0);
+        if (num_elim_vars > 0) {
+            printf("Eliminate: %s\n", elim_vars);
+        }
+        if (strlen(remaining_vars) > 0) {
+            printf("Remaining: %s\n", remaining_vars);
+        }
     }
 
-    for (slong i = 0; i < nvars; i++) free(var_names[i]);
-    free(var_names);
-
+    free(remaining_vars);
     *polys_str_out = polys_str;
     *elim_vars_str_out = elim_vars;
     *all_vars_str_out = all_vars;
@@ -1910,6 +2214,10 @@ int main(int argc, char *argv[])
     const char *cli_output_filename = NULL;
     char *positional_args[argc];
     int positional_count = 0;
+    slong random_nvars = 0;
+    int random_nvars_given = 0;
+    double random_density = 1.0;
+    int random_density_given = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -2019,6 +2327,32 @@ int main(int argc, char *argv[])
                                 "must be positive integer. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "-n") == 0 ||
+                    strcmp(argv[i], "--nvars") == 0 ||
+                    strcmp(argv[i], "--num-vars") == 0) && i + 1 < argc) {
+            if (!parse_positive_slong_option(argv[i + 1], &random_nvars)) {
+                fprintf(stderr, "Error: invalid variable count '%s'; expected a positive integer.\n",
+                        argv[i + 1]);
+                return 1;
+            }
+            random_nvars_given = 1;
+            i++;
+        } else if (strcmp(argv[i], "-n") == 0 ||
+                   strcmp(argv[i], "--nvars") == 0 ||
+                   strcmp(argv[i], "--num-vars") == 0) {
+            fprintf(stderr, "Error: %s requires a positive integer argument.\n", argv[i]);
+            return 1;
+        } else if (strcmp(argv[i], "--density") == 0 && i + 1 < argc) {
+            if (!parse_density_option(argv[i + 1], &random_density)) {
+                fprintf(stderr, "Error: invalid density '%s'; expected 0 <= density <= 1.\n",
+                        argv[i + 1]);
+                return 1;
+            }
+            random_density_given = 1;
+            i++;
+        } else if (strcmp(argv[i], "--density") == 0) {
+            fprintf(stderr, "Error: --density requires a numeric argument between 0 and 1.\n");
+            return 1;
         } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
             cli_input_filename = argv[i + 1];
             i++;
@@ -2039,6 +2373,11 @@ int main(int argc, char *argv[])
     int silent_mode = (verbose_level == 0);
     int solve_verbose_mode = (verbose_level >= 2);
     int debug_mode = (verbose_level >= 2);
+
+    if (!rand_mode && (random_nvars_given || random_density_given)) {
+        fprintf(stderr, "Error: -n/--nvars and --density may only be used together with --random.\n");
+        return 1;
+    }
 
 
     
@@ -2079,12 +2418,17 @@ int main(int argc, char *argv[])
     int   vars_str_generated = 0;
     int   need_free     = 0;
     int   rand_generated = 0;  /* 1 = polys_str/vars_str were malloc'd by random gen */
+    int   rand_comp_direct = 0;
     char *deg_str       = NULL; /* degree list string when rand_mode */
+    char *rand_comp_spec = NULL;
     char *input_filename  = NULL;
     char *output_filename = NULL;
     mp_limb_t prime = 0;
     ulong     power = 0;
     const char *file_input_arg = cli_input_filename;
+    long *rand_comp_degrees = NULL;
+    slong rand_comp_npolys = 0;
+    slong rand_comp_nvars = 0;
 
     /* ---- determine input mode ---- */
     if (rand_mode) {
@@ -2485,54 +2829,115 @@ int main(int argc, char *argv[])
      * If --random/-r, generate polynomial strings now that ctx is ready
      * ====================================================== */
     if (rand_mode) {
-        slong  npolys_rand;
-        long  *degrees_rand = parse_degree_list(deg_str, &npolys_rand);
+        slong npolys_rand = 0;
+        long *degrees_rand = parse_degree_list(deg_str, &npolys_rand);
+        slong nvars_rand = random_nvars_given ? random_nvars : npolys_rand;
+        slong num_elim_rand = comp_mode ? (npolys_rand - 1)
+                                        : (solve_mode ? nvars_rand : (npolys_rand - 1));
 
-        if (npolys_rand < 2) {
+        if (!degrees_rand || npolys_rand < 2) {
             if (!silent_mode)
                 fprintf(stderr, "Error: --random requires at least 2 degrees "
                                 "(e.g. \"3,3,2\")\n");
             free(degrees_rand);
-            fq_nmod_ctx_clear(ctx);
-            fmpz_clear(p_fmpz);
-            if (field_poly_str) free(field_poly_str);
-            if (gen_var_name)   free(gen_var_name);
-            if (output_filename) free(output_filename);
-            return 1;
+            goto cleanup_fail;
         }
 
-        char *gen_polys = NULL, *gen_elim = NULL, *gen_allvars = NULL;
-        int generated_ok;
-        if (rational_mode) {
-            generated_ok = generate_random_poly_strings_rational(
-                               degrees_rand, npolys_rand,
-                               solve_mode, silent_mode,
-                               &gen_polys, &gen_elim, &gen_allvars);
-        } else {
-            generated_ok = generate_random_poly_strings(
-                               degrees_rand, npolys_rand,
-                               ctx,
-                               solve_mode,
-                               silent_mode,
-                               &gen_polys, &gen_elim, &gen_allvars);
-        }
-        if (!generated_ok) {
+        if (nvars_rand < npolys_rand - 1) {
             if (!silent_mode)
-                fprintf(stderr, "Error: random polynomial generation failed\n");
+                fprintf(stderr, "Error: random mode requires -n/--nvars >= #equations-1 = %ld (got %ld).\n",
+                        npolys_rand - 1, nvars_rand);
             free(degrees_rand);
-            if (!rational_mode) fq_nmod_ctx_clear(ctx);
-            fmpz_clear(p_fmpz);
-            if (field_poly_str) free(field_poly_str);
-            if (gen_var_name)   free(gen_var_name);
-            if (output_filename) free(output_filename);
-            return 1;
+            goto cleanup_fail;
         }
 
-        free(degrees_rand);
-        polys_str    = gen_polys;
-        vars_str     = gen_elim;
-        allvars_str  = gen_allvars;
-        rand_generated = 1;
+        if (num_elim_rand < 0 || num_elim_rand > nvars_rand) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: invalid random elimination-variable count %ld for %ld variables.\n",
+                        num_elim_rand, nvars_rand);
+            free(degrees_rand);
+            goto cleanup_fail;
+        }
+
+        if (comp_mode) {
+            char *gen_elim = NULL, *gen_allvars = NULL, *gen_remaining = NULL;
+
+            rand_comp_spec = build_random_system_spec(deg_str, nvars_rand, random_density);
+            if (!rand_comp_spec ||
+                !build_random_system_strings(nvars_rand, num_elim_rand,
+                                             &gen_elim, &gen_allvars, &gen_remaining)) {
+                free(rand_comp_spec);
+                rand_comp_spec = NULL;
+                free(gen_elim);
+                free(gen_allvars);
+                free(gen_remaining);
+                free(degrees_rand);
+                if (!silent_mode)
+                    fprintf(stderr, "Error: random complexity setup failed\n");
+                goto cleanup_fail;
+            }
+
+            if (!silent_mode) {
+                printf("Random system spec: %ld equations, %ld variables\n",
+                       npolys_rand, nvars_rand);
+                printf("Degrees: [");
+                for (slong i = 0; i < npolys_rand; i++) {
+                    if (i > 0) printf(", ");
+                    printf("%ld", degrees_rand[i]);
+                }
+                printf("]\n");
+                printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
+                       random_density * 100.0);
+                if (strlen(gen_elim) > 0) {
+                    printf("Eliminate: %s\n", gen_elim);
+                }
+                if (strlen(gen_remaining) > 0) {
+                    printf("Remaining: %s\n", gen_remaining);
+                }
+            }
+
+            free(gen_remaining);
+            vars_str = gen_elim;
+            allvars_str = gen_allvars;
+            rand_generated = 1;
+            rand_comp_direct = 1;
+            rand_comp_degrees = degrees_rand;
+            rand_comp_npolys = npolys_rand;
+            rand_comp_nvars = nvars_rand;
+
+        } else {
+            char *gen_polys = NULL, *gen_elim = NULL, *gen_allvars = NULL;
+            int generated_ok;
+
+            if (rational_mode) {
+                generated_ok = generate_random_poly_strings_rational(
+                                   degrees_rand, npolys_rand,
+                                   nvars_rand, num_elim_rand,
+                                   random_density,
+                                   silent_mode,
+                                   &gen_polys, &gen_elim, &gen_allvars);
+            } else {
+                generated_ok = generate_random_poly_strings(
+                                   degrees_rand, npolys_rand,
+                                   nvars_rand, num_elim_rand,
+                                   random_density,
+                                   ctx,
+                                   silent_mode,
+                                   &gen_polys, &gen_elim, &gen_allvars);
+            }
+            if (!generated_ok) {
+                if (!silent_mode)
+                    fprintf(stderr, "Error: random polynomial generation failed\n");
+                free(degrees_rand);
+                goto cleanup_fail;
+            }
+
+            free(degrees_rand);
+            polys_str = gen_polys;
+            vars_str = gen_elim;
+            allvars_str = gen_allvars;
+            rand_generated = 1;
+        }
     }
 
     if (!solve_mode && polys_str && vars_str) {
@@ -2648,10 +3053,22 @@ int main(int argc, char *argv[])
         clock_t end_time  = clock();
         double comp_time  = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
-        run_complexity_analysis(polys_str, vars_str,
-                                p_fmpz, power, ctx_initialized ? ctx : NULL,
-                                output_filename, silent_mode,
-                                comp_time, omega);
+        if (rand_comp_direct) {
+            run_complexity_analysis_from_degrees(rand_comp_degrees,
+                                                 rand_comp_npolys,
+                                                 rand_comp_nvars,
+                                                 count_comma_separated_items(vars_str),
+                                                 p_fmpz, power,
+                                                 ctx_initialized ? ctx : NULL,
+                                                 output_filename, silent_mode,
+                                                 comp_time, omega,
+                                                 rand_comp_spec);
+        } else {
+            run_complexity_analysis(polys_str, vars_str,
+                                    p_fmpz, power, ctx_initialized ? ctx : NULL,
+                                    output_filename, silent_mode,
+                                    comp_time, omega);
+        }
 
     } else if (solve_mode) {
         /* ---- Polynomial system solver ---- */
@@ -2930,6 +3347,8 @@ int main(int argc, char *argv[])
         free(vars_str_override);
     if (!need_free && !rand_generated && vars_str_generated && vars_str)
         free(vars_str);
+    free(rand_comp_degrees);
+    free(rand_comp_spec);
     if (input_filename)  free(input_filename);
     if (output_filename) free(output_filename);
 
@@ -2949,10 +3368,17 @@ cleanup_fail:
         if (ideal_str)   free(ideal_str);
         if (allvars_str) free(allvars_str);
     }
+    if (rand_generated) {
+        free(polys_str);
+        free(vars_str);
+        free(allvars_str);
+    }
     if (!need_free && !rand_generated && vars_str_override)
         free(vars_str_override);
     if (!need_free && !rand_generated && vars_str_generated && vars_str)
         free(vars_str);
+    free(rand_comp_degrees);
+    free(rand_comp_spec);
     if (input_filename)  free(input_filename);
     if (output_filename) free(output_filename);
     flint_cleanup();

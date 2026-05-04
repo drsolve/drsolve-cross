@@ -1466,7 +1466,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
                                               slong *degree_bounds) {
     FQ_INTERP_PRINT("\n=== Optimized FQ Determinant Interpolation ===\n");
     #ifdef _OPENMP
-    printf("OpenMP available: %d threads max\n", omp_get_max_threads());
+    //printf("OpenMP available: %d threads max\n", omp_get_max_threads());
     //printf("Parallelization: %s\n", USE_PARALLEL ? "enabled" : "disabled");
     #else
     printf("OpenMP not available - running sequential\n");
