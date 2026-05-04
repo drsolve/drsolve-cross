@@ -1,7 +1,10 @@
 name: C/C++ CI
 
 on:
-  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - main
 
 jobs:
 
