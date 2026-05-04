@@ -275,11 +275,34 @@ static double log2_add_exp(double a, double b) {
 }
 
 static double log2_factorial_slong(slong n) {
-    double acc = 0.0;
-    for (slong i = 2; i <= n; i++) {
-        acc += log2((double) i);
+    if (n <= 1) return 0.0;
+    return (double) (lgammal((long double) n + 1.0L) / logl(2.0L));
+}
+
+static double log2_fmpz_upper_bound(const fmpz_t x) {
+    if (fmpz_sgn(x) <= 0) return -INFINITY;
+    if (fmpz_abs_fits_ui(x)) {
+        ulong ux = fmpz_get_ui(x);
+        return (ux > 0) ? log2((double) ux) : -INFINITY;
     }
-    return acc;
+    return (double) (fmpz_bits(x) - 1);
+}
+
+static double log2_factorial_fmpz_upper_bound(const fmpz_t x) {
+    if (fmpz_sgn(x) <= 0 || fmpz_cmp_ui(x, 1) <= 0) return 0.0;
+    if (fmpz_abs_fits_ui(x)) {
+        return log2_factorial_slong((slong) fmpz_get_ui(x));
+    }
+    return INFINITY;
+}
+
+static double log2_fmpz_minus_ui_upper_bound(const fmpz_t x, ulong c) {
+    if (fmpz_cmp_ui(x, c) <= 0) return -INFINITY;
+    if (fmpz_abs_fits_ui(x)) {
+        ulong ux = fmpz_get_ui(x) - c;
+        return (ux > 0) ? log2((double) ux) : -INFINITY;
+    }
+    return (double) (fmpz_bits(x) - 1);
 }
 
 static double log2_binomial_upper(slong n, slong k) {
@@ -439,10 +462,21 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                           slong num_all_vars,
                                           slong num_elim_vars,
                                           slong num_parameter_vars,
+                                          const fmpz_t field_order,
                                           double omega) {
     memset(report, 0, sizeof(*report));
 
-    report->det_size = num_polys;
+    fmpz_t matrix_size;
+    long total_degree_sum = 0;
+    int degree_sum_saturated = 0;
+    long step1_partial_degree_bound = 0;
+
+    fmpz_init(matrix_size);
+    dixon_size(matrix_size, degrees, (int) num_polys, 0);
+
+    report->det_size = fmpz_fits_si(matrix_size) ? fmpz_get_si(matrix_size) : 0;
+    report->det_size_log2 = log2_fmpz_upper_bound(matrix_size);
+    report->det_factorial_log2 = log2_factorial_fmpz_upper_bound(matrix_size);
     report->num_all_vars = num_all_vars;
     report->num_elim_vars = num_elim_vars;
     report->num_parameter_vars = num_parameter_vars;
@@ -461,11 +495,18 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         long *prefix = NULL;
         long *var_degree_bounds = NULL;
         double *var_weight_log2 = NULL;
-        double log2_row_sum = -INFINITY;
         double log2_col_sum = -INFINITY;
 
         for (slong i = 0; i < num_polys; i++) {
             long di = degrees[i] > 0 ? degrees[i] : 0;
+            if (!degree_sum_saturated) {
+                if (di > LONG_MAX - total_degree_sum) {
+                    total_degree_sum = LONG_MAX;
+                    degree_sum_saturated = 1;
+                } else {
+                    total_degree_sum += di;
+                }
+            }
             report->step1_det_total_degree += di;
         }
 
@@ -483,23 +524,28 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                     log2((double) report->step1_det_total_degree + 1.0);
             }
             report->step1_kronecker_degree_log2 = log2_det_uni_degree;
-            report->step1_direct_log2 =
-                log2_factorial_slong(report->det_size) +
+            report->step1_direct_factorial_log2 = log2_factorial_slong(num_polys);
+            report->step1_direct_fft_log2 =
                 log2_soft_fft_multiply_from_degree_log2(log2_det_uni_degree);
+            report->step1_direct_log2 =
+                report->step1_direct_factorial_log2 +
+                report->step1_direct_fft_log2;
+            step1_partial_degree_bound = report->step1_det_total_degree;
 
             {
                 double log2_col_avg = log2_det_uni_degree;
-                double log2_row_avg = log2_det_uni_degree;
                 double log2_s = log2_col_avg;
-                if (isfinite(log2_row_avg) && (!isfinite(log2_s) || log2_row_avg < log2_s)) {
-                    log2_s = log2_row_avg;
-                }
                 if (!isfinite(log2_s) || log2_s < 0.0) {
                     log2_s = 0.0;
                 }
+                report->step1_hnf_linear_algebra_log2 =
+                    (num_polys > 1
+                        ? omega * log2((double) num_polys)
+                        : 0.0);
+                report->step1_hnf_degree_density_log2 = log2_s;
                 report->step1_hnf_log2 =
-                    (report->det_size > 1 ? omega * log2((double) report->det_size) : 0.0) +
-                    log2_s;
+                    report->step1_hnf_linear_algebra_log2 +
+                    report->step1_hnf_degree_density_log2;
             }
         } else {
             build_sorted_degree_prefix(&sorted, &prefix, degrees, num_polys);
@@ -522,12 +568,21 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
 
                 var_degree_bounds[i] = orig_bound;
                 var_degree_bounds[num_elim_vars + i] = dual_bound;
+                if (orig_bound > step1_partial_degree_bound) {
+                    step1_partial_degree_bound = orig_bound;
+                }
+                if (dual_bound > step1_partial_degree_bound) {
+                    step1_partial_degree_bound = dual_bound;
+                }
             }
 
             for (slong i = 0; i < num_parameter_vars; i++) {
                 long param_bound = report->step1_det_total_degree;
                 if (param_bound < 0) param_bound = 0;
                 var_degree_bounds[2 * num_elim_vars + i] = param_bound;
+                if (param_bound > step1_partial_degree_bound) {
+                    step1_partial_degree_bound = param_bound;
+                }
             }
 
             if (report->step1_var_count > 0) {
@@ -541,39 +596,12 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             report->step1_kronecker_degree_log2 =
                 log2_kronecker_degree_from_bounds(var_degree_bounds,
                                                   report->step1_var_count);
-            report->step1_direct_log2 =
-                log2_factorial_slong(report->det_size) +
+            report->step1_direct_factorial_log2 = log2_factorial_slong(num_polys);
+            report->step1_direct_fft_log2 =
                 log2_soft_fft_multiply_from_degree_log2(report->step1_kronecker_degree_log2);
-
-            for (slong row = 0; row < num_polys; row++) {
-                long row_max_degree = 0;
-                double row_log2_degree = -INFINITY;
-                if (row == 0) {
-                    for (slong j = 0; j < num_polys; j++) {
-                        long dj = degrees[j] > 0 ? degrees[j] : 0;
-                        if (dj > row_max_degree) {
-                            row_max_degree = dj;
-                        }
-                    }
-                } else {
-                    for (slong j = 0; j < num_polys; j++) {
-                        long dj = degrees[j] > 0 ? degrees[j] : 0;
-                        if (dj > 0 && dj - 1 > row_max_degree) {
-                            row_max_degree = dj - 1;
-                        }
-                    }
-                }
-
-                if (row_max_degree > 0 && var_weight_log2 != NULL) {
-                    long effective_col_degree = (row == 0) ? row_max_degree : (row_max_degree + 1);
-                    row_log2_degree = step1_entry_degree_log2(row,
-                                                              effective_col_degree,
-                                                              var_weight_log2,
-                                                              num_elim_vars,
-                                                              num_parameter_vars);
-                }
-                log2_row_sum = log2_add_exp(log2_row_sum, row_log2_degree);
-            }
+            report->step1_direct_log2 =
+                report->step1_direct_factorial_log2 +
+                report->step1_direct_fft_log2;
 
             for (slong col = 0; col < num_polys; col++) {
                 long dj = degrees[col] > 0 ? degrees[col] : 0;
@@ -592,28 +620,24 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             }
 
             {
-                double log2_row_avg = -INFINITY;
                 double log2_col_avg = -INFINITY;
                 double log2_s = -INFINITY;
-
-                if (num_polys > 0 && isfinite(log2_row_sum)) {
-                    log2_row_avg = log2_row_sum - log2((double) num_polys);
-                }
                 if (num_polys > 0 && isfinite(log2_col_sum)) {
                     log2_col_avg = log2_col_sum - log2((double) num_polys);
                 }
-
                 log2_s = log2_col_avg;
-                if (isfinite(log2_row_avg) && (!isfinite(log2_s) || log2_row_avg < log2_s)) {
-                    log2_s = log2_row_avg;
-                }
                 if (!isfinite(log2_s) || log2_s < 0.0) {
                     log2_s = 0.0;
                 }
 
+                report->step1_hnf_linear_algebra_log2 =
+                    (num_polys > 1
+                        ? omega * log2((double) num_polys)
+                        : 0.0);
+                report->step1_hnf_degree_density_log2 = log2_s;
                 report->step1_hnf_log2 =
-                    (report->det_size > 1 ? omega * log2((double) report->det_size) : 0.0) +
-                    log2_s;
+                    report->step1_hnf_linear_algebra_log2 +
+                    report->step1_hnf_degree_density_log2;
             }
 
             free(sorted);
@@ -624,61 +648,88 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     }
 
     {
-        double total_degree_term_log2 =
-            log2_binomial_upper(report->step1_det_total_degree + report->step1_var_count,
-                                report->step1_var_count);
-        double box_term_log2 = 0.0;
-        double log2_probe_unit = 0.0;
-        double log2_det_inv = (report->det_size > 1)
-            ? omega * log2((double) report->det_size)
+        double structural_term_log2 = 0.0;
+        double log2_small_det = (num_polys > 1)
+            ? omega * log2((double) num_polys)
             : 0.0;
-        double log2_trace = (report->det_size > 0 && report->step1_var_count > 0)
-            ? log2((double) report->step1_var_count) +
-              2.0 * log2((double) report->det_size)
+        double log2_shared_entry_eval = (num_polys > 0)
+            ? log2((double) num_polys) + log2((double) total_degree_sum + 1.0)
             : 0.0;
+        double log2_matrix_assembly = (num_polys > 1)
+            ? 2.0 * log2((double) num_polys)
+            : 0.0;
+        double log2_entry_eval = log2_add_exp(log2_shared_entry_eval,
+                                              log2_matrix_assembly);
+        double log2_L = log2_add_exp(log2_small_det, log2_entry_eval);
+        double log2_q = log2_fmpz_upper_bound(field_order);
+        double log2_logq = (isfinite(log2_q) && log2_q > 0.0)
+            ? log2(log2_q)
+            : 0.0;
+        double log2_q_minus_1 = log2_fmpz_minus_ui_upper_bound(field_order, 1);
 
-        if (report->step1_var_count > 0) {
-            int standard_step1_shape =
-                (num_polys > 0 &&
-                 num_elim_vars >= 0 &&
-                 num_polys == num_elim_vars + 1);
-            if (standard_step1_shape) {
-                long *sorted = NULL;
-                long *prefix = NULL;
-                build_sorted_degree_prefix(&sorted, &prefix, degrees, num_polys);
-                for (slong i = 0; i < num_elim_vars; i++) {
-                    long orig_bound = prefix_degree_bound(prefix, i + 1);
-                    long dual_bound = prefix_degree_bound(prefix, num_elim_vars - i);
-                    box_term_log2 += log2((double) orig_bound + 1.0);
-                    box_term_log2 += log2((double) dual_bound + 1.0);
-                }
-                for (slong i = 0; i < num_parameter_vars; i++) {
-                    box_term_log2 += log2((double) report->step1_det_total_degree + 1.0);
-                }
-                free(sorted);
-                free(prefix);
-            } else {
-                box_term_log2 =
-                    ((double) report->step1_var_count) *
-                    log2((double) report->step1_det_total_degree + 1.0);
+        if (isfinite(report->det_size_log2) && report->det_size_log2 >= 0.0) {
+            structural_term_log2 = 2.0 * report->det_size_log2;
+            if (num_parameter_vars > 0) {
+                double param_factor_log2 = log2((double) total_degree_sum + 1.0);
+                structural_term_log2 += ((double) num_parameter_vars) * param_factor_log2;
             }
         }
 
-        report->step1_sparse_term_bound_log2 = total_degree_term_log2;
-        if (isfinite(box_term_log2) &&
-            (!isfinite(report->step1_sparse_term_bound_log2) ||
-             box_term_log2 < report->step1_sparse_term_bound_log2)) {
-            report->step1_sparse_term_bound_log2 = box_term_log2;
-        }
+        report->step1_sparse_term_bound_log2 = structural_term_log2;
         if (!isfinite(report->step1_sparse_term_bound_log2) ||
             report->step1_sparse_term_bound_log2 < 0.0) {
             report->step1_sparse_term_bound_log2 = 0.0;
         }
 
-        log2_probe_unit = log2_add_exp(log2_det_inv, log2_trace);
-        report->step1_sparse_log2 =
-            report->step1_sparse_term_bound_log2 +
-            log2_probe_unit;
+        report->step1_sparse_slp_length_log2 = log2_L;
+        report->step1_sparse_param_degree_bound =
+            total_degree_sum > 0 ? total_degree_sum : 0;
+        report->step1_sparse_partial_degree_bound = step1_partial_degree_bound;
+        report->step1_sparse_log2 = log2_add_exp(
+            report->step1_sparse_term_bound_log2 + log2_L + log2_logq,
+            report->step1_sparse_term_bound_log2 + 2.0 * log2_logq);
+        report->step1_sparse_q_for_three_quarters_log2 =
+            (report->step1_sparse_term_bound_log2 > 0.0 &&
+             report->step1_sparse_partial_degree_bound > 0)
+            ? (1.0 +
+               log2((double) report->step1_sparse_partial_degree_bound) +
+               2.0 * report->step1_sparse_term_bound_log2)
+            : 0.0;
+
+        if (report->step1_sparse_term_bound_log2 <= 0.0 ||
+            report->step1_sparse_partial_degree_bound <= 0) {
+            report->step1_sparse_success_prob_lb = 1.0;
+            report->step1_sparse_retry_factor = 1.0;
+            report->step1_sparse_expected_log2 = report->step1_sparse_log2;
+        } else if (!isfinite(log2_q_minus_1)) {
+            report->step1_sparse_success_prob_lb = 0.0;
+            report->step1_sparse_retry_factor = INFINITY;
+            report->step1_sparse_expected_log2 = INFINITY;
+        } else {
+            double log2_collision =
+                log2((double) report->step1_sparse_partial_degree_bound) +
+                2.0 * report->step1_sparse_term_bound_log2 -
+                1.0 - log2_q_minus_1;
+
+            if (log2_collision >= 0.0) {
+                report->step1_sparse_success_prob_lb = 0.0;
+                report->step1_sparse_retry_factor = INFINITY;
+                report->step1_sparse_expected_log2 = INFINITY;
+            } else {
+                double collision_ratio = exp2(log2_collision);
+                double p_lb = 1.0 - collision_ratio;
+                if (!(p_lb > 0.0)) {
+                    report->step1_sparse_success_prob_lb = 0.0;
+                    report->step1_sparse_retry_factor = INFINITY;
+                    report->step1_sparse_expected_log2 = INFINITY;
+                } else {
+                    report->step1_sparse_success_prob_lb = p_lb;
+                    report->step1_sparse_retry_factor = 1.0 / p_lb;
+                    report->step1_sparse_expected_log2 =
+                        report->step1_sparse_log2 + log2(report->step1_sparse_retry_factor);
+                }
+            }
+        }
     }
 
     {
@@ -739,6 +790,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     report->total_direct_log2 = log2_add_exp(report->step1_direct_log2, report->step4_log2);
     report->total_hnf_log2 = log2_add_exp(report->step1_hnf_log2, report->step4_log2);
     report->total_sparse_log2 = log2_add_exp(report->step1_sparse_log2, report->step4_log2);
+
+    fmpz_clear(matrix_size);
 }
 
 static int complexity_is_elimination_var(const char *var_name,
@@ -842,10 +895,14 @@ static void dixon_complexity_write_report_body(
         slong num_elim,
         slong num_parameter_vars,
         const long *degrees,
+        const fmpz_t field_characteristic,
+        const fmpz_t field_order,
         const fmpz_t matrix_size,
         long bezout_bound,
         const dixon_complexity_report_t *report,
         double omega) {
+    int verbose_level = g_dixon_verbose_level;
+
     fprintf(fp, "--- Raw parameters ---\n");
     fprintf(fp, "Equations: %ld\n", num_polys);
     fprintf(fp, "All vars (%ld): ", num_all_vars);
@@ -858,6 +915,12 @@ static void dixon_complexity_write_report_body(
     dixon_complexity_fprint_parameter_vars(fp, all_vars, num_all_vars,
                                            elim_var_list, num_elim);
     fprintf(fp, "\n");
+    fprintf(fp, "Field characteristic p: ");
+    fmpz_fprint(fp, field_characteristic);
+    fprintf(fp, "\n");
+    fprintf(fp, "Field order q: ");
+    fmpz_fprint(fp, field_order);
+    fprintf(fp, "\n");
     fprintf(fp, "Degree sequence: [");
     for (slong i = 0; i < num_polys; i++) {
         if (i > 0) {
@@ -869,8 +932,11 @@ static void dixon_complexity_write_report_body(
     fprintf(fp, "Bezout bound (degree product): %ld\n", bezout_bound);
 
     fprintf(fp, "\n--- Step 1 ---\n");
-    fprintf(fp, "Cancellation matrix size: %ld x %ld\n",
-            report->det_size, report->det_size);
+    fprintf(fp, "Cancellation matrix size: ");
+    fmpz_fprint(fp, matrix_size);
+    fprintf(fp, " x ");
+    fmpz_fprint(fp, matrix_size);
+    fprintf(fp, "\n");
     fprintf(fp, "Step 1 indeterminates (2*elim + params): %ld = 2*%ld + %ld\n",
             report->step1_var_count, report->num_elim_vars, report->num_parameter_vars);
     fprintf(fp, "Step 1 determinant total degree upper bound: %ld\n",
@@ -879,12 +945,98 @@ static void dixon_complexity_write_report_body(
             report->step1_kronecker_degree_log2);
     fprintf(fp, "Step 1 sparse term upper bound (log2 T): %.6f\n",
             report->step1_sparse_term_bound_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "Step 1 sparse structural model: T <= M^2 (B+1)^s with M=%ld, B=%ld, s=%ld\n",
+                report->det_size, report->step1_sparse_param_degree_bound, report->num_parameter_vars);
+    }
+    fprintf(fp, "Step 1 sparse partial degree upper bound D: %ld\n",
+            report->step1_sparse_partial_degree_bound);
+    if (verbose_level >= 2) {
+        fprintf(fp, "Step 1 characteristic-side theorem condition: p >= D ? %s (p=", 
+                fmpz_cmp_ui(field_characteristic,
+                            (ulong) (report->step1_sparse_partial_degree_bound > 0
+                                ? report->step1_sparse_partial_degree_bound : 0)) >= 0 ? "yes" : "no");
+        fmpz_fprint(fp, field_characteristic);
+        fprintf(fp, ", D=%ld)\n", report->step1_sparse_partial_degree_bound);
+    }
+    fprintf(fp, "Step 1 sparse SLP-length proxy log2(L) [shared-structure model]: %.6f\n",
+            report->step1_sparse_slp_length_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "Step 1 SLP proxy model: L ~= n^omega + n(B+1) + n^2 with n=%ld, omega=%.4f, B=%ld\n",
+                num_polys, omega, report->step1_sparse_param_degree_bound);
+    }
     fprintf(fp, "Step 1 direct Leibniz + Kronecker/FFT (log2): %.6f\n",
             report->step1_direct_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: log2(n!) + soft-FFT(Kronecker-degree)\n");
+        fprintf(fp, "  Values : n=%ld, log2(n!)=%.6f, log2(Kronecker degree)=%.6f, FFT-part=%.6f\n",
+                num_polys,
+                report->step1_direct_factorial_log2,
+                report->step1_kronecker_degree_log2,
+                report->step1_direct_fft_log2);
+    }
     fprintf(fp, "Step 1 Kronecker + HNF (log2): %.6f\n",
             report->step1_hnf_log2);
-    fprintf(fp, "Step 1 derivative sparse interpolation (log2): %.6f\n",
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: omega*log2(n) + log2(s)\n");
+        fprintf(fp, "  Values : n=%ld, omega=%.4f, omega*log2(n)=%.6f, log2(s)=%.6f\n",
+                num_polys,
+                omega,
+                report->step1_hnf_linear_algebra_log2,
+                report->step1_hnf_degree_density_log2);
+    }
+    fprintf(fp, "Step 1 derivative sparse interpolation theoretical (Huang 2023, q-aware, log2): %.6f\n",
             report->step1_sparse_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: soft-O(L*T*log q + T*log^2 q)\n");
+        fprintf(fp, "  Values : L <= 2^%.6f, T <= 2^%.6f, q = ", 
+                report->step1_sparse_slp_length_log2,
+                report->step1_sparse_term_bound_log2);
+        fmpz_fprint(fp, field_order);
+        fprintf(fp, ", D = %ld\n", report->step1_sparse_partial_degree_bound);
+    }
+    {
+        int theorem_char_ok =
+            fmpz_cmp_ui(field_characteristic,
+                        (ulong) (report->step1_sparse_partial_degree_bound > 0
+                            ? report->step1_sparse_partial_degree_bound : 0)) >= 0;
+        double theorem_retry = theorem_char_ok ? (4.0 / 3.0) : INFINITY;
+        double theorem_expected = theorem_char_ok
+            ? (report->step1_sparse_log2 + log2(theorem_retry))
+            : INFINITY;
+        if (theorem_char_ok) {
+            fprintf(fp, "Step 1 theorem success lower bound p >= 0.75\n");
+            fprintf(fp, "Step 1 theorem retry factor upper estimate 1/p <= 1.33333333333\n");
+            fprintf(fp, "Step 1 theorem retry-adjusted expected sparse complexity (log2): %.6f\n",
+                    theorem_expected);
+        } else {
+            fprintf(fp, "Step 1 theorem success lower bound unavailable (char(F_q) < D)\n");
+        }
+
+        if (verbose_level >= 2) {
+            fprintf(fp, "  Theorem condition: char(F_q) >= D with char=");
+            fmpz_fprint(fp, field_characteristic);
+            fprintf(fp, ", D=%ld -> %s\n",
+                    report->step1_sparse_partial_degree_bound,
+                    theorem_char_ok ? "satisfied" : "not satisfied");
+            fprintf(fp, "Step 1 probability track B (base-field one-shot bound):\n");
+            fprintf(fp, "  Formula: p >= max(0, 1 - D*T*(T-1)/(2*(q-1)))\n");
+            fprintf(fp, "  Success bound: p >= %.12g\n",
+                    report->step1_sparse_success_prob_lb);
+            fprintf(fp, "  Retry factor : 1/p <= %.12g\n",
+                    report->step1_sparse_retry_factor);
+            fprintf(fp, "  Retry-adjusted expected sparse complexity (log2): %.6f\n",
+                    report->step1_sparse_expected_log2);
+            fprintf(fp, "Step 1 sufficient q-threshold for base-field p >= 3/4 from current D,T upper bounds (log2 q): %.6f\n",
+                    report->step1_sparse_q_for_three_quarters_log2);
+            fprintf(fp, "  Sufficient base-field condition used here: q-1 >= 2*D*T*(T-1) (coarsened further in log-scale by T^2)\n");
+            if (!isfinite(report->step1_sparse_retry_factor)) {
+                fprintf(fp,
+                        "Step 1 note: Huang 2023's theorem-level 3/4 guarantee follows from char(F_q) >= D together with its evaluation-space construction; "
+                        "the bound printed above is a stricter base-field one-shot bound for the current implementation, which samples alpha directly in F_q.\n");
+            }
+        }
+    }
     if (num_polys != num_elim + 1) {
         fprintf(fp,
                 "Step 1 note: standard Dixon resultant shape expects #polys = #elim + 1; current input is %ld vs %ld + 1.\n",
@@ -926,8 +1078,6 @@ static void save_comp_result_to_file(
         const char   *filename,
         const char   *polys_str,
         const char   *vars_str,
-        const fmpz_t  prime,
-        ulong         power,
         slong         num_polys,
         slong         num_all_vars,
         char        **all_vars,
@@ -935,6 +1085,8 @@ static void save_comp_result_to_file(
         slong         num_elim,
         slong         num_parameter_vars,
         const long   *degrees,
+        const fmpz_t  field_characteristic,
+        const fmpz_t  field_order,
         const fmpz_t  matrix_size,
         long          bezout_bound,
         const dixon_complexity_report_t *report,
@@ -948,8 +1100,8 @@ static void save_comp_result_to_file(
 
     fprintf(fp, "Dixon Complexity Analysis\n");
     fprintf(fp, "=========================\n");
-    fprintf(fp, "Field: ");
-    dixon_complexity_print_field_label(fp, prime, power);
+    fprintf(fp, "Field order q: ");
+    fmpz_fprint(fp, field_order);
     fprintf(fp, "\n");
     fprintf(fp, "Polynomials: %s\n", polys_str);
     fprintf(fp, "Eliminate:   %s\n", vars_str);
@@ -963,6 +1115,8 @@ static void save_comp_result_to_file(
                                        num_elim,
                                        num_parameter_vars,
                                        degrees,
+                                       field_characteristic,
+                                       field_order,
                                        matrix_size,
                                        bezout_bound,
                                        report,
@@ -992,6 +1146,8 @@ void run_complexity_analysis(
     long bezout = 1;
     fmpz_t matrix_size;
     dixon_complexity_report_t report;
+    fmpz_t field_characteristic;
+    fmpz_t field_order;
 
     collect_variables((const char **) poly_arr, num_polys,
                       gen_name, &all_vars, &num_all_vars);
@@ -1025,7 +1181,19 @@ void run_complexity_analysis(
     }
 
     fmpz_init(matrix_size);
+    fmpz_init(field_characteristic);
+    fmpz_init(field_order);
     dixon_size(matrix_size, degrees, (int) num_polys, 0);
+    if (ctx != NULL) {
+        fmpz_set_ui(field_characteristic, fq_nmod_ctx_prime(ctx));
+        fq_nmod_ctx_order(field_order, ctx);
+    } else if (power <= 1) {
+        fmpz_set(field_characteristic, prime);
+        fmpz_set(field_order, prime);
+    } else {
+        fmpz_set(field_characteristic, prime);
+        fmpz_pow_ui(field_order, prime, power);
+    }
 
     dixon_complexity_report_from_degrees(&report,
                                          degrees,
@@ -1033,6 +1201,7 @@ void run_complexity_analysis(
                                          num_all_vars,
                                          num_elim,
                                          num_parameter_vars,
+                                         field_order,
                                          omega);
 
     if (!silent_mode) {
@@ -1045,6 +1214,8 @@ void run_complexity_analysis(
                                            num_elim,
                                            num_parameter_vars,
                                            degrees,
+                                           field_characteristic,
+                                           field_order,
                                            matrix_size,
                                            bezout,
                                            &report,
@@ -1057,14 +1228,15 @@ void run_complexity_analysis(
 
     if (output_filename) {
         save_comp_result_to_file(output_filename, polys_str, vars_str,
-                                 prime, power,
                                  num_polys, num_all_vars, all_vars,
                                  elim_arr, num_elim, num_parameter_vars,
-                                 degrees, matrix_size, bezout,
+                                 degrees, field_characteristic, field_order, matrix_size, bezout,
                                  &report, omega, comp_time);
     }
 
     fmpz_clear(matrix_size);
+    fmpz_clear(field_characteristic);
+    fmpz_clear(field_order);
     free(degrees);
     for (slong i = 0; i < num_all_vars; i++) {
         free(all_vars[i]);
@@ -1551,12 +1723,21 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
     }
 
     dixon_complexity_report_t report;
+    fmpz_t field_order;
+    fmpz_t field_characteristic;
+    fmpz_init(field_characteristic);
+    fmpz_init(field_order);
+    if (ctx != NULL) {
+        fmpz_set_ui(field_characteristic, fq_nmod_ctx_prime(ctx));
+        fq_nmod_ctx_order(field_order, ctx);
+    }
     dixon_complexity_report_from_degrees(&report,
                                          analysis.degrees,
                                          num_polys,
                                          analysis.num_all_vars,
                                          num_elim_vars,
                                          num_remaining,
+                                         field_order,
                                          DIXON_OMEGA);
     
     fmpz_t matrix_size;
@@ -1571,6 +1752,8 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
                                        num_elim_vars,
                                        num_remaining,
                                        analysis.degrees,
+                                       field_characteristic,
+                                       field_order,
                                        matrix_size,
                                        td,
                                        &report,
@@ -1630,6 +1813,8 @@ char* dixon_complexity_auto(const char **poly_strings, slong num_polys,
     free(remaining_vars);
     poly_analysis_clear(&analysis);
     fmpz_clear(matrix_size);
+    fmpz_clear(field_characteristic);
+    fmpz_clear(field_order);
     
     printf("=== Analysis Complete ===\n\n");
     

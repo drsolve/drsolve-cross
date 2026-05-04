@@ -51,6 +51,8 @@ typedef struct {
 
 typedef struct {
     slong det_size;
+    double det_size_log2;
+    double det_factorial_log2;
     slong num_all_vars;
     slong num_elim_vars;
     slong num_parameter_vars;
@@ -58,9 +60,20 @@ typedef struct {
     long step1_det_total_degree;
     double step1_kronecker_degree_log2;
     double step1_direct_log2;
+    double step1_direct_factorial_log2;
+    double step1_direct_fft_log2;
     double step1_hnf_log2;
+    double step1_hnf_linear_algebra_log2;
+    double step1_hnf_degree_density_log2;
     double step1_sparse_log2;
     double step1_sparse_term_bound_log2;
+    double step1_sparse_slp_length_log2;
+    long step1_sparse_param_degree_bound;
+    long step1_sparse_partial_degree_bound;
+    double step1_sparse_success_prob_lb;
+    double step1_sparse_retry_factor;
+    double step1_sparse_expected_log2;
+    double step1_sparse_q_for_three_quarters_log2;
     slong macaulay_degree;
     slong macaulay_rows;
     slong macaulay_cols;
@@ -110,6 +123,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                           slong num_all_vars,
                                           slong num_elim_vars,
                                           slong num_parameter_vars,
+                                          const fmpz_t field_order,
                                           double omega);
 
 // Complexity extraction functions
