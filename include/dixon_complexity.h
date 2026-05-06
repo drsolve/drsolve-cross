@@ -60,6 +60,9 @@ typedef struct {
     long step1_det_total_degree;
     double step1_kronecker_degree_log2;
     double step1_direct_log2;
+    double step1_direct_dense_log2;
+    double step1_direct_dense_linear_algebra_log2;
+    double step1_direct_dense_fft_log2;
     double step1_direct_factorial_log2;
     double step1_direct_fft_log2;
     double step1_hnf_log2;

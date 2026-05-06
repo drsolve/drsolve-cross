@@ -163,7 +163,9 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                              slong *row_indices, slong *col_indices,
                                              slong *matrix_size,
                                              const fq_mvpoly_t *dixon_poly,
-                                             slong nvars, slong npars);
+                                             slong nvars, slong npars,
+                                             char **var_names, char **par_names,
+                                             const char *gen_name);
 
 // Compute determinant of cancellation matrix
 void compute_fq_cancel_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **modified_M_mvpoly,

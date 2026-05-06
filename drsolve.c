@@ -67,9 +67,11 @@ static void print_usage(const char *prog_name)
     printf("    %s -s \"polynomials\" field_size\n", prog_name);
     printf("    %s --solve-rational-only \"polynomials\" 0\n", prog_name);
     printf("    %s -v 2 -s \"polynomials\" field_size\n", prog_name);
+    printf("    %s -v 3 \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    -> Writes all solutions to solution_YYYYMMDD_HHMMSS.dr\n");
     printf("    -> `-s` / `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
     printf("    -> `-v 2` matches the old debug / verbose solver output\n");
+    printf("    -> `-v 3` also dumps small Step 1/2/3 matrices (<= 10 x 10)\n");
 
     printf("  Complexity analysis:\n");
     printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
@@ -116,9 +118,11 @@ static void print_usage(const char *prog_name)
     printf("    %s -v 0 <args>\n", prog_name);
     printf("    %s -v 1 <args>\n", prog_name);
     printf("    %s -v 2 <args>\n", prog_name);
+    printf("    %s -v 3 <args>\n", prog_name);
     printf("    -> `-v 0` matches `--silent` and prints nothing\n");
     printf("    -> `-v 1` is the default output level\n");
     printf("    -> `-v 2` matches the old `--debug` output and also enables per-step timing\n");
+    printf("    -> `-v 3` additionally prints the cancellation matrix, Dixon matrix, and maximal-rank submatrix when each is <= 10 x 10\n");
 
     printf("  Diagnostics:\n");
     printf("    %s --time <args>\n", prog_name);
@@ -577,7 +581,7 @@ static int parse_verbose_level(const char *value, int *verbose_level)
     long parsed = strtol(value, &endptr, 10);
 
     if (!value || !verbose_level) return 0;
-    if (!endptr || *endptr != '\0' || parsed < 0 || parsed > 2) {
+    if (!endptr || *endptr != '\0' || parsed < 0 || parsed > 3) {
         return 0;
     }
 
@@ -2249,7 +2253,7 @@ int main(int argc, char *argv[])
         } else if ((strcmp(argv[i], "--verbose") == 0 ||
                     strcmp(argv[i], "-v")        == 0) && i + 1 < argc) {
             if (!parse_verbose_level(argv[i + 1], &verbose_level)) {
-                fprintf(stderr, "Error: invalid verbose level '%s'; expected 0, 1, or 2.\n",
+                fprintf(stderr, "Error: invalid verbose level '%s'; expected 0, 1, 2, or 3.\n",
                         argv[i + 1]);
                 return 1;
             }

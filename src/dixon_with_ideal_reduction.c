@@ -2183,7 +2183,9 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     slong matrix_size = 0;
     
     extract_fq_coefficient_matrix_from_dixon(&coeff_matrix, row_indices, col_indices,
-                                            &matrix_size, &d_poly, num_elim_vars, state.npars);
+                                            &matrix_size, &d_poly, num_elim_vars, state.npars,
+                                            state.var_names, state.par_names,
+                                            state.generator_name);
     
     /* Compute determinant with ideal reduction */
     fq_mvpoly_t result_poly;

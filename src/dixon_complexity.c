@@ -527,9 +527,22 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             report->step1_direct_factorial_log2 = log2_factorial_slong(num_polys);
             report->step1_direct_fft_log2 =
                 log2_soft_fft_multiply_from_degree_log2(log2_det_uni_degree);
-            report->step1_direct_log2 =
-                report->step1_direct_factorial_log2 +
-                report->step1_direct_fft_log2;
+            {
+                double direct_naive_log2 =
+                    report->step1_direct_factorial_log2 +
+                    report->step1_direct_fft_log2;
+                report->step1_direct_dense_linear_algebra_log2 =
+                    (num_polys > 1) ? omega * log2((double) num_polys) : 0.0;
+                report->step1_direct_dense_fft_log2 =
+                    log2_soft_fft_multiply_from_degree_log2(log2_det_uni_degree);
+                report->step1_direct_dense_log2 =
+                    report->step1_direct_dense_linear_algebra_log2 +
+                    report->step1_direct_dense_fft_log2;
+                report->step1_direct_log2 =
+                    (report->step1_direct_dense_log2 < direct_naive_log2)
+                    ? report->step1_direct_dense_log2
+                    : direct_naive_log2;
+            }
             step1_partial_degree_bound = report->step1_det_total_degree;
 
             {
@@ -599,9 +612,22 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             report->step1_direct_factorial_log2 = log2_factorial_slong(num_polys);
             report->step1_direct_fft_log2 =
                 log2_soft_fft_multiply_from_degree_log2(report->step1_kronecker_degree_log2);
-            report->step1_direct_log2 =
-                report->step1_direct_factorial_log2 +
-                report->step1_direct_fft_log2;
+            {
+                double direct_naive_log2 =
+                    report->step1_direct_factorial_log2 +
+                    report->step1_direct_fft_log2;
+                report->step1_direct_dense_linear_algebra_log2 =
+                    (num_polys > 1) ? omega * log2((double) num_polys) : 0.0;
+                report->step1_direct_dense_fft_log2 =
+                    log2_soft_fft_multiply_from_degree_log2(report->step1_kronecker_degree_log2);
+                report->step1_direct_dense_log2 =
+                    report->step1_direct_dense_linear_algebra_log2 +
+                    report->step1_direct_dense_fft_log2;
+                report->step1_direct_log2 =
+                    (report->step1_direct_dense_log2 < direct_naive_log2)
+                    ? report->step1_direct_dense_log2
+                    : direct_naive_log2;
+            }
 
             for (slong col = 0; col < num_polys; col++) {
                 long dj = degrees[col] > 0 ? degrees[col] : 0;
@@ -965,15 +991,28 @@ static void dixon_complexity_write_report_body(
         fprintf(fp, "Step 1 SLP proxy model: L ~= n^omega + n(B+1) + n^2 with n=%ld, omega=%.4f, B=%ld\n",
                 num_polys, omega, report->step1_sparse_param_degree_bound);
     }
-    fprintf(fp, "Step 1 direct Leibniz + Kronecker/FFT (log2): %.6f\n",
-            report->step1_direct_log2);
+    //fprintf(fp, "Step 1 direct upper bound (log2): %.6f\n", report->step1_direct_log2);
+    fprintf(fp, "Step 1 direct Leibniz + Kronecker/FFT (log2): %.6f\n", report->step1_direct_factorial_log2 + report->step1_direct_fft_log2);
+    
     if (verbose_level >= 2) {
-        fprintf(fp, "  Formula: log2(n!) + soft-FFT(Kronecker-degree)\n");
-        fprintf(fp, "  Values : n=%ld, log2(n!)=%.6f, log2(Kronecker degree)=%.6f, FFT-part=%.6f\n",
+        // fprintf(fp, "  Chosen as min{naive Leibniz+Kronecker/FFT, dense direct after Kronecker}\n");
+        fprintf(fp, "  Naive Leibniz + Kronecker/FFT: %.6f\n",
+                report->step1_direct_factorial_log2 + report->step1_direct_fft_log2);
+        fprintf(fp, "    Formula: log2(n!) + soft-FFT(Kronecker-degree)\n");
+        fprintf(fp, "    Values : n=%ld, log2(n!)=%.6f, log2(Kronecker degree)=%.6f, FFT-part=%.6f\n",
                 num_polys,
                 report->step1_direct_factorial_log2,
                 report->step1_kronecker_degree_log2,
                 report->step1_direct_fft_log2);
+        fprintf(fp, "  Dense direct after Kronecker: %.6f\n",
+                report->step1_direct_dense_log2);
+        fprintf(fp, "    Formula: omega*log2(n) + soft-FFT(Kronecker-degree)\n");
+        fprintf(fp, "    Values : n=%ld, omega=%.4f, omega*log2(n)=%.6f, log2(Kronecker degree)=%.6f, FFT-part=%.6f\n",
+                num_polys,
+                omega,
+                report->step1_direct_dense_linear_algebra_log2,
+                report->step1_kronecker_degree_log2,
+                report->step1_direct_dense_fft_log2);
     }
     fprintf(fp, "Step 1 Kronecker + HNF (log2): %.6f\n",
             report->step1_hnf_log2);

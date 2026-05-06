@@ -110,6 +110,167 @@ static void dixon_debug_log(const char *fmt, ...)
     va_end(args);
 }
 
+static int dixon_should_dump_small_matrix(slong nrows, slong ncols)
+{
+    return g_dixon_verbose_level >= 3 && nrows <= 10 && ncols <= 10;
+}
+
+static void dixon_print_basis_monomial(const monom_t *monom,
+                                       slong nvars,
+                                       char **var_names,
+                                       int dual)
+{
+    static const char default_var_names[] = { 'x', 'y', 'z', 'w', 'v', 'u' };
+    int printed = 0;
+
+    if (!monom || !monom->exp) {
+        printf("0");
+        return;
+    }
+
+    for (slong i = 0; i < nvars; i++) {
+        slong exp = monom->exp[i];
+        if (exp <= 0) {
+            continue;
+        }
+
+        if (printed) {
+            printf("*");
+        }
+
+        if (dual) {
+            printf("~");
+        }
+
+        if (var_names && var_names[i]) {
+            printf("%s", var_names[i]);
+        } else if (i < (slong)(sizeof(default_var_names) / sizeof(default_var_names[0]))) {
+            printf("%c", default_var_names[i]);
+        } else {
+            printf("x_%ld", i);
+        }
+
+        if (exp > 1) {
+            printf("^%ld", exp);
+        }
+
+        printed = 1;
+    }
+
+    if (!printed) {
+        printf("1");
+    }
+}
+
+static void dixon_print_small_named_dense_matrix(const char *title,
+                                                 fq_mvpoly_t **matrix,
+                                                 slong nrows,
+                                                 slong ncols,
+                                                 char **var_names,
+                                                 char **par_names,
+                                                 const char *gen_name,
+                                                 int expanded_format)
+{
+    if (!dixon_should_dump_small_matrix(nrows, ncols)) {
+        return;
+    }
+
+    dixon_info_log("  %s details:\n", title);
+    for (slong i = 0; i < nrows; i++) {
+        for (slong j = 0; j < ncols; j++) {
+            printf("      M[%ld][%ld] = ", i, j);
+            fq_mvpoly_print_with_names(&matrix[i][j], "", var_names, par_names,
+                                       gen_name, expanded_format);
+        }
+    }
+}
+
+static void dixon_print_small_sparse_matrix(const char *title,
+                                            fq_mvpoly_t ***matrix,
+                                            slong nrows,
+                                            slong ncols,
+                                            const monom_t *row_monoms,
+                                            const monom_t *col_monoms,
+                                            slong nvars,
+                                            char **var_names,
+                                            char **par_names,
+                                            const char *gen_name)
+{
+    if (!dixon_should_dump_small_matrix(nrows, ncols)) {
+        return;
+    }
+
+    dixon_info_log("  %s details:\n", title);
+    dixon_info_log("    Row basis:\n");
+    for (slong i = 0; i < nrows; i++) {
+        printf("      r%ld = ", i);
+        dixon_print_basis_monomial(&row_monoms[i], nvars, var_names, 0);
+        printf("\n");
+    }
+
+    dixon_info_log("    Column basis:\n");
+    for (slong j = 0; j < ncols; j++) {
+        printf("      c%ld = ", j);
+        dixon_print_basis_monomial(&col_monoms[j], nvars, var_names, 1);
+        printf("\n");
+    }
+
+    dixon_info_log("    Entries:\n");
+    for (slong i = 0; i < nrows; i++) {
+        for (slong j = 0; j < ncols; j++) {
+            printf("      D[%ld][%ld] = ", i, j);
+            if (matrix[i][j] != NULL) {
+                fq_mvpoly_print_with_names(matrix[i][j], "", var_names, par_names,
+                                           gen_name, 1);
+            } else {
+                printf("0\n");
+            }
+        }
+    }
+}
+
+static void dixon_print_small_dense_submatrix(const char *title,
+                                              fq_mvpoly_t **matrix,
+                                              slong nrows,
+                                              slong ncols,
+                                              const slong *row_indices,
+                                              const slong *col_indices,
+                                              const monom_t *row_monoms,
+                                              const monom_t *col_monoms,
+                                              slong nvars,
+                                              char **var_names,
+                                              char **par_names,
+                                              const char *gen_name)
+{
+    if (!dixon_should_dump_small_matrix(nrows, ncols)) {
+        return;
+    }
+
+    dixon_info_log("  %s details:\n", title);
+    dixon_info_log("    Selected row basis:\n");
+    for (slong i = 0; i < nrows; i++) {
+        printf("      r%ld <- row %ld = ", i, row_indices[i]);
+        dixon_print_basis_monomial(&row_monoms[row_indices[i]], nvars, var_names, 0);
+        printf("\n");
+    }
+
+    dixon_info_log("    Selected column basis:\n");
+    for (slong j = 0; j < ncols; j++) {
+        printf("      c%ld <- col %ld = ", j, col_indices[j]);
+        dixon_print_basis_monomial(&col_monoms[col_indices[j]], nvars, var_names, 1);
+        printf("\n");
+    }
+
+    dixon_info_log("    Entries:\n");
+    for (slong i = 0; i < nrows; i++) {
+        for (slong j = 0; j < ncols; j++) {
+            printf("      S[%ld][%ld] = ", i, j);
+            fq_mvpoly_print_with_names(&matrix[i][j], "", var_names, par_names,
+                                       gen_name, 1);
+        }
+    }
+}
+
 static void init_evaluation_parameters(fq_nmod_t *param_vals, slong npars,
                                       const fq_nmod_ctx_t ctx,
                                       slong attempt)
@@ -1796,7 +1957,9 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                               slong *row_indices, slong *col_indices,
                                               slong *matrix_size,
                                               const fq_mvpoly_t *dixon_poly,
-                                              slong nvars, slong npars) {
+                                              slong nvars, slong npars,
+                                              char **var_names, char **par_names,
+                                              const char *gen_name) {
     dixon_info_log("\nStep 2: Construct Dixon matrix\n");
     double step2_wall_start = get_wall_time();
     double phase_start = step2_wall_start;
@@ -1871,6 +2034,9 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                      d0, d1, nvars, npars);
     dixon_debug_log("  Coefficient matrix filled in %.3f seconds\n",
                     get_wall_time() - phase_start);
+    dixon_print_small_sparse_matrix("Dixon matrix", full_matrix, nx_monoms, ndual_monoms,
+                                    x_monoms, dual_monoms, nvars,
+                                    var_names, par_names, gen_name);
     dixon_maybe_print_step_time("Step 2", get_wall_time() - step2_wall_start);
 
     clock_t step3_cpu_start = clock();
@@ -1987,6 +2153,11 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         col_indices[i] = col_idx_array[i];
     }
     *matrix_size = submat_rank;
+    dixon_print_small_dense_submatrix("Maximal Rank Submatrix", *coeff_matrix,
+                                      submat_rank, submat_rank,
+                                      row_idx_array, col_idx_array,
+                                      x_monoms, dual_monoms, nvars,
+                                      var_names, par_names, gen_name);
     
     if (full_matrix) {
         for (slong i = 0; i < nx_monoms; i++) {
@@ -2209,6 +2380,9 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     fq_mvpoly_t **M_mvpoly;
     dixon_debug_log("  Build Cancellation Matrix\n");
     build_fq_cancellation_matrix_mvpoly(&M_mvpoly, polys, nvars, npars);
+    dixon_print_small_named_dense_matrix("Cancellation Matrix", M_mvpoly,
+                                         nvars + 1, nvars + 1,
+                                         NULL, NULL, NULL, 1);
     
     // Display analysis of original matrix
     //analyze_fq_matrix_mvpoly(M_mvpoly, nvars + 1, nvars + 1, "Original Cancellation");
@@ -2259,7 +2433,8 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     slong matrix_size;
     
     extract_fq_coefficient_matrix_from_dixon(&coeff_matrix, row_indices, col_indices,
-                                            &matrix_size, &d_poly, nvars, npars);
+                                            &matrix_size, &d_poly, nvars, npars,
+                                            NULL, NULL, NULL);
     
     if (matrix_size > 0) {
         dixon_info_log("\nStep 4: Compute resultant\n");
@@ -2339,6 +2514,9 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     fq_mvpoly_t **M_mvpoly;
     dixon_debug_log("  Build Cancellation Matrix\n");
     build_fq_cancellation_matrix_mvpoly(&M_mvpoly, polys, nvars, npars);
+    dixon_print_small_named_dense_matrix("Cancellation Matrix", M_mvpoly,
+                                         nvars + 1, nvars + 1,
+                                         var_names, par_names, gen_name, 1);
     
     fq_mvpoly_t **modified_M_mvpoly;
     dixon_debug_log("  Perform Matrix Row Operations\n");
@@ -2376,7 +2554,8 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     slong matrix_size;
     
     extract_fq_coefficient_matrix_from_dixon(&coeff_matrix, row_indices, col_indices,
-                                            &matrix_size, &d_poly, nvars, npars);
+                                            &matrix_size, &d_poly, nvars, npars,
+                                            var_names, par_names, gen_name);
     
     if (matrix_size > 0) {
         dixon_info_log("\nStep 4: Compute resultant\n");
