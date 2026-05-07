@@ -9,6 +9,7 @@ temp/
 doc/
 paper/
 scripts/
+__pycache__/
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
