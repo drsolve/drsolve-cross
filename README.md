@@ -24,7 +24,7 @@ DRSolve is distributed as both a **shared library** (`libdrsolve.so` / `libdrsol
   - Extension fields F_{p^k}: Further optimized for binary fields F_{2^n} with n in {8, 16, 32, 64, 128}.
 - Rational field ℚ: Rational reconstruction via multi-prime CRT. Set `field_size = 0` to enable.
 - Complexity analysis — estimates Dixon matrix size, Bezout degree bound, and operation count before computing.
-- Command-line input or file input. Automatic output to solution files.
+- Command-line input or file input. Automatic output to `out/` solution/report files.
 
 ---
 
@@ -201,7 +201,7 @@ Examples:
 
 File input uses the same elimination-file format shown above:
 ```bash
-./drsolve --comp example.dr           # default output: example_comp.dr
+./drsolve --comp example.dr           # default output: out/example_comp.dr
 ./drsolve --comp -f example.dr -o report.dr
 ```
 
@@ -331,8 +331,8 @@ res2 = DixonResultant([res1, y*z-1], [y])
 
 | Mode | Command-line input | File input `example.dr` |
 |---|---|---|
-| Dixon / Solver | `solution_YYYYMMDD_HHMMSS.dr` | `example_solution.dr` |
-| Complexity | `comp_YYYYMMDD_HHMMSS.dr` | `example_comp.dr` |
+| Dixon / Solver | `out/solution_YYYYMMDD_HHMMSS.dr` | `out/example_solution.dr` |
+| Complexity | `out/comp_YYYYMMDD_HHMMSS.dr` | `out/example_comp.dr` |
 
 Each output file contains field information, input polynomials, computation time,
 and the resultant, solutions, or complexity report.
@@ -348,7 +348,7 @@ and the resultant, solutions, or complexity report.
 ---
 
 ## Notes
-- All computation modes generate a solution/report file by default
+- All computation modes generate a solution/report file by default under `out/`
 - Use `-o output.dr` to override the default output filename
 - Extension fields are slower than prime fields due to polynomial arithmetic
 - The optional PML library only accelerates well-determined systems over prime fields

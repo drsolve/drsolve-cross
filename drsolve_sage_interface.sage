@@ -173,42 +173,76 @@ def _find_output_file_tagged(finput, tag):
     return finput + tag
 
 
+def _find_output_file_tagged_default_out(finput, tag):
+    """
+    Match the current default drsolve behavior:
+    auto-generated outputs are written under ./out/ using the BASENAME only.
+
+      /tmp/drsolve_in.dat  + "_solution" -> out/drsolve_in_solution.dat
+    """
+    return os.path.join("out", os.path.basename(_find_output_file_tagged(finput, tag)))
+
+
 def _locate_output_file(finput, tag, debug):
     """
     Try several candidate paths for the output file drsolve wrote.
 
     Priority:
-    1. The tagged path (file-input mode):
+    1. The tagged path in ./out/ (current file-input default mode):
+         out/basename(generate_tagged_filename(finput, tag))
+    2. The legacy tagged path next to the input file:
          generate_tagged_filename(finput, tag)
-    2. The most recently modified  <tag[1:]>_*.dat  in the CWD
-       (CLI mode uses generate_timestamped_filename which writes to CWD)
-    3. Any <tag[1:]>*.dat in the same directory as finput
+    3. The most recently modified <tag[1:]>_*.dr/.dat in ./out/
+       (CLI mode uses generate_timestamped_filename under ./out/)
+    4. The legacy most recently modified <tag[1:]>_*.dr/.dat in the CWD
+    5. Any <tag[1:]>*.dr/.dat in the same directory as finput
 
     Returns the path string if found, else None.
     """
-    # 1. tagged path next to the input file
+    # 1. tagged path in ./out/
+    tagged_out = _find_output_file_tagged_default_out(finput, tag)
+    if debug:
+        print("[debug] looking for out-tagged output file: %s" % tagged_out)
+    if os.path.isfile(tagged_out):
+        if debug:
+            print("[debug] found out-tagged output file: %s" % tagged_out)
+        return tagged_out
+
+    # 2. legacy tagged path next to the input file
     tagged = _find_output_file_tagged(finput, tag)
     if debug:
-        print("[debug] looking for tagged output file: %s" % tagged)
+        print("[debug] looking for legacy tagged output file: %s" % tagged)
     if os.path.isfile(tagged):
         if debug:
-            print("[debug] found tagged output file: %s" % tagged)
+            print("[debug] found legacy tagged output file: %s" % tagged)
         return tagged
 
-    # 2. timestamped file in CWD  (solution_*.dr/.dat / comp_*.dr/.dat)
+    # 3. timestamped file in ./out/
     stem = tag.lstrip("_")
+    candidates = []
+    for ext in ("dr", "dat"):
+        candidates.extend(glob.glob(os.path.join("out", "%s_*.%s" % (stem, ext))))
+    candidates = sorted(candidates, key=os.path.getmtime)
+    if debug:
+        print("[debug] out glob 'out/%s_*.{dr,dat}': %s" % (stem, candidates))
+    if candidates:
+        if debug:
+            print("[debug] using most recent out file: %s" % candidates[-1])
+        return candidates[-1]
+
+    # 4. legacy timestamped file in CWD
     candidates = []
     for ext in ("dr", "dat"):
         candidates.extend(glob.glob("%s_*.%s" % (stem, ext)))
     candidates = sorted(candidates, key=os.path.getmtime)
     if debug:
-        print("[debug] CWD glob '%s_*.{{dr,dat}}': %s" % (stem, candidates))
+        print("[debug] legacy CWD glob '%s_*.{dr,dat}': %s" % (stem, candidates))
     if candidates:
         if debug:
-            print("[debug] using most recent CWD file: %s" % candidates[-1])
+            print("[debug] using most recent legacy CWD file: %s" % candidates[-1])
         return candidates[-1]
 
-    # 3. same dir as finput
+    # 5. same dir as finput
     d = os.path.dirname(finput) or "."
     candidates = []
     for ext in ("dr", "dat"):
@@ -693,17 +727,10 @@ def DixonIdeal(
         print("[DixonIdeal] drsolve exited with code %d" % proc.returncode)
         return None
 
-    candidates = []
-    for ext in ("dr", "dat"):
-        candidates.extend(glob.glob("solution_*.%s" % ext))
-    candidates = sorted(candidates, key=os.path.getmtime)
-    if debug:
-        print("[debug] solution_*.{dr,dat} in CWD: %s" % candidates)
-    if not candidates:
+    foutput = _locate_output_file("ideal_cli_input_placeholder.dat", "_solution", debug)
+    if foutput is None:
         print("[DixonIdeal] output file not found")
         return None
-
-    foutput = candidates[-1]
     result  = _parse_resultant_file(foutput, debug)
 
     if not debug:
