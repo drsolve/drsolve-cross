@@ -1098,6 +1098,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             if (!isfinite(report->grobner_log2) || report->grobner_log2 < 0.0) {
                 report->grobner_log2 = 0.0;
             }
+
         }
     }
 
@@ -1178,8 +1179,20 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                 : step4_sparse_log2;
         }
 
+        if (num_parameter_vars == 1) {
+            double log2_var_count = (num_all_vars > 0)
+                ? log2((double) num_all_vars)
+                : 0.0;
+            report->fglm_log2 = log2_var_count + omega * log2_bezout;
+            if (!isfinite(report->fglm_log2) || report->fglm_log2 < 0.0) {
+                report->fglm_log2 = 0.0;
+            }
+        } else {
+            report->fglm_log2 = -INFINITY;
+        }
+
         report->step4_log2 = report->step4_hnf_log2;
-        report->step4_best_method = "Kronecker + HNF";
+        report->step4_best_method = (param_count == 1) ? "HNF" : "Kronecker + HNF";
         if (report->step4_ordinary_interp_log2 < report->step4_log2) {
             report->step4_log2 = report->step4_ordinary_interp_log2;
             report->step4_best_method = "ordinary interpolation";
@@ -1326,7 +1339,8 @@ static double select_step1_best_method(const dixon_complexity_report_t *report,
 static double select_step4_best_method(const dixon_complexity_report_t *report,
                                        const char **method_out) {
     double best = report->step4_hnf_log2;
-    const char *method = "Kronecker + HNF";
+    const char *method =
+        (report->num_parameter_vars == 1) ? "HNF" : "Kronecker + HNF";
 
     if (report->step4_ordinary_interp_log2 < best) {
         best = report->step4_ordinary_interp_log2;
@@ -1680,7 +1694,6 @@ static void dixon_complexity_write_report_body(
             report->step1_best_log2);
 
     fprintf(fp, "\n--- Step 4 ---\n");
-    fprintf(fp, "Step 4 ambient variable count n: %ld\n", report->num_all_vars);
     fprintf(fp, "Dixon matrix size: ");
     fmpz_fprint(fp, matrix_size);
     fprintf(fp, "\n");
@@ -1706,7 +1719,8 @@ static void dixon_complexity_write_report_body(
         fprintf(fp, "Step 4 resultant degree estimate (Bezout): ");
         fmpz_fprint(fp, bezout_bound);
         fprintf(fp, "\n");
-        fprintf(fp, "Step 4 Kronecker + HNF (log2, omega=%.4g): %.6f\n",
+        fprintf(fp, "Step 4 %s (log2, omega=%.4g): %.6f\n",
+                (num_parameter_vars == 1) ? "HNF" : "Kronecker + HNF",
                 omega, report->step4_hnf_log2);
         fprintf(fp, "Step 4 ordinary dense interpolation (log2): %.6f\n",
                 report->step4_ordinary_interp_log2);
@@ -1758,7 +1772,8 @@ static void dixon_complexity_write_report_body(
             if (printed_params == 0) {
                 fprintf(fp, "  (no parameter variables)\n");
             }
-            fprintf(fp, "Step 4 Kronecker/HNF entry-bound details:\n");
+            fprintf(fp, "Step 4 %s entry-bound details:\n",
+                    (num_parameter_vars == 1) ? "HNF" : "Kronecker/HNF");
             fprintf(fp, "  Order   : [parameter vars]\n");
             fprintf(fp, "  Entry bounds e_i: each <= %ld\n", step4_entry_degree_bound);
             fprintf(fp, "  Value   : log2(s_4) = %.6f\n",
@@ -1796,6 +1811,10 @@ static void dixon_complexity_write_report_body(
             report->grobner_dreg);
     fprintf(fp, "Groebner basis estimate (log2): %.6f\n",
             report->grobner_log2);
+    if (report->num_parameter_vars == 1) {
+        fprintf(fp, "FGLM estimate (log2): %.6f\n",
+                report->fglm_log2);
+    }
 }
 
 static void save_comp_result_to_file(

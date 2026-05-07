@@ -94,6 +94,7 @@ typedef struct {
     double macaulay_log2;
     slong grobner_dreg;
     double grobner_log2;
+    double fglm_log2;
     double step4_hnf_log2;
     double step4_hnf_linear_algebra_log2;
     double step4_hnf_degree_density_log2;
