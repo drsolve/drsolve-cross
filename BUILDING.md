@@ -1,18 +1,59 @@
-# Building DRsolve with CMake
+## Library & Platform Support
 
-CMake ≥ 3.16 is required.  
-The build system produces a shared library (`libdrsolve.so` / `.dylib` / `-1.dll`),
-a static library (`libdrsolve.a` / `-1.a`), and the `drsolve` CLI executable.
+DRSolve is distributed as both a **shared library** (`libdrsolve.so` / `libdrsolve.dylib` / `libdrsolve-1.dll`) and a **static library** (`libdrsolve.a` / `libdrsolve-1.a`), alongside the `drsolve` command-line executable.
 
----
+| Platform | Shared lib | Static lib | CLI |
+|---|---|---|---|
+| Linux (x86-64, ARM64) | `libdrsolve.so` | `libdrsolve.a` | `drsolve` |
+| macOS (x86-64, Apple Silicon) | `libdrsolve.dylib` | `libdrsolve.a` | `drsolve` |
+| Windows (x86-64) | `libdrsolve-1.dll` | `libdrsolve-1.a` | `drsolve.exe` + `drsolve_win_gui.exe` |
 
-## Linux / macOS  (quick start)
+
+## Build (quick start)
+
+DRSolve uses **CMake** (≥ 3.16) as its primary build system.
+
+### Linux / macOS
 
 ```bash
+git clone https://github.com/drsolve/drsolve-cross.git && cd drsolve-cross
 cmake -B build
 cmake --build build -j$(nproc)
-ctest --test-dir build               # run tests
-sudo cmake --install build           # installs to /usr/local
+ctest --test-dir build          # optional: run tests
+sudo cmake --install build      # optional: install to /usr/local
+```
+
+FLINT must be installed (e.g. via your package manager) before configuring.  
+If FLINT is in a non-standard location, pass `-DFLINT_ROOT=/path/to/flint`.
+
+```bash
+# Example: FLINT installed under $HOME/.local
+cmake -B build -DFLINT_ROOT=$HOME/.local
+cmake --build build -j$(nproc)
+```
+
+### Windows
+
+**Option A — GUI installer (recommended)**  
+Download from [drsolve/drsolve-win](https://github.com/drsolve/drsolve-win).
+
+**Option B — MSYS2/UCRT64**
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-cmake \
+          mingw-w64-ucrt-x86_64-gcc \
+          mingw-w64-ucrt-x86_64-flint
+cmake -B build -G "MinGW Makefiles"
+cmake --build build -j$(nproc)
+```
+
+**Option C — cross-compile from Linux/macOS (MinGW-w64)**  
+Bundled `mingw/` and `pml_det/` dependencies are used automatically:
+
+```bash
+cmake -B build-win \
+      -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake"
+cmake --build build-win -j$(nproc)
 ```
 
 ---

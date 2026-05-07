@@ -1,92 +1,48 @@
-# DRsolve: Dixon Resultant & Polynomial System Solver
+# DRSolve: Dixon Resultant & Polynomial System Solver
+A C implementation for computing Dixon resultants and solving polynomial systems over finite fields and the rationals ℚ, based on the FLINT and PML libraries.
 
-A cross-platform C library and command-line tool for computing Dixon resultants and solving polynomial systems over finite fields and the rationals ℚ, based on the FLINT and PML libraries.
-
-## Library & Platform Support
-
-DRSolve is distributed as both a **shared library** (`libdrsolve.so` / `libdrsolve.dylib` / `libdrsolve-1.dll`) and a **static library** (`libdrsolve.a` / `libdrsolve-1.a`), alongside the `drsolve` command-line executable.
-
-| Platform | Shared lib | Static lib | CLI |
-|---|---|---|---|
-| Linux (x86-64, ARM64) | `libdrsolve.so` | `libdrsolve.a` | `drsolve` |
-| macOS (x86-64, Apple Silicon) | `libdrsolve.dylib` | `libdrsolve.a` | `drsolve` |
-| Windows (x86-64) | `libdrsolve-1.dll` | `libdrsolve-1.a` | `drsolve.exe` + `drsolve_win_gui.exe` |
-
----
+Website: <https://drsolve.github.io>
 
 ## Features
-
 - Dixon resultant computation for variable elimination
 - Polynomial system solver for n×n systems
 - Dixon with triangular ideal reduction
 - Finite fields:
   - Prime fields F_p (any size): Implemented with FLINT modular arithmetic, optionally accelerated by PML.
   - Extension fields F_{p^k}: Further optimized for binary fields F_{2^n} with n in {8, 16, 32, 64, 128}.
-- Rational field ℚ: Rational reconstruction via multi-prime CRT. Set `field_size = 0` to enable.
-- Complexity analysis — estimates Dixon matrix size, Bezout degree bound, and operation count before computing.
-- Command-line input or file input. Automatic output to `out/` solution/report files.
+- Rational field ℚ: Rational reconstruction via multi-prime CRT. Set field_size = 0 to enable.
+- Complexity analysis — estimates Dixon matrix size, Bezout degree bound, and operation count before computing
+- Command line input or file input. Automatic output to solution files
 
 ---
 
 ## Dependencies
-
 - **FLINT** (recommended version: 3.5.0)  
   <https://github.com/flintlib/flint>
 
-Optional:
-- **PML** (used automatically if available)  
+```bash
+git clone https://github.com/flintlib/flint.git && cd flint
+./bootstrap.sh
+./configure 
+make
+make install
+```
+  
+- **PML** (built in)  
   <https://github.com/vneiger/pml>
 
 ---
 
 ## Build
-
-DRSolve uses **CMake** (≥ 3.16) as its primary build system.
-
-### Linux / macOS
-
 ```bash
-git clone https://github.com/drsolve/drsolve-cross.git && cd drsolve-cross
-cmake -B build
-cmake --build build -j$(nproc)
-ctest --test-dir build          # optional: run tests
-sudo cmake --install build      # optional: install to /usr/local
+git clone https://github.com/drsolve/drsolve.git && cd drsolve
+./configure
+make
+make check                         # optional
+make install                       # optional
 ```
-
-FLINT must be installed (e.g. via your package manager) before configuring.  
-If FLINT is in a non-standard location, pass `-DFLINT_ROOT=/path/to/flint`.
-
-```bash
-# Example: FLINT installed under $HOME/.local
-cmake -B build -DFLINT_ROOT=$HOME/.local
-cmake --build build -j$(nproc)
-```
-
-### Windows
-
-**Option A — GUI installer (recommended)**  
-Download from [drsolve/drsolve-win](https://github.com/drsolve/drsolve-win).
-
-**Option B — MSYS2/UCRT64**
-
-```bash
-pacman -S mingw-w64-ucrt-x86_64-cmake \
-          mingw-w64-ucrt-x86_64-gcc \
-          mingw-w64-ucrt-x86_64-flint
-cmake -B build -G "MinGW Makefiles"
-cmake --build build -j$(nproc)
-```
-
-**Option C — cross-compile from Linux/macOS (MinGW-w64)**  
-Bundled `mingw/` and `pml_det/` dependencies are used automatically:
-
-```bash
-cmake -B build-win \
-      -DCMAKE_TOOLCHAIN_FILE="$(pwd)/cmake/toolchain-mingw64.cmake"
-cmake --build build-win -j$(nproc)
-```
-
-For full build options and advanced configurations, see [BUILDING.md](BUILDING.md).
+For more options, run `./configure --help` or `make help`.
+We also provide a Windows GUI at [drsolve-win](https://github.com/drsolve/drsolve-win) or [drsolve-cross](https://github.com/drsolve/drsolve-cross).
 
 ---
 
