@@ -23,6 +23,10 @@ static void step1_reconstruct_bounds(long **var_bounds_out,
                                      slong num_elim_vars,
                                      slong num_parameter_vars,
                                      long step1_det_total_degree);
+static double select_step1_best_method(const dixon_complexity_report_t *report,
+                                       const char **method_out);
+static double select_step4_best_method(const dixon_complexity_report_t *report,
+                                       const char **method_out);
 
 // Comparison function for descending order sorting
 int compare_desc(const void *a, const void *b) {
@@ -302,6 +306,41 @@ static double log2_dense_monomial_count_upper(long degree, slong num_vars) {
         return 0.0;
     }
     return log2_binomial_upper(num_vars + degree, num_vars);
+}
+
+static double log2_kronecker_degree_uniform_long(long bound, slong num_vars) {
+    double log2_weight = 0.0;
+    double log2_degree = -INFINITY;
+
+    if (bound <= 0 || num_vars <= 0) {
+        return 0.0;
+    }
+
+    for (slong i = 0; i < num_vars; i++) {
+        log2_degree = log2_add_exp(log2_degree,
+                                   log2((double) bound) + log2_weight);
+        log2_weight += log2((double) bound + 1.0);
+    }
+
+    return (!isfinite(log2_degree) || log2_degree < 0.0) ? 0.0 : log2_degree;
+}
+
+static double log2_binomial_fmpz_plus_small_upper(const fmpz_t base, slong k) {
+    double result = 0.0;
+    fmpz_t tmp;
+
+    if (k <= 0) {
+        return 0.0;
+    }
+
+    fmpz_init(tmp);
+    for (slong i = 1; i <= k; i++) {
+        fmpz_add_ui(tmp, base, (ulong) i);
+        result += log2_fmpz_upper_bound(tmp) - log2((double) i);
+    }
+    fmpz_clear(tmp);
+
+    return (result < 0.0) ? 0.0 : result;
 }
 
 static slong saturated_add_slong(slong a, slong b) {
@@ -623,6 +662,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     memset(report, 0, sizeof(*report));
 
     fmpz_t matrix_size;
+    fmpz_t bezout_step4;
     long total_degree_sum = 0;
     int degree_sum_saturated = 0;
     long step1_partial_degree_bound = 0;
@@ -631,10 +671,18 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     double step1_dense_tensor_sum_log2 = -INFINITY;
 
     fmpz_init(matrix_size);
+    fmpz_init(bezout_step4);
     dixon_size(matrix_size, degrees, (int) num_polys, 0);
     dixon_matrix_size_log2 = log2_fmpz_upper_bound(matrix_size);
-    report->det_size = num_polys > 0 ? num_polys : 0;
-    report->det_size_log2 = (num_polys > 1) ? log2((double) num_polys) : 0.0;
+    if (fmpz_fits_si(matrix_size)) {
+        report->det_size = fmpz_get_si(matrix_size);
+    } else {
+        report->det_size = WORD_MAX;
+    }
+    report->det_size_log2 =
+        (isfinite(dixon_matrix_size_log2) && dixon_matrix_size_log2 > 0.0)
+        ? dixon_matrix_size_log2
+        : 0.0;
     report->det_factorial_log2 = log2_factorial_slong(num_polys);
     report->num_all_vars = num_all_vars;
     report->num_elim_vars = num_elim_vars;
@@ -1053,7 +1101,104 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         }
     }
 
-    report->step4_log2 = dixon_complexity(degrees, (int) num_polys, (int) num_all_vars, omega);
+    bezout_bound_fmpz(bezout_step4, degrees, num_polys);
+    {
+        double log2_M_la =
+            (dixon_matrix_size_log2 > 0.0)
+            ? omega * dixon_matrix_size_log2
+            : 0.0;
+        double log2_bezout = log2_fmpz_upper_bound(bezout_step4);
+        long entry_degree_bound = total_degree_sum > 0 ? total_degree_sum : 0;
+        slong param_count = num_parameter_vars > 0 ? num_parameter_vars : 0;
+
+        report->step4_hnf_linear_algebra_log2 = log2_M_la;
+        report->step4_ordinary_probe_cost_log2 = log2_M_la;
+        report->step4_sparse_slp_length_log2 = log2_M_la;
+
+        if (param_count <= 0) {
+            report->step4_hnf_degree_density_log2 = 0.0;
+            report->step4_hnf_log2 = log2_M_la;
+            report->step4_ordinary_grid_points_log2 = 0.0;
+            report->step4_ordinary_tensor_sum_log2 = 0.0;
+            report->step4_ordinary_probe_phase_log2 = log2_M_la;
+            report->step4_ordinary_tensor_phase_log2 = 0.0;
+            report->step4_ordinary_interp_log2 = log2_M_la;
+            report->step4_sparse_term_bound_log2 = 0.0;
+            report->step4_sparse_log2 = log2_M_la;
+        } else {
+            double step4_tensor_sum_log2 =
+                (log2_bezout > 0.0)
+                ? (log2((double) param_count) +
+                   log2_soft_fft_multiply_from_degree_log2(log2_bezout))
+                : 0.0;
+            double step4_sparse_log2;
+            double log2_q = log2_fmpz_upper_bound(field_order);
+            double log2_logq = (isfinite(log2_q) && log2_q > 0.0)
+                ? log2(log2_q)
+                : 0.0;
+            fmpz_t tmp_plus_one;
+
+            if (!isfinite(step4_tensor_sum_log2) || step4_tensor_sum_log2 < 0.0) {
+                step4_tensor_sum_log2 = 0.0;
+            }
+
+            report->step4_hnf_degree_density_log2 =
+                log2_kronecker_degree_uniform_long(entry_degree_bound, param_count);
+            report->step4_hnf_log2 =
+                report->step4_hnf_linear_algebra_log2 +
+                report->step4_hnf_degree_density_log2;
+
+            fmpz_init(tmp_plus_one);
+            fmpz_add_ui(tmp_plus_one, bezout_step4, 1UL);
+            report->step4_ordinary_grid_points_log2 =
+                (fmpz_sgn(tmp_plus_one) > 0)
+                ? (((double) param_count) * log2_fmpz_upper_bound(tmp_plus_one))
+                : 0.0;
+            fmpz_clear(tmp_plus_one);
+            report->step4_ordinary_tensor_sum_log2 = step4_tensor_sum_log2;
+            report->step4_ordinary_probe_phase_log2 =
+                report->step4_ordinary_grid_points_log2 +
+                report->step4_ordinary_probe_cost_log2;
+            report->step4_ordinary_tensor_phase_log2 =
+                report->step4_ordinary_grid_points_log2 +
+                report->step4_ordinary_tensor_sum_log2;
+            report->step4_ordinary_interp_log2 = log2_add_exp(
+                report->step4_ordinary_probe_phase_log2,
+                report->step4_ordinary_tensor_phase_log2);
+
+            report->step4_sparse_term_bound_log2 =
+                log2_binomial_fmpz_plus_small_upper(bezout_step4, param_count);
+            step4_sparse_log2 = log2_add_exp(
+                report->step4_sparse_term_bound_log2 +
+                report->step4_sparse_slp_length_log2 + log2_logq,
+                report->step4_sparse_term_bound_log2 + 2.0 * log2_logq);
+            report->step4_sparse_log2 =
+                (!isfinite(step4_sparse_log2) || step4_sparse_log2 < 0.0)
+                ? 0.0
+                : step4_sparse_log2;
+        }
+
+        report->step4_log2 = report->step4_hnf_log2;
+        report->step4_best_method = "Kronecker + HNF";
+        if (report->step4_ordinary_interp_log2 < report->step4_log2) {
+            report->step4_log2 = report->step4_ordinary_interp_log2;
+            report->step4_best_method = "ordinary interpolation";
+        }
+        if (report->step4_sparse_log2 < report->step4_log2) {
+            report->step4_log2 = report->step4_sparse_log2;
+            report->step4_best_method = "sparse interpolation";
+        }
+    }
+
+    report->step1_best_log2 = select_step1_best_method(report,
+                                                       &report->step1_best_method);
+    report->step4_log2 = select_step4_best_method(report,
+                                                  &report->step4_best_method);
+    report->overall_log2 =
+        (report->step1_best_log2 > report->step4_log2)
+        ? report->step1_best_log2
+        : report->step4_log2;
+
     report->total_direct_log2 = log2_add_exp(report->step1_direct_log2, report->step4_log2);
     report->total_direct_mpoly_log2 =
         log2_add_exp(report->step1_direct_mpoly_log2, report->step4_log2);
@@ -1061,6 +1206,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         log2_add_exp(report->step1_ordinary_interp_log2, report->step4_log2);
     report->total_hnf_log2 = log2_add_exp(report->step1_hnf_log2, report->step4_log2);
     report->total_sparse_log2 = log2_add_exp(report->step1_sparse_log2, report->step4_log2);
+    fmpz_clear(bezout_step4);
     fmpz_clear(matrix_size);
 }
 
@@ -1146,18 +1292,53 @@ static void dixon_complexity_fprint_parameter_vars(FILE *fp,
 }
 
 static double dixon_complexity_best_total_log2(const dixon_complexity_report_t *report) {
-    double best = report->total_direct_log2;
-    if (report->total_direct_mpoly_log2 < best) {
-        best = report->total_direct_mpoly_log2;
+    return report->overall_log2;
+}
+
+static double select_step1_best_method(const dixon_complexity_report_t *report,
+                                       const char **method_out) {
+    double best = report->step1_direct_log2;
+    const char *method = "direct Kronecker";
+
+    if (report->step1_direct_mpoly_log2 < best) {
+        best = report->step1_direct_mpoly_log2;
+        method = "direct multivariate";
     }
-    if (report->total_ordinary_log2 < best) {
-        best = report->total_ordinary_log2;
+    if (report->step1_ordinary_interp_log2 < best) {
+        best = report->step1_ordinary_interp_log2;
+        method = "ordinary interpolation";
     }
-    if (report->total_hnf_log2 < best) {
-        best = report->total_hnf_log2;
+    if (report->step1_hnf_log2 < best) {
+        best = report->step1_hnf_log2;
+        method = "Kronecker + HNF";
     }
-    if (report->total_sparse_log2 < best) {
-        best = report->total_sparse_log2;
+    if (report->step1_sparse_log2 < best) {
+        best = report->step1_sparse_log2;
+        method = "sparse interpolation";
+    }
+
+    if (method_out != NULL) {
+        *method_out = method;
+    }
+    return best;
+}
+
+static double select_step4_best_method(const dixon_complexity_report_t *report,
+                                       const char **method_out) {
+    double best = report->step4_hnf_log2;
+    const char *method = "Kronecker + HNF";
+
+    if (report->step4_ordinary_interp_log2 < best) {
+        best = report->step4_ordinary_interp_log2;
+        method = "ordinary interpolation";
+    }
+    if (report->step4_sparse_log2 < best) {
+        best = report->step4_sparse_log2;
+        method = "sparse interpolation";
+    }
+
+    if (method_out != NULL) {
+        *method_out = method;
     }
     return best;
 }
@@ -1458,7 +1639,7 @@ static void dixon_complexity_write_report_body(
             : INFINITY;
         if (theorem_char_ok) {
             fprintf(fp, "Step 1 theorem success lower bound p >= 0.75\n");
-            fprintf(fp, "Step 1 theorem retry factor upper estimate 1/p <= 1.33333333333\n");
+            // fprintf(fp, "Step 1 theorem retry factor upper estimate 1/p <= 1.33333333333\n");
             fprintf(fp, "Step 1 theorem retry-adjusted expected sparse complexity (log2): %.6f\n",
                     theorem_expected);
         } else {
@@ -1494,30 +1675,115 @@ static void dixon_complexity_write_report_body(
                 "Step 1 note: standard Dixon resultant shape expects #polys = #elim + 1; current input is %ld vs %ld + 1.\n",
                 num_polys, num_elim);
     }
+    fprintf(fp, "Best Step 1 estimate: %s (log2: %.6f)\n",
+            report->step1_best_method ? report->step1_best_method : "unknown",
+            report->step1_best_log2);
 
     fprintf(fp, "\n--- Step 4 ---\n");
     fprintf(fp, "Step 4 ambient variable count n: %ld\n", report->num_all_vars);
     fprintf(fp, "Dixon matrix size: ");
     fmpz_fprint(fp, matrix_size);
     fprintf(fp, "\n");
-    fprintf(fp, "Step 4 resultant degree estimate (Bezout): ");
-    fmpz_fprint(fp, bezout_bound);
-    fprintf(fp, "\n");
-    fprintf(fp, "Step 4 Dixon complexity (log2, omega=%.4g): %.6f\n",
-            omega, report->step4_log2);
+    fprintf(fp, "Step 4 parameter variable count r: %ld\n", num_parameter_vars);
+    {
+        long step4_entry_degree_bound = 0;
+        int step4_entry_bound_saturated = 0;
+        slong printed_params = 0;
+
+        for (slong i = 0; i < num_polys; i++) {
+            long di = degrees[i] > 0 ? degrees[i] : 0;
+            if (!step4_entry_bound_saturated) {
+                if (di > LONG_MAX - step4_entry_degree_bound) {
+                    step4_entry_degree_bound = LONG_MAX;
+                    step4_entry_bound_saturated = 1;
+                } else {
+                    step4_entry_degree_bound += di;
+                }
+            }
+        }
+        fprintf(fp, "Step 4 matrix-entry parameter degree upper bound per variable: %ld\n",
+                step4_entry_degree_bound);
+        fprintf(fp, "Step 4 resultant degree estimate (Bezout): ");
+        fmpz_fprint(fp, bezout_bound);
+        fprintf(fp, "\n");
+        fprintf(fp, "Step 4 Kronecker + HNF (log2, omega=%.4g): %.6f\n",
+                omega, report->step4_hnf_log2);
+        fprintf(fp, "Step 4 ordinary dense interpolation (log2): %.6f\n",
+                report->step4_ordinary_interp_log2);
+        fprintf(fp, "Step 4 sparse interpolation (log2): %.6f\n",
+                report->step4_sparse_log2);
+        fprintf(fp, "Best Step 4 estimate: %s (log2: %.6f)\n",
+                report->step4_best_method ? report->step4_best_method : "unknown",
+                report->step4_log2);
+
+        if (verbose_level >= 2) {
+            fprintf(fp, "  HNF formula: omega*log2(M) + log2(s_4)\n");
+            fprintf(fp, "  HNF values : M=");
+            fmpz_fprint(fp, matrix_size);
+            fprintf(fp, ", omega*log2(M)=%.6f, log2(s_4)=%.6f\n",
+                    report->step4_hnf_linear_algebra_log2,
+                    report->step4_hnf_degree_density_log2);
+            fprintf(fp, "               s_4 is estimated from Kronecker substitution on entry-wise parameter bounds e_i <= %ld\n",
+                    step4_entry_degree_bound);
+
+            fprintf(fp, "  Ordinary formula: soft-O(N_4*M^omega + N_4*sum_i soft-FFT(b_i))\n");
+            fprintf(fp, "  Ordinary values : log2(N_4)=%.6f, log2(M^omega)=%.6f, log2(sum_i soft-FFT(b_i))=%.6f\n",
+                    report->step4_ordinary_grid_points_log2,
+                    report->step4_ordinary_probe_cost_log2,
+                    report->step4_ordinary_tensor_sum_log2);
+            fprintf(fp, "                    probe phase=%.6f, tensor-interp phase=%.6f\n",
+                    report->step4_ordinary_probe_phase_log2,
+                    report->step4_ordinary_tensor_phase_log2);
+
+            fprintf(fp, "  Sparse formula: soft-O(L_4*T_4*log q + T_4*log^2 q)\n");
+            fprintf(fp, "  Sparse values : log2(L_4)=%.6f, log2(T_4)=%.6f, q=",
+                    report->step4_sparse_slp_length_log2,
+                    report->step4_sparse_term_bound_log2);
+            fmpz_fprint(fp, field_order);
+            fprintf(fp, ", D_4=");
+            fmpz_fprint(fp, bezout_bound);
+            fprintf(fp, "\n");
+        }
+
+        if (verbose_level >= 3) {
+            fprintf(fp, "Step 4 parameter variable-wise degree bounds (resultant side):\n");
+            for (slong i = 0; i < num_all_vars; i++) {
+                if (!complexity_is_elimination_var(all_vars[i], elim_var_list, num_elim)) {
+                    fprintf(fp, "  %s <= ", all_vars[i]);
+                    fmpz_fprint(fp, bezout_bound);
+                    fprintf(fp, "\n");
+                    printed_params++;
+                }
+            }
+            if (printed_params == 0) {
+                fprintf(fp, "  (no parameter variables)\n");
+            }
+            fprintf(fp, "Step 4 Kronecker/HNF entry-bound details:\n");
+            fprintf(fp, "  Order   : [parameter vars]\n");
+            fprintf(fp, "  Entry bounds e_i: each <= %ld\n", step4_entry_degree_bound);
+            fprintf(fp, "  Value   : log2(s_4) = %.6f\n",
+                    report->step4_hnf_degree_density_log2);
+            fprintf(fp, "Step 4 ordinary interpolation determinant-bound details:\n");
+            fprintf(fp, "  Bounds b_i: each parameter variable <= ");
+            fmpz_fprint(fp, bezout_bound);
+            fprintf(fp, "\n");
+            fprintf(fp, "  Value   : log2(N_4) = %.6f\n",
+                    report->step4_ordinary_grid_points_log2);
+            fprintf(fp, "Step 4 sparse term-count details:\n");
+            fprintf(fp, "  Model   : T_4 <= binom(r + D_4, r)\n");
+            fprintf(fp, "  Value   : log2(T_4) = %.6f\n",
+                    report->step4_sparse_term_bound_log2);
+        }
+    }
 
     fprintf(fp, "\n--- Overall ---\n");
-    fprintf(fp, "Total with direct Kronecker step 1 (log2): %.6f\n",
-            report->total_direct_log2);
-    fprintf(fp, "Total with direct multivariate step 1 (log2): %.6f\n",
-            report->total_direct_mpoly_log2);
-    fprintf(fp, "Total with ordinary interpolation step 1 (log2): %.6f\n",
-            report->total_ordinary_log2);
-    fprintf(fp, "Total with HNF step 1 (log2): %.6f\n",
-            report->total_hnf_log2);
-    fprintf(fp, "Total with sparse step 1 (log2): %.6f\n",
-            report->total_sparse_log2);
-    fprintf(fp, "Best overall estimate used for encoding (log2): %.6f\n",
+    fprintf(fp, "Step 1 best : %s (log2: %.6f)\n",
+            report->step1_best_method ? report->step1_best_method : "unknown",
+            report->step1_best_log2);
+    fprintf(fp, "Step 4 best : %s (log2: %.6f)\n",
+            report->step4_best_method ? report->step4_best_method : "unknown",
+            report->step4_log2);
+    fprintf(fp, "Overall complexity = max(step1, step4) (log2): %.6f\n",
             dixon_complexity_best_total_log2(report));
 
     fprintf(fp, "\n--- Comparison: Macaulay / Groebner ---\n");
