@@ -760,7 +760,7 @@ void fq_tensor_interpolation_recursive_optimized(fq_mvpoly_t *result,
         if (current_dim == 0 && total_dims > 1) {
             top_level_progress += grid_sizes[0];
             if (top_level_progress % 100 == 0 || top_level_progress == top_level_total) {
-                printf("\rInterpolation progress: %ld/%ld", 
+                printf("\r  Interpolation progress: %ld/%ld", 
                        top_level_progress, top_level_total);
                 fflush(stdout);
             }
@@ -1651,7 +1651,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
                 if (omp_get_thread_num() == 0 && (point % 100 == 0)) {
                     // Use atomic read to get a better estimate
                     slong completed = point;  // This is just an approximation
-                    printf("\rProgress: %ld/%ld", completed, total_points);
+                    printf("\r  Progress: %ld/%ld", completed, total_points);
                     fflush(stdout);
                 }
             }
@@ -1681,7 +1681,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
         double cpu_time_matrix_eval = cpu_eval_time;
         double cpu_time_det_computation = cpu_det_time;
         /*
-        printf("\rProgress: 100.0%%\n");
+        printf("\r  Progress: 100.0%%\n");
 
         // Print both wall time and CPU time statistics
         printf("\n=== Parallel Execution Statistics ===\n");
@@ -1792,7 +1792,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
             
             // Progress report
             if (point % 1 == 0 || point == total_points - 1) {
-                printf("\rProgress: %ld/%ld", 
+                printf("\r  Progress: %ld/%ld", 
                        point + 1, total_points);
                 fflush(stdout);
             }

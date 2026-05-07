@@ -65,6 +65,14 @@ typedef struct {
     double step1_direct_dense_fft_log2;
     double step1_direct_factorial_log2;
     double step1_direct_fft_log2;
+    double step1_direct_mpoly_log2;
+    double step1_direct_mpoly_mul_proxy_log2;
+    double step1_ordinary_interp_log2;
+    double step1_ordinary_grid_points_log2;
+    double step1_ordinary_probe_cost_log2;
+    double step1_ordinary_tensor_sum_log2;
+    double step1_ordinary_probe_phase_log2;
+    double step1_ordinary_tensor_phase_log2;
     double step1_hnf_log2;
     double step1_hnf_linear_algebra_log2;
     double step1_hnf_degree_density_log2;
@@ -86,6 +94,8 @@ typedef struct {
     double grobner_log2;
     double step4_log2;
     double total_direct_log2;
+    double total_direct_mpoly_log2;
+    double total_ordinary_log2;
     double total_hnf_log2;
     double total_sparse_log2;
 } dixon_complexity_report_t;

@@ -297,6 +297,13 @@ static double log2_binomial_upper(slong n, slong k) {
     return (double) (ln_binom / logl(2.0L));
 }
 
+static double log2_dense_monomial_count_upper(long degree, slong num_vars) {
+    if (degree <= 0 || num_vars <= 0) {
+        return 0.0;
+    }
+    return log2_binomial_upper(num_vars + degree, num_vars);
+}
+
 static slong saturated_add_slong(slong a, slong b) {
     if (a >= WORD_MAX || b >= WORD_MAX) return WORD_MAX;
     if (b > 0 && a > WORD_MAX - b) return WORD_MAX;
@@ -620,6 +627,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     int degree_sum_saturated = 0;
     long step1_partial_degree_bound = 0;
     double dixon_matrix_size_log2 = 0.0;
+    double step1_dense_grid_points_log2 = 0.0;
+    double step1_dense_tensor_sum_log2 = -INFINITY;
 
     fmpz_init(matrix_size);
     dixon_size(matrix_size, degrees, (int) num_polys, 0);
@@ -695,6 +704,16 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                     : direct_naive_log2;
             }
             step1_partial_degree_bound = report->step1_det_total_degree;
+            step1_dense_grid_points_log2 = log2_det_uni_degree;
+            if (report->step1_var_count > 0) {
+                double per_var_interp_log2 =
+                    (report->step1_det_total_degree > 0)
+                    ? log2_soft_fft_multiply_from_degree_log2(
+                        log2((double) report->step1_det_total_degree))
+                    : 0.0;
+                step1_dense_tensor_sum_log2 =
+                    log2((double) report->step1_var_count) + per_var_interp_log2;
+            }
 
             {
                 double log2_col_avg = log2_det_uni_degree;
@@ -754,7 +773,14 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                 for (slong i = 0; i < report->step1_var_count; i++) {
                     var_weight_log2[i] = log2_weight;
                     log2_weight += log2((double) var_degree_bounds[i] + 1.0);
+                    step1_dense_tensor_sum_log2 = log2_add_exp(
+                        step1_dense_tensor_sum_log2,
+                        (var_degree_bounds[i] > 0)
+                        ? log2_soft_fft_multiply_from_degree_log2(
+                            log2((double) var_degree_bounds[i]))
+                        : 0.0);
                 }
+                step1_dense_grid_points_log2 = log2_weight;
             }
 
             report->step1_kronecker_degree_log2 =
@@ -935,6 +961,35 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         }
     }
 
+    report->step1_ordinary_grid_points_log2 = step1_dense_grid_points_log2;
+    report->step1_ordinary_probe_cost_log2 = report->step1_sparse_slp_length_log2;
+    if (!isfinite(step1_dense_tensor_sum_log2) || step1_dense_tensor_sum_log2 < 0.0) {
+        step1_dense_tensor_sum_log2 = 0.0;
+    }
+    report->step1_ordinary_tensor_sum_log2 = step1_dense_tensor_sum_log2;
+    report->step1_ordinary_probe_phase_log2 =
+        report->step1_ordinary_grid_points_log2 +
+        report->step1_ordinary_probe_cost_log2;
+    if (report->step1_var_count > 0) {
+        report->step1_ordinary_tensor_phase_log2 =
+            report->step1_ordinary_grid_points_log2 +
+            report->step1_ordinary_tensor_sum_log2;
+        report->step1_ordinary_interp_log2 = log2_add_exp(
+            report->step1_ordinary_probe_phase_log2,
+            report->step1_ordinary_tensor_phase_log2);
+    } else {
+        report->step1_ordinary_tensor_phase_log2 = -INFINITY;
+        report->step1_ordinary_interp_log2 = report->step1_ordinary_probe_cost_log2;
+    }
+    report->step1_direct_mpoly_mul_proxy_log2 = 0.0;
+    for (slong i = 0; i < num_polys; i++) {
+        long di = degrees[i] > 0 ? degrees[i] : 0;
+        report->step1_direct_mpoly_mul_proxy_log2 +=
+            log2_dense_monomial_count_upper(di, num_all_vars);
+    }
+    report->step1_direct_mpoly_log2 =
+        log2_factorial_slong(num_polys) + report->step1_direct_mpoly_mul_proxy_log2;
+
     {
         long max_degree = 0;
         double entry_param_log2 = 0.0;
@@ -1000,6 +1055,10 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
 
     report->step4_log2 = dixon_complexity(degrees, (int) num_polys, (int) num_all_vars, omega);
     report->total_direct_log2 = log2_add_exp(report->step1_direct_log2, report->step4_log2);
+    report->total_direct_mpoly_log2 =
+        log2_add_exp(report->step1_direct_mpoly_log2, report->step4_log2);
+    report->total_ordinary_log2 =
+        log2_add_exp(report->step1_ordinary_interp_log2, report->step4_log2);
     report->total_hnf_log2 = log2_add_exp(report->step1_hnf_log2, report->step4_log2);
     report->total_sparse_log2 = log2_add_exp(report->step1_sparse_log2, report->step4_log2);
     fmpz_clear(matrix_size);
@@ -1088,6 +1147,12 @@ static void dixon_complexity_fprint_parameter_vars(FILE *fp,
 
 static double dixon_complexity_best_total_log2(const dixon_complexity_report_t *report) {
     double best = report->total_direct_log2;
+    if (report->total_direct_mpoly_log2 < best) {
+        best = report->total_direct_mpoly_log2;
+    }
+    if (report->total_ordinary_log2 < best) {
+        best = report->total_ordinary_log2;
+    }
     if (report->total_hnf_log2 < best) {
         best = report->total_hnf_log2;
     }
@@ -1159,25 +1224,32 @@ static void dixon_complexity_write_report_body(
         fmpz_fprint(fp, matrix_size);
         fprintf(fp, ", B=%ld, r=%ld (#parameter vars)\n",
                 report->step1_sparse_param_degree_bound, report->num_parameter_vars);
-    }
-    fprintf(fp, "Step 1 sparse partial degree upper bound D: %ld\n",
-            report->step1_sparse_partial_degree_bound);
-    if (verbose_level >= 2) {
+        fprintf(fp, "Step 1 sparse partial degree upper bound D: %ld\n",
+                report->step1_sparse_partial_degree_bound);
         fprintf(fp, "Step 1 characteristic-side theorem condition: p >= D ? %s (p=", 
                 fmpz_cmp_ui(field_characteristic,
                             (ulong) (report->step1_sparse_partial_degree_bound > 0
                                 ? report->step1_sparse_partial_degree_bound : 0)) >= 0 ? "yes" : "no");
         fmpz_fprint(fp, field_characteristic);
         fprintf(fp, ", D=%ld)\n", report->step1_sparse_partial_degree_bound);
-    }
-    fprintf(fp, "Step 1 sparse SLP-length proxy log2(L) [shared-structure model]: %.6f\n",
+        fprintf(fp, "Step 1 sparse SLP-length proxy log2(L) [shared-structure model]: %.6f\n",
             report->step1_sparse_slp_length_log2);
-    if (verbose_level >= 2) {
         fprintf(fp, "Step 1 SLP proxy model: L ~= n^omega + n(B+1) + n^2 with n=%ld, omega=%.4f, B=%ld\n",
                 num_polys, omega, report->step1_sparse_param_degree_bound);
     }
     //fprintf(fp, "Step 1 direct upper bound (log2): %.6f\n", report->step1_direct_log2);
-    fprintf(fp, "Step 1 direct Leibniz + Kronecker/FFT (log2): %.6f\n", report->step1_direct_factorial_log2 + report->step1_direct_fft_log2);
+    fprintf(fp, "Step 1 direct multivariate cofactor expansion (naive, log2): %.6f\n",
+            report->step1_direct_mpoly_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: log2(n!) + log2(M_mpoly), with M_mpoly ~= prod_j tau_j and tau_j <= binom(m + d_j, m)\n");
+        fprintf(fp, "  Values : n=%ld, m=%ld, log2(n!)=%.6f, log2(prod_j tau_j)=%.6f\n",
+                num_polys,
+                num_all_vars,
+                report->step1_direct_factorial_log2,
+                report->step1_direct_mpoly_mul_proxy_log2);
+    }
+    fprintf(fp, "Step 1 direct univariate after Kronecker (Leibniz/FFT, log2): %.6f\n",
+            report->step1_direct_factorial_log2 + report->step1_direct_fft_log2);
     
     if (verbose_level >= 2) {
         // fprintf(fp, "  Chosen as min{naive Leibniz+Kronecker/FFT, dense direct after Kronecker}\n");
@@ -1198,6 +1270,19 @@ static void dixon_complexity_write_report_body(
                 report->step1_direct_dense_linear_algebra_log2,
                 report->step1_kronecker_degree_log2,
                 report->step1_direct_dense_fft_log2);
+    }
+    fprintf(fp, "Step 1 ordinary dense interpolation (tensor-grid, log2): %.6f\n",
+            report->step1_ordinary_interp_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: soft-O(N*L + N*sum_i soft-FFT(b_i))\n");
+        fprintf(fp, "  Grid   : N = prod_i (b_i + 1)\n");
+        fprintf(fp, "  Values : log2(N)=%.6f, log2(L)=%.6f, log2(sum_i soft-FFT(b_i))=%.6f\n",
+                report->step1_ordinary_grid_points_log2,
+                report->step1_ordinary_probe_cost_log2,
+                report->step1_ordinary_tensor_sum_log2);
+        fprintf(fp, "           probe phase=%.6f, tensor-interp phase=%.6f\n",
+                report->step1_ordinary_probe_phase_log2,
+                report->step1_ordinary_tensor_phase_log2);
     }
     fprintf(fp, "Step 1 Kronecker + HNF (log2): %.6f\n",
             report->step1_hnf_log2);
@@ -1272,6 +1357,84 @@ static void dixon_complexity_write_report_body(
                     report->step1_hnf_degree_density_log2);
         }
 
+        fprintf(fp, "Step 1 ordinary dense interpolation details:\n");
+        fprintf(fp, "  Formula: N = prod_i (b_i + 1)\n");
+        fprintf(fp, "  Factors :\n");
+        for (slong i = 0; i < num_elim; i++) {
+            long bi = step1_var_bounds ? step1_var_bounds[i] : 0L;
+            fprintf(fp, "    (%s-bound + 1) = (%ld + 1)\n",
+                    elim_var_list[i], bi);
+        }
+        for (slong i = 0; i < num_elim; i++) {
+            long bi = step1_var_bounds ? step1_var_bounds[num_elim + i] : 0L;
+            fprintf(fp, "    (~%s-bound + 1) = (%ld + 1)\n",
+                    elim_var_list[i], bi);
+        }
+        printed_params = 0;
+        for (slong i = 0; i < num_all_vars; i++) {
+            if (!complexity_is_elimination_var(all_vars[i], elim_var_list, num_elim)) {
+                long bi = step1_var_bounds ? step1_var_bounds[2 * num_elim + printed_params] : 0L;
+                fprintf(fp, "    (%s-bound + 1) = (%ld + 1)\n",
+                        all_vars[i], bi);
+                printed_params++;
+            }
+        }
+        fprintf(fp, "  Value   : log2(N) = %.6f\n", report->step1_ordinary_grid_points_log2);
+        fprintf(fp, "  Tensor reconstruction proxy sum_i soft-FFT(b_i):\n");
+        for (slong i = 0; i < num_elim; i++) {
+            long bi = step1_var_bounds ? step1_var_bounds[i] : 0L;
+            fprintf(fp, "    %s: b_i=%ld, soft-FFT(b_i)=2^%.6f\n",
+                    elim_var_list[i], bi,
+                    (bi > 0)
+                        ? log2_soft_fft_multiply_from_degree_log2(log2((double) bi))
+                        : 0.0);
+        }
+        for (slong i = 0; i < num_elim; i++) {
+            long bi = step1_var_bounds ? step1_var_bounds[num_elim + i] : 0L;
+            fprintf(fp, "    ~%s: b_i=%ld, soft-FFT(b_i)=2^%.6f\n",
+                    elim_var_list[i], bi,
+                    (bi > 0)
+                        ? log2_soft_fft_multiply_from_degree_log2(log2((double) bi))
+                        : 0.0);
+        }
+        printed_params = 0;
+        for (slong i = 0; i < num_all_vars; i++) {
+            if (!complexity_is_elimination_var(all_vars[i], elim_var_list, num_elim)) {
+                long bi = step1_var_bounds ? step1_var_bounds[2 * num_elim + printed_params] : 0L;
+                fprintf(fp, "    %s: b_i=%ld, soft-FFT(b_i)=2^%.6f\n",
+                        all_vars[i], bi,
+                        (bi > 0)
+                            ? log2_soft_fft_multiply_from_degree_log2(log2((double) bi))
+                            : 0.0);
+                printed_params++;
+            }
+        }
+        fprintf(fp, "  Value   : log2(sum_i soft-FFT(b_i)) = %.6f\n",
+                report->step1_ordinary_tensor_sum_log2);
+        fprintf(fp, "  Phases  : probe=%.6f, tensor=%.6f\n",
+                report->step1_ordinary_probe_phase_log2,
+                report->step1_ordinary_tensor_phase_log2);
+
+        fprintf(fp, "Step 1 direct multivariate cofactor expansion proxy details:\n");
+        fprintf(fp, "  Formula: tau_j <= binom(m + d_j, m), M_mpoly ~= prod_j tau_j\n");
+        fprintf(fp, "  Meaning: use the original-variable dense monomial count of each input polynomial/column; introducing dual variables does not increase this entry-term proxy.\n");
+        fprintf(fp, "  Values : m=%ld, log2(prod_j tau_j)=%.6f\n",
+                num_all_vars,
+                report->step1_direct_mpoly_mul_proxy_log2);
+        for (slong j = 0; j < num_polys; j++) {
+            long dj = degrees[j] > 0 ? degrees[j] : 0L;
+            fprintf(fp, "    poly[%ld]: d_j=%ld, log2(tau_j)<=%.6f\n",
+                    j, dj,
+                    log2_dense_monomial_count_upper(dj, num_all_vars));
+        }
+
+        fprintf(fp, "Step 1 direct multivariate expansion backend note:\n");
+        fprintf(fp, "  Current --method 0 path is Laplace/cofactor expansion on multivariate entries.\n");
+        fprintf(fp, "  Prime field backend multiply: nmod_mpoly_mul(...)\n");
+        fprintf(fp, "  Extension field backend multiply: fq_nmod_mpoly_mul(...) via unified_mpoly_mul(...)\n");
+        fprintf(fp, "  FLINT public mpoly APIs exposed locally also include *_mul_johnson, *_mul_heap_threaded, *_mul_array.\n");
+        fprintf(fp, "  No public FLINT mpoly Kronecker-multiplication API was found in the installed headers, so this proxy treats method 0 as direct multivariate multiplication rather than Kronecker substitution.\n");
+
         free(step1_var_bounds);
     }
     fprintf(fp, "Step 1 derivative sparse interpolation theoretical (Huang 2023, q-aware, log2): %.6f\n",
@@ -1344,8 +1507,12 @@ static void dixon_complexity_write_report_body(
             omega, report->step4_log2);
 
     fprintf(fp, "\n--- Overall ---\n");
-    fprintf(fp, "Total with direct step 1 (log2): %.6f\n",
+    fprintf(fp, "Total with direct Kronecker step 1 (log2): %.6f\n",
             report->total_direct_log2);
+    fprintf(fp, "Total with direct multivariate step 1 (log2): %.6f\n",
+            report->total_direct_mpoly_log2);
+    fprintf(fp, "Total with ordinary interpolation step 1 (log2): %.6f\n",
+            report->total_ordinary_log2);
     fprintf(fp, "Total with HNF step 1 (log2): %.6f\n",
             report->total_hnf_log2);
     fprintf(fp, "Total with sparse step 1 (log2): %.6f\n",

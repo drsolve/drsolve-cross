@@ -12,6 +12,11 @@
 #include <math.h>
 #include <time.h>
 #include <sys/time.h>
+#include <errno.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -37,6 +42,8 @@
 #define DIXON_NULL_DEVICE "/dev/null"
 #endif
 
+#define DEFAULT_OUTPUT_DIR "out"
+
 /* =========================================================================
  * Print usage
  * ========================================================================= */
@@ -60,7 +67,7 @@ static void print_usage(const char *prog_name)
     printf("  Basic Dixon:\n");
     printf("    %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -o output.dr \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
-    printf("    -> Default output file: solution_YYYYMMDD_HHMMSS.dr\n");
+    printf("    -> Default output file: %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
 
     printf("  Polynomial system solver:\n");
     printf("    %s \"polynomials\" field_size\n", prog_name);
@@ -68,7 +75,7 @@ static void print_usage(const char *prog_name)
     printf("    %s --solve-rational-only \"polynomials\" 0\n", prog_name);
     printf("    %s -v 2 -s \"polynomials\" field_size\n", prog_name);
     printf("    %s -v 3 \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
-    printf("    -> Writes all solutions to solution_YYYYMMDD_HHMMSS.dr\n");
+    printf("    -> Writes all solutions to %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
     printf("    -> `-s` / `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
     printf("    -> `-v 2` matches the old debug / verbose solver output\n");
     printf("    -> `-v 3` also dumps small Step 1/2/3 matrices (<= 10 x 10)\n");
@@ -77,7 +84,8 @@ static void print_usage(const char *prog_name)
     printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -c    \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --comp -f input.dr\n", prog_name);
-    printf("    -> Prints complexity info; saves to comp_YYYYMMDD_HHMMSS.dr by default\n");
+    printf("    -> Prints complexity info; saves to %s/comp_YYYYMMDD_HHMMSS.dr by default\n",
+           DEFAULT_OUTPUT_DIR);
     printf("    Add --omega <value> (or -w <value>) to set omega (default: %.4g)\n",
            DIXON_OMEGA);
     printf("    Add --time to print per-step timing; use -v 2 for the old debug-level diagnostics\n");
@@ -133,7 +141,7 @@ static void print_usage(const char *prog_name)
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
-    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation\n");
+    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation; 4.Kronecker+direct nmod\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
     printf("  Resultant construction:\n");
     printf("    %s --resultant dixon|macaulay|subres <args>\n", prog_name);
@@ -282,6 +290,7 @@ static const char *det_method_name_cli(int method)
         case 1: return "Kronecker+HNF";
         case 2: return "Interpolation";
         case 3: return "sparse interpolation";
+        case 4: return "Kronecker+direct nmod";
         default: return "Default";
     }
 }
@@ -558,19 +567,71 @@ static char *generate_timestamped_filename(const char *prefix)
     return strdup(buffer);
 }
 
+static const char *path_basename_const(const char *path)
+{
+    const char *base = path;
+    const char *slash;
+    const char *backslash;
+
+    if (!path) return "";
+
+    slash = strrchr(path, '/');
+    backslash = strrchr(path, '\\');
+    if (slash && slash + 1 > base) base = slash + 1;
+    if (backslash && backslash + 1 > base) base = backslash + 1;
+    return base;
+}
+
+static int ensure_directory_exists(const char *dirpath)
+{
+    if (!dirpath || !*dirpath) return 1;
+#ifdef _WIN32
+    if (_mkdir(dirpath) == 0) return 1;
+#else
+    if (mkdir(dirpath, 0777) == 0) return 1;
+#endif
+    return errno == EEXIST;
+}
+
+static char *prepend_default_output_dir(const char *filename)
+{
+    const char *base = path_basename_const(filename);
+    size_t dir_len = strlen(DEFAULT_OUTPUT_DIR);
+    size_t base_len = strlen(base);
+    char *output;
+
+    if (!ensure_directory_exists(DEFAULT_OUTPUT_DIR)) {
+        return filename ? strdup(filename) : NULL;
+    }
+
+    output = (char *) malloc(dir_len + 1 + base_len + 1);
+    if (!output) return NULL;
+
+    memcpy(output, DEFAULT_OUTPUT_DIR, dir_len);
+    output[dir_len] = '/';
+    memcpy(output + dir_len + 1, base, base_len + 1);
+    return output;
+}
+
 static char *choose_output_filename(const char *requested_output,
                                     const char *input_filename,
                                     const char *timestamp_prefix,
                                     const char *tag)
 {
+    char *auto_name = NULL;
+
     if (requested_output) {
         return strdup(requested_output);
     }
     if (input_filename && tag) {
-        return generate_tagged_filename(input_filename, tag);
+        auto_name = generate_tagged_filename(path_basename_const(input_filename), tag);
+    } else if (timestamp_prefix) {
+        auto_name = generate_timestamped_filename(timestamp_prefix);
     }
-    if (timestamp_prefix) {
-        return generate_timestamped_filename(timestamp_prefix);
+    if (auto_name) {
+        char *output = prepend_default_output_dir(auto_name);
+        free(auto_name);
+        return output;
     }
     return NULL;
 }
@@ -2293,32 +2354,32 @@ int main(int argc, char *argv[])
         } else if ((strcmp(argv[i], "--method") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
                 det_method_step1 = (int)val;
                 det_method_step4 = (int)val;
             } else {
                 fprintf(stderr, "Warning: invalid --method value '%s', "
-                                "must be 0-3. Using default.\n", argv[i + 1]);
+                                "must be 0-4. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--step1") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
                 det_method_step1 = (int)val;
             } else {
                 fprintf(stderr, "Warning: invalid --step1 value '%s', "
-                                "must be 0-3. Using default.\n", argv[i + 1]);
+                                "must be 0-4. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--step4") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 3) {
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
                 det_method_step4 = (int)val;
             } else {
                 fprintf(stderr, "Warning: invalid --step4 value '%s', "
-                                "must be 0-3. Using default.\n", argv[i + 1]);
+                                "must be 0-4. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--threads") == 0) && i + 1 < argc) {

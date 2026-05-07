@@ -409,6 +409,71 @@ static int dixonres_nmod_poly_mat_det_hnf_exact(nmod_poly_t det,
    MAIN ENTRY POINT - IMPLEMENTATION
    ============================================================================ */
 
+void fq_nmod_poly_mat_det_flint_builtin(fq_nmod_poly_t det,
+                                        fq_nmod_poly_mat_t mat,
+                                        const fq_nmod_ctx_t ctx) {
+    if (mat->r == 0) {
+        fq_nmod_poly_one(det, ctx);
+        return;
+    }
+
+    if (mat->r != mat->c) {
+        fq_nmod_poly_zero(det, ctx);
+        return;
+    }
+
+    if (fq_nmod_ctx_degree(ctx) == 1) {
+        nmod_poly_mat_t nmod_mat;
+        nmod_poly_t nmod_det;
+        ulong p = fq_nmod_ctx_prime(ctx);
+
+        nmod_poly_mat_init(nmod_mat, mat->r, mat->c, p);
+        nmod_poly_init(nmod_det, p);
+
+        for (slong i = 0; i < mat->r; i++) {
+            for (slong j = 0; j < mat->c; j++) {
+                fq_nmod_poly_struct *src = fq_nmod_poly_mat_entry(mat, i, j);
+                nmod_poly_struct *dst = nmod_poly_mat_entry(nmod_mat, i, j);
+                slong len = fq_nmod_poly_length(src, ctx);
+
+                nmod_poly_fit_length(dst, len);
+                for (slong k = 0; k < len; k++) {
+                    fq_nmod_t coeff;
+                    fq_nmod_init(coeff, ctx);
+                    fq_nmod_poly_get_coeff(coeff, src, k, ctx);
+                    nmod_poly_set_coeff_ui(dst, k, nmod_poly_get_coeff_ui(coeff, 0));
+                    fq_nmod_clear(coeff, ctx);
+                }
+                _nmod_poly_set_length(dst, len);
+                _nmod_poly_normalise(dst);
+            }
+        }
+
+        nmod_poly_mat_det(nmod_det, nmod_mat);
+
+        fq_nmod_poly_zero(det, ctx);
+        for (slong i = 0; i < nmod_poly_length(nmod_det); i++) {
+            ulong coeff_val = nmod_poly_get_coeff_ui(nmod_det, i);
+            if (coeff_val != 0) {
+                fq_nmod_t coeff;
+                fq_nmod_init(coeff, ctx);
+                nmod_poly_set_coeff_ui(coeff, 0, coeff_val);
+                fq_nmod_poly_set_coeff(det, i, coeff, ctx);
+                fq_nmod_clear(coeff, ctx);
+            }
+        }
+
+        nmod_poly_mat_clear(nmod_mat);
+        nmod_poly_clear(nmod_det);
+        return;
+    }
+
+    if (g_dixon_debug_mode) {
+        printf("  FLINT built-in univariate poly-mat determinant is only directly available for prime fields in the installed headers; falling back to fq_nmod_poly_mat_det_iter for extension fields.\n");
+    }
+    fq_nmod_poly_mat_det_iter(det, mat, ctx);
+}
+
 void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
                               fq_nmod_poly_mat_t mat,
                               const fq_nmod_ctx_t ctx) {

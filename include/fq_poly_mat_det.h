@@ -113,6 +113,10 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
                                fq_nmod_poly_mat_t mat,
                                const fq_nmod_ctx_t ctx);
 
+void fq_nmod_poly_mat_det_flint_builtin(fq_nmod_poly_t det,
+                                        fq_nmod_poly_mat_t mat,
+                                        const fq_nmod_ctx_t ctx);
+
 #ifdef __cplusplus
 }
 #endif

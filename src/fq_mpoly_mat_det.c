@@ -5,6 +5,7 @@
 
 #include "fq_mpoly_mat_det.h"
 extern int g_field_equation_reduction;
+extern int g_dixon_debug_mode;
 static inline ulong reduce_exp_field_ui(ulong e, ulong q);
 static ulong field_size_q_from_fq_ctx(const fq_nmod_ctx_t ctx);
 static void fq_nmod_poly_reduce_field_equation_inplace(fq_nmod_poly_t poly, const fq_nmod_ctx_t ctx);
@@ -102,14 +103,22 @@ static int compare_long_desc_local(const void *a, const void *b) {
     return 0;
 }
 
+static inline ulong addmod_ui_local(ulong a, ulong b, ulong mod) {
+    ulong sum = a + b;
+    if (sum >= mod || sum < a) {
+        sum -= mod;
+    }
+    return sum;
+}
+
 static void kronecker_print_slong_array(const char *label,
                                         const slong *values,
                                         slong length) {
-    printf("[Kronecker] %s:", label);
+    DET_PRINT("[Kronecker] %s:", label);
     for (slong i = 0; i < length; i++) {
-        printf(" [%ld]=%ld", i, values[i]);
+        DET_PRINT(" [%ld]=%ld", i, values[i]);
     }
-    printf("\n");
+    DET_PRINT("\n");
 }
 
 // Convert fq_mvpoly to fq_nmod_poly for a specific variable
@@ -288,6 +297,153 @@ void compute_det_poly_recursive_helper(fq_nmod_poly_t det,
     fq_nmod_poly_clear(subdet, ctx);
 }
 
+static slong kronecker_max_univariate_degree_nmod_poly_array(nmod_poly_t **poly_matrix,
+                                                             slong rows,
+                                                             slong cols) {
+    slong max_degree = -1;
+    for (slong i = 0; i < rows; i++) {
+        for (slong j = 0; j < cols; j++) {
+            slong deg = nmod_poly_degree(poly_matrix[i][j]);
+            if (deg > max_degree) {
+                max_degree = deg;
+            }
+        }
+    }
+    return max_degree;
+}
+
+static void mvpoly_to_univariate_kronecker_nmod(nmod_poly_t uni_poly,
+                                                const fq_mvpoly_t *mv_poly,
+                                                const slong *substitution_powers,
+                                                ulong prime) {
+    nmod_poly_zero(uni_poly);
+
+    if (mv_poly->nterms == 0) return;
+
+    for (slong t = 0; t < mv_poly->nterms; t++) {
+        slong uni_exp = 0;
+        ulong coeff_val;
+        ulong existing;
+
+        if (mv_poly->terms[t].var_exp) {
+            for (slong v = 0; v < mv_poly->nvars; v++) {
+                uni_exp += mv_poly->terms[t].var_exp[v] * substitution_powers[v];
+            }
+        }
+
+        if (mv_poly->terms[t].par_exp) {
+            for (slong p = 0; p < mv_poly->npars; p++) {
+                uni_exp += mv_poly->terms[t].par_exp[p] *
+                          substitution_powers[mv_poly->nvars + p];
+            }
+        }
+
+        coeff_val = nmod_poly_get_coeff_ui(mv_poly->terms[t].coeff, 0);
+        if (coeff_val == 0) {
+            continue;
+        }
+
+        existing = nmod_poly_get_coeff_ui(uni_poly, uni_exp);
+        nmod_poly_set_coeff_ui(uni_poly, uni_exp,
+                               addmod_ui_local(existing, coeff_val, prime));
+    }
+}
+
+static void nmod_poly_to_fq_nmod_poly_prime_field(fq_nmod_poly_t dst,
+                                                  const nmod_poly_t src,
+                                                  const fq_nmod_ctx_t ctx) {
+    fq_nmod_poly_zero(dst, ctx);
+
+    for (slong i = 0; i < nmod_poly_length(src); i++) {
+        ulong coeff_val = nmod_poly_get_coeff_ui(src, i);
+        if (coeff_val != 0) {
+            fq_nmod_t coeff;
+            fq_nmod_init(coeff, ctx);
+            fq_nmod_set_ui(coeff, coeff_val, ctx);
+            fq_nmod_poly_set_coeff(dst, i, coeff, ctx);
+            fq_nmod_clear(coeff, ctx);
+        }
+    }
+}
+
+static void compute_det_nmod_poly_recursive_helper(nmod_poly_t det,
+                                                   nmod_poly_t **matrix,
+                                                   slong size) {
+    if (size == 0) {
+        nmod_poly_one(det);
+        return;
+    }
+
+    if (size == 1) {
+        nmod_poly_set(det, matrix[0][0]);
+        return;
+    }
+
+    if (size == 2) {
+        nmod_poly_t ad, bc;
+        nmod_poly_init(ad, det->mod.n);
+        nmod_poly_init(bc, det->mod.n);
+
+        nmod_poly_mul(ad, matrix[0][0], matrix[1][1]);
+        nmod_poly_mul(bc, matrix[0][1], matrix[1][0]);
+        nmod_poly_sub(det, ad, bc);
+
+        nmod_poly_clear(ad);
+        nmod_poly_clear(bc);
+        return;
+    }
+
+    nmod_poly_zero(det);
+
+    nmod_poly_t cofactor, subdet;
+    nmod_poly_init(cofactor, det->mod.n);
+    nmod_poly_init(subdet, det->mod.n);
+
+    nmod_poly_t **submatrix = (nmod_poly_t**) malloc((size_t) (size - 1) * sizeof(nmod_poly_t*));
+    for (slong i = 0; i < size - 1; i++) {
+        submatrix[i] = (nmod_poly_t*) malloc((size_t) (size - 1) * sizeof(nmod_poly_t));
+        for (slong j = 0; j < size - 1; j++) {
+            nmod_poly_init(submatrix[i][j], det->mod.n);
+        }
+    }
+
+    for (slong col = 0; col < size; col++) {
+        if (nmod_poly_is_zero(matrix[0][col])) {
+            continue;
+        }
+
+        for (slong i = 1; i < size; i++) {
+            slong sub_j = 0;
+            for (slong j = 0; j < size; j++) {
+                if (j != col) {
+                    nmod_poly_set(submatrix[i - 1][sub_j], matrix[i][j]);
+                    sub_j++;
+                }
+            }
+        }
+
+        compute_det_nmod_poly_recursive_helper(subdet, submatrix, size - 1);
+        nmod_poly_mul(cofactor, matrix[0][col], subdet);
+
+        if ((col & 1) == 0) {
+            nmod_poly_add(det, det, cofactor);
+        } else {
+            nmod_poly_sub(det, det, cofactor);
+        }
+    }
+
+    for (slong i = 0; i < size - 1; i++) {
+        for (slong j = 0; j < size - 1; j++) {
+            nmod_poly_clear(submatrix[i][j]);
+        }
+        free(submatrix[i]);
+    }
+    free(submatrix);
+
+    nmod_poly_clear(cofactor);
+    nmod_poly_clear(subdet);
+}
+
 // Main function for polynomial recursive algorithm
 void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
     if (size <= 0) {
@@ -410,7 +566,7 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
         }
     }
     timing_info_t convert_elapsed = end_timing(convert_start);
-    printf("[Kronecker] Maximum univariate degree after substitution: %ld\n",
+    DET_PRINT("[Kronecker] Maximum univariate degree after substitution: %ld\n",
            kronecker_max_univariate_degree_poly_array(poly_matrix, size, size, ctx));
     
     // Step 4: Compute determinant using recursive algorithm
@@ -742,7 +898,7 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
         }
     }
     timing_info_t convert_elapsed = end_timing(convert_start);
-    printf("[Kronecker] Maximum univariate degree after substitution: %ld\n",
+    DET_PRINT("[Kronecker] Maximum univariate degree after substitution: %ld\n",
            kronecker_max_univariate_degree_poly_mat(uni_mat, ctx));
     
     // Step 4: Compute univariate determinant
@@ -778,6 +934,107 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     print_timing("Total Kronecker", total_elapsed);
     printf("Final result: %ld terms\n", result->nterms);
     printf("==============================================\n");
+}
+
+void compute_fq_det_kronecker_nmod_recursive(fq_mvpoly_t *result,
+                                             fq_mvpoly_t **matrix,
+                                             slong size) {
+    if (size <= 0) {
+        fq_mvpoly_init(result, matrix[0][0].nvars, matrix[0][0].npars, matrix[0][0].ctx);
+        return;
+    }
+
+    timing_info_t total_start = start_timing();
+
+    const fq_nmod_ctx_struct *ctx = matrix[0][0].ctx;
+    slong nvars = matrix[0][0].nvars;
+    slong npars = matrix[0][0].npars;
+    slong total_vars = nvars + npars;
+    ulong prime = fq_nmod_ctx_prime(ctx);
+
+    DET_PRINT("Computing %ldx%ld determinant via Kronecker + direct nmod recursive det\n",
+              size, size);
+
+    if (!is_prime_field(ctx)) {
+        if (g_dixon_debug_mode) {
+            printf("  Method 4 prime-field nmod path unavailable over extension fields; falling back to fq_nmod polynomial recursive determinant.\n");
+        }
+        compute_fq_det_poly_recursive(result, matrix, size);
+        return;
+    }
+
+    if (total_vars <= 0) {
+        compute_fq_det_recursive(result, matrix, size);
+        return;
+    }
+
+    timing_info_t bounds_start = start_timing();
+    slong *var_bounds = (slong*) malloc(total_vars * sizeof(slong));
+    compute_kronecker_bounds(var_bounds, matrix, size, nvars, npars);
+    timing_info_t bounds_elapsed = end_timing(bounds_start);
+    kronecker_print_slong_array("var_bounds", var_bounds, total_vars);
+
+    slong *substitution_powers = (slong*) malloc(total_vars * sizeof(slong));
+    substitution_powers[0] = 1;
+    for (slong v = 1; v < total_vars; v++) {
+        substitution_powers[v] = substitution_powers[v-1] * var_bounds[v-1];
+    }
+    kronecker_print_slong_array("substitution_powers", substitution_powers, total_vars);
+
+    timing_info_t convert_start = start_timing();
+    nmod_poly_t **uni_mat = (nmod_poly_t**) malloc((size_t) size * sizeof(nmod_poly_t*));
+
+    for (slong i = 0; i < size; i++) {
+        uni_mat[i] = (nmod_poly_t*) malloc((size_t) size * sizeof(nmod_poly_t));
+        for (slong j = 0; j < size; j++) {
+            nmod_poly_init(uni_mat[i][j], prime);
+            mvpoly_to_univariate_kronecker_nmod(uni_mat[i][j],
+                                                &matrix[i][j],
+                                                substitution_powers,
+                                                prime);
+        }
+    }
+    timing_info_t convert_elapsed = end_timing(convert_start);
+    DET_PRINT("[Kronecker] Maximum univariate degree after substitution: %ld\n",
+           kronecker_max_univariate_degree_nmod_poly_array(uni_mat, size, size));
+
+    timing_info_t det_start = start_timing();
+    nmod_poly_t det_poly_nmod;
+    fq_nmod_poly_t det_poly_fq;
+    nmod_poly_init(det_poly_nmod, prime);
+    fq_nmod_poly_init(det_poly_fq, ctx);
+    compute_det_nmod_poly_recursive_helper(det_poly_nmod, uni_mat, size);
+    nmod_poly_to_fq_nmod_poly_prime_field(det_poly_fq, det_poly_nmod, ctx);
+    timing_info_t det_elapsed = end_timing(det_start);
+
+    timing_info_t back_start = start_timing();
+    univariate_to_mvpoly_kronecker(result, det_poly_fq, substitution_powers,
+                                  var_bounds, nvars, npars, ctx);
+    timing_info_t back_elapsed = end_timing(back_start);
+
+    free(var_bounds);
+    free(substitution_powers);
+    fq_nmod_poly_clear(det_poly_fq, ctx);
+    nmod_poly_clear(det_poly_nmod);
+    for (slong i = 0; i < size; i++) {
+        for (slong j = 0; j < size; j++) {
+            nmod_poly_clear(uni_mat[i][j]);
+        }
+        free(uni_mat[i]);
+    }
+    free(uni_mat);
+
+    timing_info_t total_elapsed = end_timing(total_start);
+    /*
+    printf("\n=== Kronecker+direct nmod Time Statistics ===\n");
+    print_timing("Compute bounds", bounds_elapsed);
+    print_timing("Convert to univariate", convert_elapsed);
+    print_timing("Direct nmod recursive determinant", det_elapsed);
+    print_timing("Convert back", back_elapsed);
+    print_timing("Total Kronecker+direct nmod", total_elapsed);
+    printf("Final result: %ld terms\n", result->nterms);
+    printf("==============================================\n");
+    */
 }
 
 // ============= Prime Field Conversion Functions Implementation =============

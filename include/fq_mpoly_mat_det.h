@@ -123,6 +123,7 @@ void univariate_to_mvpoly_kronecker(fq_mvpoly_t *mv_poly,
 
 // Compute determinant using Kronecker+HNF
 void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
+void compute_fq_det_kronecker_nmod_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
 
 // ============= Prime Field Conversion Functions =============
 

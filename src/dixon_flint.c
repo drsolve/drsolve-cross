@@ -29,6 +29,8 @@ static const char *dixon_det_method_name(det_method_t method)
             return "interpolation";
         case DET_METHOD_HUANG:
             return "sparse interpolation";
+        case DET_METHOD_KRONECKER_NMOD:
+            return "Kronecker+direct nmod";
         default:
             return "default";
     }
@@ -588,6 +590,9 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
             dixon_debug_log("  Method: sparse interpolation\n");
 
             compute_fq_det_huang_interpolation(result, coeff_matrix, size);
+        } else if (method == DET_METHOD_KRONECKER_NMOD) {
+            dixon_debug_log("  Method: Kronecker+direct nmod\n");
+            compute_fq_det_kronecker_nmod_recursive(result, coeff_matrix, size);
         } else {
             fq_mvpoly_init(result, 0, npars, ctx);
             
@@ -665,6 +670,12 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
                 dixon_debug_log("  Method: Kronecker+HNF\n");
                 
                 compute_fq_det_kronecker(result, coeff_matrix, size);
+                break;
+
+            case DET_METHOD_KRONECKER_NMOD:
+                dixon_debug_log("  Method: Kronecker+direct nmod\n");
+
+                compute_fq_det_kronecker_nmod_recursive(result, coeff_matrix, size);
                 break;
 
             case DET_METHOD_HUANG:
@@ -2199,6 +2210,9 @@ void compute_fq_cancel_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **modified_M_
         case DET_METHOD_KRONECKER:
             compute_fq_det_kronecker(result, modified_M_mvpoly, nvars + 1);
             break;
+        case DET_METHOD_KRONECKER_NMOD:
+            compute_fq_det_kronecker_nmod_recursive(result, modified_M_mvpoly, nvars + 1);
+            break;
         case DET_METHOD_HUANG:
             compute_fq_det_huang_interpolation(result, modified_M_mvpoly, nvars + 1);
             break;
@@ -2404,7 +2418,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     
     if (d_poly.nterms <= 100) {
         dixon_info_log("  Dixon polynomial: %ld terms\n", d_poly.nterms);
-        fq_mvpoly_print_expanded(&d_poly, "DixonPoly", 1);
+        fq_mvpoly_print_expanded(&d_poly, "  DixonPoly", 1);
     } else {
         dixon_info_log("  Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
@@ -2475,9 +2489,9 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                            get_wall_time() - step4_wall_start);
         
         if (result->nterms <= 100) {
-            fq_mvpoly_print(result, "Final Resultant");
+            fq_mvpoly_print(result, "  Final Resultant");
         } else {
-            dixon_info_log("Final resultant too large to display (%ld terms)\n", result->nterms);
+            dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
         // Cleanup coefficient matrix
@@ -2535,7 +2549,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     
     if (d_poly.nterms <= 100) {
         dixon_info_log("  Dixon polynomial: %ld terms\n", d_poly.nterms);
-        fq_mvpoly_print_with_names(&d_poly, "DixonPoly", var_names, par_names, gen_name, 1);
+        fq_mvpoly_print_with_names(&d_poly, "  DixonPoly", var_names, par_names, gen_name, 1);
     } else {
         dixon_info_log("  Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
@@ -2590,9 +2604,9 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                            get_wall_time() - step4_wall_start);
         
         if (result->nterms <= 100) {
-            fq_mvpoly_print_with_names(result, "Final Resultant", NULL, par_names, gen_name, 0);
+            fq_mvpoly_print_with_names(result, "  Final Resultant", NULL, par_names, gen_name, 0);
         } else {
-            dixon_info_log("Final resultant too large to display (%ld terms)\n", result->nterms);
+            dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
         
