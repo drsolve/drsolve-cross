@@ -44,6 +44,17 @@
 
 #define DEFAULT_OUTPUT_DIR "out"
 
+static int drsolve_default_thread_count(void)
+{
+#ifdef _OPENMP
+    int threads = omp_get_max_threads();
+    int half_threads = (threads + 1) / 2;
+    return half_threads > 0 ? half_threads : 1;
+#else
+    return 1;
+#endif
+}
+
 /* =========================================================================
  * Print usage
  * ========================================================================= */
@@ -130,7 +141,8 @@ static void print_usage(const char *prog_name)
     printf("    -> `-v 0` matches `--silent` and prints nothing\n");
     printf("    -> `-v 1` is the default output level\n");
     printf("    -> `-v 2` matches the old `--debug` output and also enables per-step timing\n");
-    printf("    -> `-v 3` additionally prints the cancellation matrix, Dixon matrix, and maximal-rank submatrix when each is <= 10 x 10\n");
+    printf("    -> `-v 2` also prints detailed profiling for fast Dixon construction (block counts, tuple counts, per-phase timings)\n");
+    printf("    -> `-v 3` additionally prints the cancellation matrix, Dixon matrix, maximal-rank submatrix when each is <= 10 x 10, plus recursive fast-Dixon trace lines\n");
 
     printf("  Diagnostics:\n");
     printf("    %s --time <args>\n", prog_name);
@@ -141,8 +153,10 @@ static void print_usage(const char *prog_name)
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
-    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation; 4.Kronecker+direct nmod\n");
+    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation; 4.Kronecker+direct nmod; 5.Fast Dixon construction\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
+    printf("    -> --fast-ksy enables a KSY precondition check for method 5 submatrix extraction; --no-fast-ksy disables it\n");
+    printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
     printf("  Resultant construction:\n");
     printf("    %s --resultant dixon|macaulay|subres <args>\n", prog_name);
     printf("    %s --macaulay <args>\n", prog_name);
@@ -291,6 +305,7 @@ static const char *det_method_name_cli(int method)
         case 2: return "Interpolation";
         case 3: return "sparse interpolation";
         case 4: return "Kronecker+direct nmod";
+        case 5: return "Fast Dixon construction";
         default: return "Default";
     }
 }
@@ -302,6 +317,8 @@ static const char *resultant_method_heading(resultant_method_t method)
             return "Macaulay Resultant Computation";
         case RESULTANT_METHOD_SUBRES:
             return "Subresultant Resultant Computation";
+        case RESULTANT_METHOD_DIXON_FAST:
+            return "Fast Dixon Resultant Computation";
         case RESULTANT_METHOD_DIXON:
         default:
             return "Dixon Resultant Computation";
@@ -315,6 +332,8 @@ static const char *resultant_method_task_label(resultant_method_t method)
             return "Macaulay resultant";
         case RESULTANT_METHOD_SUBRES:
             return "Subresultant resultant";
+        case RESULTANT_METHOD_DIXON_FAST:
+            return "Fast Dixon resultant";
         case RESULTANT_METHOD_DIXON:
         default:
             return "Dixon resultant";
@@ -2275,6 +2294,8 @@ int main(int argc, char *argv[])
     int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
     resultant_method_t resultant_method = RESULTANT_METHOD_DIXON;
+    int fast_ksy_precondition = 0;
+    long fast_ksy_constant_col = 0;
     const char *cli_input_filename = NULL;
     const char *cli_output_filename = NULL;
     char *positional_args[argc];
@@ -2354,14 +2375,36 @@ int main(int argc, char *argv[])
         } else if ((strcmp(argv[i], "--method") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
-                det_method_step1 = (int)val;
-                det_method_step4 = (int)val;
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 5) {
+                if (val == 5) {
+                    resultant_method = RESULTANT_METHOD_DIXON_FAST;
+                    det_method_step1 = -1;
+                    det_method_step4 = -1;
+                } else {
+                    det_method_step1 = (int)val;
+                    det_method_step4 = (int)val;
+                }
             } else {
                 fprintf(stderr, "Warning: invalid --method value '%s', "
-                                "must be 0-4. Using default.\n", argv[i + 1]);
+                                "must be 0-5. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
+        } else if (strcmp(argv[i], "--fast-ksy") == 0 ||
+                   strcmp(argv[i], "--ksy-precondition") == 0) {
+            fast_ksy_precondition = 1;
+        } else if (strcmp(argv[i], "--fast-ksy-col") == 0 && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (endptr && *endptr == '\0' && val >= 0) {
+                fast_ksy_constant_col = val;
+            } else {
+                fprintf(stderr, "Warning: invalid --fast-ksy-col value '%s', using 0.\n",
+                                argv[i + 1]);
+                fast_ksy_constant_col = 0;
+            }
+            i++;
+        } else if (strcmp(argv[i], "--no-fast-ksy") == 0) {
+            fast_ksy_precondition = 0;
         } else if ((strcmp(argv[i], "--step1") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
@@ -3071,6 +3114,8 @@ int main(int argc, char *argv[])
     g_dixon_verbose_level = verbose_level;
     g_dixon_show_step_timing = (!silent_mode) && (time_mode || debug_mode);
     g_dixon_debug_mode = debug_mode;
+    g_dixon_fast_use_ksy_precondition = fast_ksy_precondition;
+    g_dixon_fast_ksy_constant_col = fast_ksy_constant_col;
     if (det_method_step1 != -1) {
         dixon_global_method_step1 = (det_method_t)det_method_step1;
         dixon_global_method = dixon_global_method_step1;
@@ -3087,12 +3132,14 @@ int main(int argc, char *argv[])
                    det_method_name_cli(det_method_step4));
         }
     }
-    if (num_threads != -1) {
-        fq_interpolation_set_threads(num_threads);
-        // fq_nmod_poly_mat_det_set_threads(num_threads);
-        if (!silent_mode) {
-            printf("Using %d threads\n", num_threads);
-        }
+    int threads_requested_explicitly = (num_threads != -1);
+    if (num_threads == -1) {
+        num_threads = drsolve_default_thread_count();
+    }
+    fq_interpolation_set_threads(num_threads);
+    // fq_nmod_poly_mat_det_set_threads(num_threads);
+    if (!silent_mode && threads_requested_explicitly && num_threads > 0) {
+        printf("Using %d threads\n", num_threads);
     }
 
     /* ======================================================

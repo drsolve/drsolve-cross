@@ -322,7 +322,8 @@ static void extract_fq_coefficient_matrix_from_macaulay(fq_mvpoly_t ***coeff_mat
 
         find_fq_optimal_maximal_rank_submatrix(full_matrix, nrows, ncols,
                                                &row_idx_array, &col_idx_array,
-                                               &submat_rows, &submat_cols, npars);
+                                               &submat_rows, &submat_cols,
+                                               npars, -1);
 
         submat_rank = FLINT_MIN(submat_rows, submat_cols);
 

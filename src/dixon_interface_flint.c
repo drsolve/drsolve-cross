@@ -1,6 +1,7 @@
 // Complete fixed Dixon resultant string interface implementation
 #include "dixon_interface_flint.h"
 #include "dixon_complexity.h"
+#include "dixon_fast_flint.h"
 #include <flint/arith.h>
 #include <flint/fmpq.h>
 #include <flint/fmpq_poly.h>
@@ -1114,6 +1115,9 @@ char* compute_dixon_internal_with_file(const char **poly_strings, slong npoly_st
     if (g_resultant_method == RESULTANT_METHOD_MACAULAY) {
         fq_macaulay_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
                                          state.var_names, state.par_names, gen_name);
+    } else if (g_resultant_method == RESULTANT_METHOD_DIXON_FAST) {
+        fq_dixon_fast_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
+                                           state.var_names, state.par_names, gen_name);
     } else {
         fq_dixon_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
                                       state.var_names, state.par_names, gen_name);

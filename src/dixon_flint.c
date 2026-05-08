@@ -17,6 +17,8 @@ resultant_method_t g_resultant_method = RESULTANT_METHOD_DIXON;
 int g_dixon_verbose_level = 1;
 int g_dixon_debug_mode = 0;
 int g_dixon_show_step_timing = 0;
+int g_dixon_fast_use_ksy_precondition = 0;
+slong g_dixon_fast_ksy_constant_col = 0;
 
 static const char *dixon_det_method_name(det_method_t method)
 {
@@ -50,8 +52,9 @@ int dixon_get_effective_interpolation_threads(void)
         return g_interpolation_threads;
     }
     threads = omp_get_max_threads();
+    threads = (threads + 1) / 2;
 #endif
-    return threads;
+    return threads > 0 ? threads : 1;
 }
 
 static void dixon_info_log(const char *fmt, ...)
@@ -389,6 +392,38 @@ static slong evaluate_selected_submatrix_rank(fq_mvpoly_t ***full_matrix,
     return rank;
 }
 
+static slong evaluate_selected_rectangular_submatrix_rank(fq_mvpoly_t ***full_matrix,
+                                                         const slong *row_indices,
+                                                         slong num_rows,
+                                                         const slong *col_indices,
+                                                         slong num_cols,
+                                                         const fq_nmod_t *param_vals,
+                                                         const fq_nmod_ctx_t ctx)
+{
+    fq_nmod_mat_t mat;
+    fq_nmod_t value;
+
+    fq_nmod_mat_init(mat, num_rows, num_cols, ctx);
+    fq_nmod_init(value, ctx);
+
+    for (slong i = 0; i < num_rows; i++) {
+        for (slong j = 0; j < num_cols; j++) {
+            fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+            if (entry != NULL) {
+                evaluate_fq_mvpoly_at_params(value, entry, param_vals);
+                fq_nmod_set(fq_nmod_mat_entry(mat, i, j), value, ctx);
+            } else {
+                fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+            }
+        }
+    }
+
+    slong rank = fq_nmod_mat_rank(mat, ctx);
+    fq_nmod_clear(value, ctx);
+    fq_nmod_mat_clear(mat, ctx);
+    return rank;
+}
+
 static slong evaluate_selected_submatrix_rank_extension(fq_mvpoly_t ***full_matrix,
                                                        const slong *row_indices,
                                                        const slong *col_indices,
@@ -417,6 +452,125 @@ static slong evaluate_selected_submatrix_rank_extension(fq_mvpoly_t ***full_matr
     fq_nmod_clear(value, ext_ctx);
     fq_nmod_mat_clear(mat, ext_ctx);
     return rank;
+}
+
+static slong evaluate_selected_rectangular_submatrix_rank_extension(
+    fq_mvpoly_t ***full_matrix,
+    const slong *row_indices,
+    slong num_rows,
+    const slong *col_indices,
+    slong num_cols,
+    const fq_nmod_t *param_vals,
+    const fq_nmod_ctx_t ext_ctx)
+{
+    fq_nmod_mat_t mat;
+    fq_nmod_t value;
+
+    fq_nmod_mat_init(mat, num_rows, num_cols, ext_ctx);
+    fq_nmod_init(value, ext_ctx);
+
+    for (slong i = 0; i < num_rows; i++) {
+        for (slong j = 0; j < num_cols; j++) {
+            fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+            if (entry != NULL) {
+                evaluate_fq_mvpoly_at_extension_params(value, entry, param_vals, ext_ctx);
+                fq_nmod_set(fq_nmod_mat_entry(mat, i, j), value, ext_ctx);
+            } else {
+                fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ext_ctx);
+            }
+        }
+    }
+
+    slong rank = fq_nmod_mat_rank(mat, ext_ctx);
+    fq_nmod_clear(value, ext_ctx);
+    fq_nmod_mat_clear(mat, ext_ctx);
+    return rank;
+}
+
+static int selected_rows_satisfy_ksy_precondition(
+    fq_mvpoly_t ***full_matrix,
+    const slong *row_indices,
+    slong size,
+    slong total_cols,
+    slong ksy_constant_col,
+    const fq_nmod_t *param_vals,
+    const fq_nmod_ctx_t ctx)
+{
+    slong *reduced_cols;
+    slong reduced_rank;
+
+    if (ksy_constant_col < 0 || size <= 0 || total_cols <= 0) {
+        return 1;
+    }
+
+    if (ksy_constant_col >= total_cols) {
+        return 0;
+    }
+
+    if (size == 1) {
+        return 1;
+    }
+
+    reduced_cols = (slong *) flint_malloc((size_t) (total_cols - 1) * sizeof(slong));
+    for (slong j = 0, out = 0; j < total_cols; j++) {
+        if (j == ksy_constant_col) {
+            continue;
+        }
+        reduced_cols[out++] = j;
+    }
+
+    reduced_rank = evaluate_selected_rectangular_submatrix_rank(full_matrix,
+                                                                row_indices,
+                                                                size,
+                                                                reduced_cols,
+                                                                total_cols - 1,
+                                                                param_vals,
+                                                                ctx);
+    flint_free(reduced_cols);
+    return reduced_rank == size - 1;
+}
+
+static int selected_rows_satisfy_ksy_precondition_extension(
+    fq_mvpoly_t ***full_matrix,
+    const slong *row_indices,
+    slong size,
+    slong total_cols,
+    slong ksy_constant_col,
+    const fq_nmod_t *param_vals,
+    const fq_nmod_ctx_t ext_ctx)
+{
+    slong *reduced_cols;
+    slong reduced_rank;
+
+    if (ksy_constant_col < 0 || size <= 0 || total_cols <= 0) {
+        return 1;
+    }
+
+    if (ksy_constant_col >= total_cols) {
+        return 0;
+    }
+
+    if (size == 1) {
+        return 1;
+    }
+
+    reduced_cols = (slong *) flint_malloc((size_t) (total_cols - 1) * sizeof(slong));
+    for (slong j = 0, out = 0; j < total_cols; j++) {
+        if (j == ksy_constant_col) {
+            continue;
+        }
+        reduced_cols[out++] = j;
+    }
+
+    reduced_rank = evaluate_selected_rectangular_submatrix_rank_extension(full_matrix,
+                                                                          row_indices,
+                                                                          size,
+                                                                          reduced_cols,
+                                                                          total_cols - 1,
+                                                                          param_vals,
+                                                                          ext_ctx);
+    flint_free(reduced_cols);
+    return reduced_rank == size - 1;
 }
 
 // Build cancellation matrix in multivariate form
@@ -1088,6 +1242,92 @@ static int indices_equal(slong *indices1, slong *indices2, slong size) {
     }
     return 1;
 }
+
+static int select_ksy_columns_from_transposed(slong **selected_cols_out,
+                                              slong *num_selected_cols_out,
+                                              int *ksy_condition_met,
+                                              const field_elem_u *transposed,
+                                              slong ncols,
+                                              slong target_rank,
+                                              const fq_index_degree_pair *col_degrees,
+                                              slong ksy_constant_col,
+                                              field_ctx_t *ctx)
+{
+    unified_row_basis_tracker_t nonconst_tracker;
+    unified_row_basis_tracker_t verify_tracker;
+    slong *candidate_cols;
+    slong nonconst_rank;
+    slong output_size = 0;
+    int constant_independent = 0;
+
+    *selected_cols_out = NULL;
+    *num_selected_cols_out = 0;
+    *ksy_condition_met = 0;
+
+    if (ksy_constant_col < 0 || ksy_constant_col >= ncols || target_rank <= 0) {
+        return 0;
+    }
+
+    candidate_cols = (slong *) flint_malloc((size_t) target_rank * sizeof(slong));
+    unified_row_basis_tracker_init(&nonconst_tracker, target_rank, target_rank, ctx);
+
+    for (slong j = 0; j < ncols && nonconst_tracker.current_rank < target_rank; j++) {
+        slong col_idx = col_degrees[j].index;
+        if (col_idx == ksy_constant_col) {
+            continue;
+        }
+        unified_try_add_row_to_basis(&nonconst_tracker, transposed, col_idx, target_rank);
+    }
+
+    nonconst_rank = nonconst_tracker.current_rank;
+    unified_row_basis_tracker_init(&verify_tracker,
+                                   FLINT_MIN(nonconst_rank + 1, target_rank),
+                                   target_rank,
+                                   ctx);
+    for (slong i = 0; i < nonconst_rank && verify_tracker.current_rank < nonconst_rank; i++) {
+        unified_try_add_row_to_basis(&verify_tracker,
+                                     transposed,
+                                     nonconst_tracker.selected_indices[i],
+                                     target_rank);
+    }
+    if (verify_tracker.current_rank == nonconst_rank) {
+        constant_independent =
+            unified_try_add_row_to_basis(&verify_tracker,
+                                         transposed,
+                                         ksy_constant_col,
+                                         target_rank);
+    }
+
+    unified_row_basis_tracker_clear(&verify_tracker);
+    if (constant_independent) {
+        output_size = nonconst_rank + 1;
+        candidate_cols[0] = ksy_constant_col;
+        if (nonconst_rank > 0) {
+            memcpy(candidate_cols + 1,
+                   nonconst_tracker.selected_indices,
+                   (size_t) nonconst_rank * sizeof(slong));
+        }
+        *ksy_condition_met = 1;
+    } else {
+        output_size = FLINT_MIN(nonconst_rank, target_rank - 1);
+        if (output_size > 0) {
+            memcpy(candidate_cols,
+                   nonconst_tracker.selected_indices,
+                   (size_t) output_size * sizeof(slong));
+        }
+    }
+
+    unified_row_basis_tracker_clear(&nonconst_tracker);
+
+    if (output_size <= 0) {
+        flint_free(candidate_cols);
+        return 0;
+    }
+
+    *selected_cols_out = candidate_cols;
+    *num_selected_cols_out = output_size;
+    return 1;
+}
 // Find pivot rows for maximal rank submatrix - ensure linear independence
 // More efficient version: using incremental rank checking
 void find_pivot_rows_nmod_fixed(slong **selected_rows_out, slong *num_selected,
@@ -1372,7 +1612,8 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                                            slong **row_indices_out, 
                                            slong **col_indices_out,
                                            slong *num_rows, slong *num_cols,
-                                           slong npars) {
+                                           slong npars,
+                                           slong ksy_constant_col) {
     // Get context
     const fq_nmod_ctx_struct *ctx = NULL;
     for (slong i = 0; i < nrows && !ctx; i++) {
@@ -1408,6 +1649,7 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
     slong *accepted_cols = NULL;
     slong accepted_score = -1;
     int selection_stable = 0;
+    const int require_ksy_precondition = (ksy_constant_col >= 0);
 
     for (slong selection_attempt = 0;
          selection_attempt < MAX_SELECTION_ATTEMPTS && !selection_stable;
@@ -1433,6 +1675,7 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         const slong MAX_ITERATIONS = 10;
         slong iteration = 0;
         int converged = 0;
+        int ksy_condition_met = 0;
 
         for (slong i = 0; i < nrows; i++) {
             for (slong j = 0; j < ncols; j++) {
@@ -1601,30 +1844,55 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                 }
             }
 
-            unified_row_basis_tracker_t col_tracker;
-            unified_row_basis_tracker_init(&col_tracker, ncols, current_size, &selection_ctx);
+            slong col_rank_selected = 0;
+            slong *selected_cols = NULL;
 
-            for (slong j = 0; j < ncols && col_tracker.current_rank < current_size; j++) {
-                slong col_idx = col_degrees[j].index;
-                unified_try_add_row_to_basis(&col_tracker, transposed, col_idx, current_size);
+            if (require_ksy_precondition && current_size > 0) {
+                int helper_ksy_met = 0;
+                if (select_ksy_columns_from_transposed(&selected_cols,
+                                                       &col_rank_selected,
+                                                       &helper_ksy_met,
+                                                       transposed,
+                                                       ncols,
+                                                       current_size,
+                                                       col_degrees,
+                                                       ksy_constant_col,
+                                                       &selection_ctx)) {
+                    ksy_condition_met = helper_ksy_met;
+                }
             }
 
-            slong col_rank_selected = col_tracker.current_rank;
+            if (!ksy_condition_met) {
+                unified_row_basis_tracker_t col_tracker;
+                unified_row_basis_tracker_init(&col_tracker, ncols, current_size, &selection_ctx);
+
+                for (slong j = 0; j < ncols && col_tracker.current_rank < current_size; j++) {
+                    slong col_idx = col_degrees[j].index;
+                    unified_try_add_row_to_basis(&col_tracker, transposed, col_idx, current_size);
+                }
+
+                col_rank_selected = col_tracker.current_rank;
+                selected_cols = (slong*) flint_malloc(col_rank_selected * sizeof(slong));
+                memcpy(selected_cols, col_tracker.selected_indices, col_rank_selected * sizeof(slong));
+                unified_row_basis_tracker_clear(&col_tracker);
+            }
 
             if (iteration == 0) {
-                current_col_indices = (slong*) flint_malloc(col_tracker.current_rank * sizeof(slong));
+                current_col_indices = (slong*) flint_malloc(col_rank_selected * sizeof(slong));
             } else {
                 flint_free(current_col_indices);
-                current_col_indices = (slong*) flint_malloc(col_tracker.current_rank * sizeof(slong));
+                current_col_indices = (slong*) flint_malloc(col_rank_selected * sizeof(slong));
             }
-            memcpy(current_col_indices, col_tracker.selected_indices, col_tracker.current_rank * sizeof(slong));
-            current_size = FLINT_MIN(current_size, col_tracker.current_rank);
+            memcpy(current_col_indices, selected_cols, col_rank_selected * sizeof(slong));
+            current_size = FLINT_MIN(current_size, col_rank_selected);
+            if (selected_cols != NULL) {
+                flint_free(selected_cols);
+            }
 
             for (slong i = 0; i < ncols * transposed_rows; i++) {
                 field_clear_elem(&transposed[i], selection_ctx.field_id, ctx_ptr);
             }
             flint_free(transposed);
-            unified_row_basis_tracker_clear(&col_tracker);
             flint_free(col_degrees);
 
             if (iteration > 0) {
@@ -1650,6 +1918,8 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
 
         slong final_rank;
         slong verify_rank;
+        int final_ksy_ok = !require_ksy_precondition;
+        int verify_ksy_ok = !require_ksy_precondition;
         if (use_extension_specialization) {
             final_rank = evaluate_selected_submatrix_rank_extension(
                 full_matrix, current_row_indices, current_col_indices, current_size,
@@ -1662,6 +1932,16 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             verify_rank = evaluate_selected_submatrix_rank_extension(
                 full_matrix, current_row_indices, current_col_indices, current_size,
                 verify_vals, extension_eval_ctx);
+            if (require_ksy_precondition) {
+                final_ksy_ok =
+                    selected_rows_satisfy_ksy_precondition_extension(
+                        full_matrix, current_row_indices, current_size, ncols,
+                        ksy_constant_col, param_vals, extension_eval_ctx);
+                verify_ksy_ok =
+                    selected_rows_satisfy_ksy_precondition_extension(
+                        full_matrix, current_row_indices, current_size, ncols,
+                        ksy_constant_col, verify_vals, extension_eval_ctx);
+            }
             clear_evaluation_parameters(verify_vals, npars, extension_eval_ctx);
         } else {
             final_rank = evaluate_selected_submatrix_rank(
@@ -1673,12 +1953,24 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             verify_rank = evaluate_selected_submatrix_rank(
                 full_matrix, current_row_indices, current_col_indices, current_size,
                 verify_vals, ctx);
+            if (require_ksy_precondition) {
+                final_ksy_ok = selected_rows_satisfy_ksy_precondition(
+                    full_matrix, current_row_indices, current_size, ncols,
+                    ksy_constant_col, param_vals, ctx);
+                verify_ksy_ok = selected_rows_satisfy_ksy_precondition(
+                    full_matrix, current_row_indices, current_size, ncols,
+                    ksy_constant_col, verify_vals, ctx);
+            }
             clear_evaluation_parameters(verify_vals, npars, ctx);
         }
 
         slong candidate_score = 0;
         if (final_rank == current_size) candidate_score++;
         if (verify_rank == current_size) candidate_score++;
+        if (require_ksy_precondition) {
+            if (final_ksy_ok) candidate_score += 2;
+            if (verify_ksy_ok) candidate_score += 2;
+        }
 
         if (current_size > accepted_size ||
             (current_size == accepted_size && candidate_score > accepted_score)) {
@@ -1692,10 +1984,14 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             accepted_score = candidate_score;
         }
 
-        if (candidate_score == 2) {
+        if (candidate_score == (require_ksy_precondition ? 6 : 2)) {
             selection_stable = 1;
         } else {
-            dixon_debug_log("  Submatrix verification failed; retrying with a new specialization.\n");
+            if (require_ksy_precondition && (!final_ksy_ok || !verify_ksy_ok)) {
+                dixon_debug_log("  Candidate submatrix failed the KSY precondition; retrying with a new specialization.\n");
+            } else {
+                dixon_debug_log("  Submatrix verification failed; retrying with a new specialization.\n");
+            }
         }
 
         if (prev_row_indices) flint_free(prev_row_indices);
@@ -1719,8 +2015,13 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         *num_cols = 0;
     } else {
         if (!selection_stable) {
-            dixon_info_log("Warning: using best available submatrix after %ld attempts.\n",
-                           MAX_SELECTION_ATTEMPTS);
+            if (require_ksy_precondition) {
+                dixon_info_log("Warning: using best available submatrix after %ld attempts (KSY precondition not certified for every test).\n",
+                               MAX_SELECTION_ATTEMPTS);
+            } else {
+                dixon_info_log("Warning: using best available submatrix after %ld attempts.\n",
+                               MAX_SELECTION_ATTEMPTS);
+            }
         }
         *row_indices_out = accepted_rows;
         *col_indices_out = accepted_cols;
@@ -2106,7 +2407,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
             find_fq_optimal_maximal_rank_submatrix(full_matrix, nx_monoms, ndual_monoms,
                                                   &row_idx_array, &col_idx_array, 
                                                   &num_rows, &num_cols,
-                                                  npars);
+                                                  npars, -1);
         }
     }
 

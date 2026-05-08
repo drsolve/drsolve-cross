@@ -1,4 +1,6 @@
 #include "fq_mvpoly.h"
+#include "fq_mpoly_mat_det.h"
+#include "unified_mpoly_interface.h"
 
 /* ============================================================================
  * Field Equation Reduction Mode
@@ -581,7 +583,99 @@ void fq_mvpoly_print_enhanced(const fq_mvpoly_t *poly, const char *name,
  * Arithmetic Operations Implementation
  * ============================================================================ */
 
-void fq_mvpoly_mul(fq_mvpoly_t *result, const fq_mvpoly_t *a, const fq_mvpoly_t *b) {
+typedef struct {
+    int initialized;
+    const fq_nmod_ctx_struct *fq_ctx;
+    slong total_vars;
+    field_ctx_t field_ctx;
+    unified_mpoly_ctx_t unified_ctx;
+} fq_mvpoly_mul_unified_cache_t;
+
+static __thread fq_mvpoly_mul_unified_cache_t g_fq_mvpoly_mul_unified_cache = {0};
+
+static void fq_mvpoly_mul_unified_cache_clear(void)
+{
+    if (!g_fq_mvpoly_mul_unified_cache.initialized) {
+        return;
+    }
+
+    if (g_fq_mvpoly_mul_unified_cache.unified_ctx != NULL) {
+        unified_mpoly_ctx_clear(g_fq_mvpoly_mul_unified_cache.unified_ctx);
+        g_fq_mvpoly_mul_unified_cache.unified_ctx = NULL;
+    }
+    field_ctx_clear(&g_fq_mvpoly_mul_unified_cache.field_ctx);
+    memset(&g_fq_mvpoly_mul_unified_cache, 0, sizeof(g_fq_mvpoly_mul_unified_cache));
+}
+
+static unified_mpoly_ctx_t fq_mvpoly_mul_get_cached_unified_ctx(const fq_mvpoly_t *poly,
+                                                                field_ctx_t **field_ctx_out)
+{
+    slong total_vars = poly->nvars + poly->npars;
+
+    if (!g_fq_mvpoly_mul_unified_cache.initialized ||
+        g_fq_mvpoly_mul_unified_cache.fq_ctx != poly->ctx ||
+        g_fq_mvpoly_mul_unified_cache.total_vars != total_vars) {
+        fq_mvpoly_mul_unified_cache_clear();
+
+        field_ctx_init_enhanced(&g_fq_mvpoly_mul_unified_cache.field_ctx, poly->ctx, 1L << 20);
+        g_fq_mvpoly_mul_unified_cache.unified_ctx =
+            unified_mpoly_ctx_init(total_vars, ORD_LEX, &g_fq_mvpoly_mul_unified_cache.field_ctx);
+        g_fq_mvpoly_mul_unified_cache.fq_ctx = poly->ctx;
+        g_fq_mvpoly_mul_unified_cache.total_vars = total_vars;
+        g_fq_mvpoly_mul_unified_cache.initialized =
+            (g_fq_mvpoly_mul_unified_cache.unified_ctx != NULL);
+    }
+
+    if (!g_fq_mvpoly_mul_unified_cache.initialized) {
+        if (field_ctx_out != NULL) {
+            *field_ctx_out = NULL;
+        }
+        return NULL;
+    }
+
+    if (field_ctx_out != NULL) {
+        *field_ctx_out = &g_fq_mvpoly_mul_unified_cache.field_ctx;
+    }
+    return g_fq_mvpoly_mul_unified_cache.unified_ctx;
+}
+
+static void fq_mvpoly_stack_unified_init(unified_mpoly_t poly, unified_mpoly_ctx_t ctx)
+{
+    poly->field_id = ctx->field_ctx->field_id;
+    poly->ctx_ptr = ctx;
+
+    switch (poly->field_id) {
+        case FIELD_ID_NMOD:
+            nmod_mpoly_init(&poly->data.nmod_poly, &ctx->ctx.nmod_ctx);
+            break;
+        case FIELD_ID_FQ_ZECH:
+            fq_zech_mpoly_init(&poly->data.zech_poly, &ctx->ctx.zech_ctx);
+            break;
+        default:
+            fq_nmod_mpoly_init(&poly->data.fq_poly, &ctx->ctx.fq_ctx);
+            break;
+    }
+}
+
+static void fq_mvpoly_stack_unified_clear(unified_mpoly_t poly)
+{
+    unified_mpoly_ctx_t ctx = poly->ctx_ptr;
+
+    switch (poly->field_id) {
+        case FIELD_ID_NMOD:
+            nmod_mpoly_clear(&poly->data.nmod_poly, &ctx->ctx.nmod_ctx);
+            break;
+        case FIELD_ID_FQ_ZECH:
+            fq_zech_mpoly_clear(&poly->data.zech_poly, &ctx->ctx.zech_ctx);
+            break;
+        default:
+            fq_nmod_mpoly_clear(&poly->data.fq_poly, &ctx->ctx.fq_ctx);
+            break;
+    }
+}
+
+static void fq_mvpoly_mul_fallback(fq_mvpoly_t *result, const fq_mvpoly_t *a, const fq_mvpoly_t *b)
+{
     fq_mvpoly_t temp;
     fq_mvpoly_init(&temp, a->nvars, a->npars, a->ctx);
     
@@ -626,6 +720,84 @@ void fq_mvpoly_mul(fq_mvpoly_t *result, const fq_mvpoly_t *a, const fq_mvpoly_t 
 
     if (g_field_equation_reduction)
         fq_mvpoly_reduce_field_equation(result);
+}
+
+void fq_mvpoly_mul(fq_mvpoly_t *result, const fq_mvpoly_t *a, const fq_mvpoly_t *b) {
+    field_ctx_t *field_ctx = NULL;
+    unified_mpoly_ctx_t unified_ctx = fq_mvpoly_mul_get_cached_unified_ctx(a, &field_ctx);
+
+    if (a->nvars != b->nvars || a->npars != b->npars || a->ctx != b->ctx || unified_ctx == NULL) {
+        fq_mvpoly_mul_fallback(result, a, b);
+        return;
+    }
+
+    /*
+     * We currently feed unified_mpoly_mul through nmod/fq_nmod backends directly.
+     * Zech-backed unified polynomials need an explicit fq_nmod -> fq_zech conversion
+     * path that we do not have here yet, so keep them on the old safe path.
+     */
+    if (field_ctx->field_id == FIELD_ID_FQ_ZECH) {
+        fq_mvpoly_mul_fallback(result, a, b);
+        return;
+    }
+
+    {
+        unified_mpoly_struct ua_storage, ub_storage, ur_storage;
+        unified_mpoly_t ua = &ua_storage;
+        unified_mpoly_t ub = &ub_storage;
+        unified_mpoly_t ur = &ur_storage;
+        fq_mvpoly_t temp;
+        int ok = 0;
+
+        memset(&temp, 0, sizeof(temp));
+
+        fq_mvpoly_stack_unified_init(ua, unified_ctx);
+        fq_mvpoly_stack_unified_init(ub, unified_ctx);
+        fq_mvpoly_stack_unified_init(ur, unified_ctx);
+
+        if (field_ctx->field_id == FIELD_ID_NMOD) {
+            fq_mvpoly_to_nmod_mpoly(&ua->data.nmod_poly, a, &unified_ctx->ctx.nmod_ctx);
+            fq_mvpoly_to_nmod_mpoly(&ub->data.nmod_poly, b, &unified_ctx->ctx.nmod_ctx);
+            ok = unified_mpoly_mul(ur, ua, ub);
+
+            if (ok) {
+                nmod_mpoly_to_fq_mvpoly(&temp,
+                                        &ur->data.nmod_poly,
+                                        a->nvars,
+                                        a->npars,
+                                        &unified_ctx->ctx.nmod_ctx,
+                                        a->ctx);
+            }
+        } else {
+            fq_mvpoly_to_fq_nmod_mpoly(&ua->data.fq_poly, a, &unified_ctx->ctx.fq_ctx);
+            fq_mvpoly_to_fq_nmod_mpoly(&ub->data.fq_poly, b, &unified_ctx->ctx.fq_ctx);
+            ok = unified_mpoly_mul(ur, ua, ub);
+
+            if (ok) {
+                fq_nmod_mpoly_to_fq_mvpoly(&temp,
+                                           &ur->data.fq_poly,
+                                           a->nvars,
+                                           a->npars,
+                                           &unified_ctx->ctx.fq_ctx,
+                                           a->ctx);
+            }
+        }
+
+        fq_mvpoly_stack_unified_clear(ur);
+        fq_mvpoly_stack_unified_clear(ub);
+        fq_mvpoly_stack_unified_clear(ua);
+
+        if (!ok) {
+            fq_mvpoly_clear_safe(&temp);
+            fq_mvpoly_mul_fallback(result, a, b);
+            return;
+        }
+
+        if (result == a || result == b) {
+            fq_mvpoly_clear(result);
+        }
+        *result = temp;
+    }
 }
 
 void fq_mvpoly_pow(fq_mvpoly_t *result, const fq_mvpoly_t *base, slong power) {

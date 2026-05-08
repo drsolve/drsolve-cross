@@ -563,6 +563,7 @@ list(APPEND _drsolve_deps ${_sys_libs})
 # ============================================================
 set(MATH_SOURCES
   src/dixon_complexity.c
+  src/dixon_fast_flint.c
   src/dixon_flint.c
   src/dixon_interface_flint.c
   src/dixon_test.c
