@@ -144,7 +144,7 @@ EXTERNAL_STATIC_ALL_LIBS = $(PML_STATIC_LIBS) $(FLINT_STATIC_LIBS) \
 # Source files for the math library (in src directory)
 # ============================================================
 MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
-               $(SRC_DIR)/dixon_fast_flint.c \
+               $(SRC_DIR)/dixon_recursive.c \
                $(SRC_DIR)/dixon_flint.c \
                $(SRC_DIR)/dixon_interface_flint.c \
                $(SRC_DIR)/dixon_test.c \

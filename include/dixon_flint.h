@@ -76,6 +76,9 @@ extern slong g_dixon_fast_ksy_constant_col;
 int dixon_method_uses_parallel_timing(det_method_t method);
 int dixon_get_effective_interpolation_threads(void);
 void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed);
+void dixon_maybe_print_parallel_step_time(const char *step_label,
+                                          double cpu_elapsed,
+                                          double wall_elapsed);
 void dixon_maybe_print_step_method_time(const char *step_label,
                                         det_method_t method,
                                         double cpu_elapsed,

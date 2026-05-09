@@ -1,7 +1,7 @@
 // Complete fixed Dixon resultant string interface implementation
 #include "dixon_interface_flint.h"
 #include "dixon_complexity.h"
-#include "dixon_fast_flint.h"
+#include "dixon_recursive.h"
 #include <flint/arith.h>
 #include <flint/fmpq.h>
 #include <flint/fmpq_poly.h>

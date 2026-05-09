@@ -1,5 +1,5 @@
-#ifndef DIXON_FAST_FLINT_H
-#define DIXON_FAST_FLINT_H
+#ifndef DIXON_RECURSIVE_H
+#define DIXON_RECURSIVE_H
 
 #include <flint/flint.h>
 #include "fq_mvpoly.h"

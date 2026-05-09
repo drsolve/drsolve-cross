@@ -35,6 +35,38 @@ int compare_desc(const void *a, const void *b) {
     return (long_b > long_a) - (long_b < long_a);
 }
 
+static double log2_degree_cost(long degree) {
+    return (degree > 1) ? log2((double) degree) : 0.0;
+}
+
+static int build_recursive_degree_surrogate(long *dst,
+                                            const long *degrees,
+                                            slong num_polys,
+                                            slong degree_count) {
+    long *tmp = NULL;
+
+    if (dst == NULL || degrees == NULL || num_polys <= 0 || degree_count <= 0 ||
+        degree_count > num_polys) {
+        return 0;
+    }
+
+    tmp = (long *) flint_malloc((size_t) num_polys * sizeof(long));
+    if (tmp == NULL) {
+        return 0;
+    }
+
+    for (slong i = 0; i < num_polys; i++) {
+        tmp[i] = degrees[i] > 0 ? degrees[i] : 1;
+    }
+    qsort(tmp, (size_t) num_polys, sizeof(long), compare_desc);
+    for (slong i = 0; i < degree_count; i++) {
+        dst[i] = tmp[num_polys - degree_count + i];
+    }
+
+    flint_free(tmp);
+    return 1;
+}
+
 /**
  * Unified boundary height calculation function
  * 
@@ -691,6 +723,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     if (report->step1_var_count < 0) {
         report->step1_var_count = 0;
     }
+    report->step12_recursive_log2 = INFINITY;
+    report->step12_standard_table_log2 = INFINITY;
 
     {
         int standard_step1_shape =
@@ -1102,6 +1136,47 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         }
     }
 
+    if (num_polys == num_elim_vars + 1 && num_elim_vars > 0) {
+        long *recursive_degrees =
+            (long *) flint_malloc((size_t) num_elim_vars * sizeof(long));
+
+        if (recursive_degrees != NULL &&
+            build_recursive_degree_surrogate(recursive_degrees,
+                                             degrees,
+                                             num_polys,
+                                             num_elim_vars)) {
+            double all_degree_log2 = 0.0;
+            double tail_degree_log2 = 0.0;
+
+            report->step12_recursive_n = num_elim_vars;
+            report->step12_recursive_m1 = recursive_degrees[0];
+            report->step12_recursive_factorial_log2 =
+                log2_factorial_slong(num_elim_vars);
+
+            for (slong i = 0; i < num_elim_vars; i++) {
+                double deg_log2 = log2_degree_cost(recursive_degrees[i]);
+                all_degree_log2 += deg_log2;
+                if (i > 0) {
+                    tail_degree_log2 += deg_log2;
+                }
+            }
+
+            report->step12_recursive_tail_degree_product_log2 =
+                tail_degree_log2;
+            report->step12_recursive_log2 =
+                2.0 * log2_degree_cost(report->step12_recursive_m1) +
+                3.0 * report->step12_recursive_factorial_log2 +
+                3.0 * tail_degree_log2;
+            report->step12_standard_table_log2 =
+                report->step12_recursive_factorial_log2 +
+                4.0 * all_degree_log2;
+        }
+
+        if (recursive_degrees != NULL) {
+            flint_free(recursive_degrees);
+        }
+    }
+
     bezout_bound_fmpz(bezout_step4, degrees, num_polys);
     {
         double log2_M_la =
@@ -1329,6 +1404,11 @@ static double select_step1_best_method(const dixon_complexity_report_t *report,
         best = report->step1_sparse_log2;
         method = "sparse interpolation";
     }
+    if (isfinite(report->step12_recursive_log2) &&
+        report->step12_recursive_log2 < best) {
+        best = report->step12_recursive_log2;
+        method = "recursive block Dixon construction";
+    }
 
     if (method_out != NULL) {
         *method_out = method;
@@ -1373,6 +1453,14 @@ static void dixon_complexity_write_report_body(
         const dixon_complexity_report_t *report,
         double omega) {
     int verbose_level = g_dixon_verbose_level;
+    if (verbose_level <= 0) {
+        fprintf(fp,
+                "Overall Dixon complexity (selected Step 1/2=%s, Step 4=%s, log2): %.6f\n",
+                report->step1_best_method ? report->step1_best_method : "unknown",
+                report->step4_best_method ? report->step4_best_method : "unknown",
+                dixon_complexity_best_total_log2(report));
+        return;
+    }
 
     fprintf(fp, "--- Raw parameters ---\n");
     fprintf(fp, "Equations: %ld\n", num_polys);
@@ -1404,36 +1492,36 @@ static void dixon_complexity_write_report_body(
     fmpz_fprint(fp, bezout_bound);
     fprintf(fp, "\n");
 
-    fprintf(fp, "\n--- Step 1 ---\n");
+    fprintf(fp, "\n--- Step 1/2 ---\n");
     fprintf(fp, "Cancellation matrix size: %ld x %ld\n", num_polys, num_polys);
-    fprintf(fp, "Step 1 indeterminates (2*elim + params): %ld = 2*%ld + %ld\n",
+    fprintf(fp, "Step 1/2 indeterminates (2*elim + params): %ld = 2*%ld + %ld\n",
             report->step1_var_count, report->num_elim_vars, report->num_parameter_vars);
-    fprintf(fp, "Step 1 determinant total degree upper bound: %ld\n",
+    fprintf(fp, "Step 1/2 determinant total degree upper bound: %ld\n",
             report->step1_det_total_degree);
-    fprintf(fp, "Step 1 Kronecker univariate degree upper bound (log2): %.6f\n",
+    fprintf(fp, "Step 1/2 Kronecker univariate degree upper bound (log2): %.6f\n",
             report->step1_kronecker_degree_log2);
-    fprintf(fp, "Step 1 sparse term upper bound (log2 T): %.6f\n",
+    fprintf(fp, "Step 1/2 sparse term upper bound (log2 T): %.6f\n",
             report->step1_sparse_term_bound_log2);
     if (verbose_level >= 2) {
-        fprintf(fp, "Step 1 sparse structural model: T <= M^2 (B+1)^r with M=");
+        fprintf(fp, "Step 1/2 sparse structural model: T <= M^2 (B+1)^r with M=");
         fmpz_fprint(fp, matrix_size);
         fprintf(fp, ", B=%ld, r=%ld (#parameter vars)\n",
                 report->step1_sparse_param_degree_bound, report->num_parameter_vars);
-        fprintf(fp, "Step 1 sparse partial degree upper bound D: %ld\n",
+        fprintf(fp, "Step 1/2 sparse partial degree upper bound D: %ld\n",
                 report->step1_sparse_partial_degree_bound);
-        fprintf(fp, "Step 1 characteristic-side theorem condition: p >= D ? %s (p=", 
+        fprintf(fp, "Step 1/2 characteristic-side theorem condition: p >= D ? %s (p=", 
                 fmpz_cmp_ui(field_characteristic,
                             (ulong) (report->step1_sparse_partial_degree_bound > 0
                                 ? report->step1_sparse_partial_degree_bound : 0)) >= 0 ? "yes" : "no");
         fmpz_fprint(fp, field_characteristic);
         fprintf(fp, ", D=%ld)\n", report->step1_sparse_partial_degree_bound);
-        fprintf(fp, "Step 1 sparse SLP-length proxy log2(L) [shared-structure model]: %.6f\n",
+        fprintf(fp, "Step 1/2 sparse SLP-length proxy log2(L) [shared-structure model]: %.6f\n",
             report->step1_sparse_slp_length_log2);
-        fprintf(fp, "Step 1 SLP proxy model: L ~= n^omega + n(B+1) + n^2 with n=%ld, omega=%.4f, B=%ld\n",
+        fprintf(fp, "Step 1/2 SLP proxy model: L ~= n^omega + n(B+1) + n^2 with n=%ld, omega=%.4f, B=%ld\n",
                 num_polys, omega, report->step1_sparse_param_degree_bound);
     }
-    //fprintf(fp, "Step 1 direct upper bound (log2): %.6f\n", report->step1_direct_log2);
-    fprintf(fp, "Step 1 direct multivariate cofactor expansion (naive, log2): %.6f\n",
+    //fprintf(fp, "Step 1/2 direct upper bound (log2): %.6f\n", report->step1_direct_log2);
+    fprintf(fp, "Step 1/2 direct multivariate cofactor expansion (naive, log2): %.6f\n",
             report->step1_direct_mpoly_log2);
     if (verbose_level >= 2) {
         fprintf(fp, "  Formula: log2(n!) + log2(M_mpoly), with M_mpoly ~= prod_j tau_j and tau_j <= binom(m + d_j, m)\n");
@@ -1443,7 +1531,7 @@ static void dixon_complexity_write_report_body(
                 report->step1_direct_factorial_log2,
                 report->step1_direct_mpoly_mul_proxy_log2);
     }
-    fprintf(fp, "Step 1 direct univariate after Kronecker (Leibniz/FFT, log2): %.6f\n",
+    fprintf(fp, "Step 1/2 direct univariate after Kronecker (Leibniz/FFT, log2): %.6f\n",
             report->step1_direct_factorial_log2 + report->step1_direct_fft_log2);
     
     if (verbose_level >= 2) {
@@ -1466,7 +1554,7 @@ static void dixon_complexity_write_report_body(
                 report->step1_kronecker_degree_log2,
                 report->step1_direct_dense_fft_log2);
     }
-    fprintf(fp, "Step 1 ordinary dense interpolation (tensor-grid, log2): %.6f\n",
+    fprintf(fp, "Step 1/2 ordinary dense interpolation (tensor-grid, log2): %.6f\n",
             report->step1_ordinary_interp_log2);
     if (verbose_level >= 2) {
         fprintf(fp, "  Formula: soft-O(N*L + N*sum_i soft-FFT(b_i))\n");
@@ -1479,7 +1567,7 @@ static void dixon_complexity_write_report_body(
                 report->step1_ordinary_probe_phase_log2,
                 report->step1_ordinary_tensor_phase_log2);
     }
-    fprintf(fp, "Step 1 Kronecker + HNF (log2): %.6f\n",
+    fprintf(fp, "Step 1/2 Kronecker + HNF (log2): %.6f\n",
             report->step1_hnf_log2);
     if (verbose_level >= 2) {
         fprintf(fp, "  Formula: omega*log2(n) + log2(s)\n");
@@ -1488,6 +1576,54 @@ static void dixon_complexity_write_report_body(
                 omega,
                 report->step1_hnf_linear_algebra_log2,
                 report->step1_hnf_degree_density_log2);
+    }
+    if (isfinite(report->step12_recursive_log2)) {
+        long *recursive_degrees =
+            (long *) flint_malloc((size_t) num_elim * sizeof(long));
+        int have_recursive_degrees =
+            (recursive_degrees != NULL) &&
+            build_recursive_degree_surrogate(recursive_degrees,
+                                             degrees,
+                                             num_polys,
+                                             num_elim);
+
+        fprintf(fp,
+                "Step 1/2 recursive block Dixon construction (Zhao/Qin surrogate, log2): %.6f\n",
+                report->step12_recursive_log2);
+        if (verbose_level >= 2) {
+            fprintf(fp,
+                    "  Formula: log2(m1^2 * (n!)^3 * prod_{i=2}^n m_i^3)\n");
+            fprintf(fp,
+                    "  Degree surrogate: since this report only stores per-equation total degrees, we take the smallest n=#elim equation degrees, then place the largest selected one in m1 so the lower exponent 2 falls on the largest surrogate degree.\n");
+            fprintf(fp,
+                    "  Values : n=%ld, m1=%ld, 3*log2(n!)=%.6f, 3*sum_{i=2}^n log2(m_i)=%.6f\n",
+                    report->step12_recursive_n,
+                    report->step12_recursive_m1,
+                    3.0 * report->step12_recursive_factorial_log2,
+                    3.0 * report->step12_recursive_tail_degree_product_log2);
+            if (have_recursive_degrees) {
+                fprintf(fp, "  Surrogate m_i sequence: [");
+                for (slong i = 0; i < num_elim; i++) {
+                    if (i > 0) fprintf(fp, ", ");
+                    fprintf(fp, "%ld", recursive_degrees[i]);
+                }
+                fprintf(fp, "]\n");
+            }
+        }
+        if (verbose_level >= 3) {
+            fprintf(fp,
+                    "  Table-1 standard construction surrogate (same m_i model, log2): %.6f\n",
+                    report->step12_standard_table_log2);
+            fprintf(fp,
+                    "  Delta recursive-standard (log2): %.6f\n",
+                    report->step12_recursive_log2 - report->step12_standard_table_log2);
+        }
+        if (recursive_degrees != NULL) {
+            flint_free(recursive_degrees);
+        }
+    } else {
+        fprintf(fp,
+                "Step 1/2 recursive block Dixon construction: unavailable (requires #polys = #elim + 1 with #elim > 0)\n");
     }
     if (verbose_level >= 3) {
         long *step1_var_bounds = NULL;
@@ -1508,7 +1644,7 @@ static void dixon_complexity_write_report_body(
                                  num_parameter_vars,
                                  report->step1_det_total_degree);
 
-        fprintf(fp, "Step 1 variable-wise degree bounds used for Kronecker:\n");
+        fprintf(fp, "Step 1/2 variable-wise degree bounds used for Kronecker:\n");
         for (slong i = 0; i < num_elim; i++) {
             fprintf(fp, "  %s <= %ld\n",
                     elim_var_list[i],
@@ -1528,7 +1664,7 @@ static void dixon_complexity_write_report_body(
             }
         }
 
-        fprintf(fp, "Step 1 Kronecker degree estimate details:\n");
+        fprintf(fp, "Step 1/2 Kronecker degree estimate details:\n");
         if (standard_step1_shape) {
             fprintf(fp, "  Formula: deg_K <= sum_i b_i * prod_{j<i}(b_j + 1)\n");
             fprintf(fp, "  Order   : [elim vars, dual vars, parameter vars]\n");
@@ -1539,7 +1675,7 @@ static void dixon_complexity_write_report_body(
             fprintf(fp, "  Value   : log2(deg_K) = %.6f\n", detail_kronecker_log2);
         }
 
-        fprintf(fp, "Step 1 HNF s-estimate details:\n");
+        fprintf(fp, "Step 1/2 HNF s-estimate details:\n");
         if (standard_step1_shape) {
             fprintf(fp, "  Formula: s <= min(avg row degree, avg column degree)\n");
             fprintf(fp, "  Values : log2(avg row)=%.6f, log2(avg col)=%.6f, log2(s)=%.6f\n",
@@ -1552,7 +1688,7 @@ static void dixon_complexity_write_report_body(
                     report->step1_hnf_degree_density_log2);
         }
 
-        fprintf(fp, "Step 1 ordinary dense interpolation details:\n");
+        fprintf(fp, "Step 1/2 ordinary dense interpolation details:\n");
         fprintf(fp, "  Formula: N = prod_i (b_i + 1)\n");
         fprintf(fp, "  Factors :\n");
         for (slong i = 0; i < num_elim; i++) {
@@ -1610,7 +1746,7 @@ static void dixon_complexity_write_report_body(
                 report->step1_ordinary_probe_phase_log2,
                 report->step1_ordinary_tensor_phase_log2);
 
-        fprintf(fp, "Step 1 direct multivariate cofactor expansion proxy details:\n");
+        fprintf(fp, "Step 1/2 direct multivariate cofactor expansion proxy details:\n");
         fprintf(fp, "  Formula: tau_j <= binom(m + d_j, m), M_mpoly ~= prod_j tau_j\n");
         fprintf(fp, "  Meaning: use the original-variable dense monomial count of each input polynomial/column; introducing dual variables does not increase this entry-term proxy.\n");
         fprintf(fp, "  Values : m=%ld, log2(prod_j tau_j)=%.6f\n",
@@ -1623,7 +1759,7 @@ static void dixon_complexity_write_report_body(
                     log2_dense_monomial_count_upper(dj, num_all_vars));
         }
 
-        fprintf(fp, "Step 1 direct multivariate expansion backend note:\n");
+        fprintf(fp, "Step 1/2 direct multivariate expansion backend note:\n");
         fprintf(fp, "  Current --method 0 path is Laplace/cofactor expansion on multivariate entries.\n");
         fprintf(fp, "  Prime field backend multiply: nmod_mpoly_mul(...)\n");
         fprintf(fp, "  Extension field backend multiply: fq_nmod_mpoly_mul(...) via unified_mpoly_mul(...)\n");
@@ -1632,7 +1768,7 @@ static void dixon_complexity_write_report_body(
 
         free(step1_var_bounds);
     }
-    fprintf(fp, "Step 1 derivative sparse interpolation theoretical (Huang 2023, q-aware, log2): %.6f\n",
+    fprintf(fp, "Step 1/2 derivative sparse interpolation theoretical (Huang 2023, q-aware, log2): %.6f\n",
             report->step1_sparse_log2);
     if (verbose_level >= 2) {
         fprintf(fp, "  Formula: soft-O(L*T*log q + T*log^2 q)\n");
@@ -1652,12 +1788,12 @@ static void dixon_complexity_write_report_body(
             ? (report->step1_sparse_log2 + log2(theorem_retry))
             : INFINITY;
         if (theorem_char_ok) {
-            fprintf(fp, "Step 1 theorem success lower bound p >= 0.75\n");
+            fprintf(fp, "Step 1/2 theorem success lower bound p >= 0.75\n");
             // fprintf(fp, "Step 1 theorem retry factor upper estimate 1/p <= 1.33333333333\n");
-            fprintf(fp, "Step 1 theorem retry-adjusted expected sparse complexity (log2): %.6f\n",
+            fprintf(fp, "Step 1/2 theorem retry-adjusted expected sparse complexity (log2): %.6f\n",
                     theorem_expected);
         } else {
-            fprintf(fp, "Step 1 theorem success lower bound unavailable (char(F_q) < D)\n");
+            fprintf(fp, "Step 1/2 theorem success lower bound unavailable (char(F_q) < D)\n");
         }
 
         if (verbose_level >= 2) {
@@ -1666,7 +1802,7 @@ static void dixon_complexity_write_report_body(
             fprintf(fp, ", D=%ld -> %s\n",
                     report->step1_sparse_partial_degree_bound,
                     theorem_char_ok ? "satisfied" : "not satisfied");
-            fprintf(fp, "Step 1 probability track B (base-field one-shot bound):\n");
+            fprintf(fp, "Step 1/2 probability track B (base-field one-shot bound):\n");
             fprintf(fp, "  Formula: p >= max(0, 1 - D*T*(T-1)/(2*(q-1)))\n");
             fprintf(fp, "  Success bound: p >= %.12g\n",
                     report->step1_sparse_success_prob_lb);
@@ -1674,22 +1810,22 @@ static void dixon_complexity_write_report_body(
                     report->step1_sparse_retry_factor);
             fprintf(fp, "  Retry-adjusted expected sparse complexity (log2): %.6f\n",
                     report->step1_sparse_expected_log2);
-            fprintf(fp, "Step 1 sufficient q-threshold for base-field p >= 3/4 from current D,T upper bounds (log2 q): %.6f\n",
+            fprintf(fp, "Step 1/2 sufficient q-threshold for base-field p >= 3/4 from current D,T upper bounds (log2 q): %.6f\n",
                     report->step1_sparse_q_for_three_quarters_log2);
             fprintf(fp, "  Sufficient base-field condition used here: q-1 >= 2*D*T*(T-1) (coarsened further in log-scale by T^2)\n");
             if (!isfinite(report->step1_sparse_retry_factor)) {
                 fprintf(fp,
-                        "Step 1 note: Huang 2023's theorem-level 3/4 guarantee follows from char(F_q) >= D together with its evaluation-space construction; "
+                        "Step 1/2 note: Huang 2023's theorem-level 3/4 guarantee follows from char(F_q) >= D together with its evaluation-space construction; "
                         "the bound printed above is a stricter base-field one-shot bound for the current implementation, which samples alpha directly in F_q.\n");
             }
         }
     }
     if (num_polys != num_elim + 1) {
         fprintf(fp,
-                "Step 1 note: standard Dixon resultant shape expects #polys = #elim + 1; current input is %ld vs %ld + 1.\n",
+                "Step 1/2 note: standard Dixon resultant shape expects #polys = #elim + 1; current input is %ld vs %ld + 1.\n",
                 num_polys, num_elim);
     }
-    fprintf(fp, "Best Step 1 estimate: %s (log2: %.6f)\n",
+    fprintf(fp, "Best Step 1/2 estimate: %s (log2: %.6f)\n",
             report->step1_best_method ? report->step1_best_method : "unknown",
             report->step1_best_log2);
 
@@ -1792,13 +1928,13 @@ static void dixon_complexity_write_report_body(
     }
 
     fprintf(fp, "\n--- Overall ---\n");
-    fprintf(fp, "Step 1 best : %s (log2: %.6f)\n",
+    fprintf(fp, "Step 1/2 best : %s (log2: %.6f)\n",
             report->step1_best_method ? report->step1_best_method : "unknown",
             report->step1_best_log2);
     fprintf(fp, "Step 4 best : %s (log2: %.6f)\n",
             report->step4_best_method ? report->step4_best_method : "unknown",
             report->step4_log2);
-    fprintf(fp, "Overall complexity = max(step1, step4) (log2): %.6f\n",
+    fprintf(fp, "Overall complexity = max(step1/2, step4) (log2): %.6f\n",
             dixon_complexity_best_total_log2(report));
 
     fprintf(fp, "\n--- Comparison: Macaulay / Groebner ---\n");
@@ -1971,6 +2107,21 @@ void run_complexity_analysis(
             printf("\nReport saved to: %s\n", output_filename);
         }
         printf("===========================\n");
+    } else if (g_dixon_verbose_level == 0) {
+        dixon_complexity_write_report_body(stdout,
+                                           num_polys,
+                                           num_all_vars,
+                                           all_vars,
+                                           elim_arr,
+                                           num_elim,
+                                           num_parameter_vars,
+                                           degrees,
+                                           field_characteristic,
+                                           field_order,
+                                           matrix_size,
+                                           bezout,
+                                           &report,
+                                           omega);
     }
 
     if (output_filename) {
@@ -2120,6 +2271,21 @@ void run_complexity_analysis_from_degrees(
             printf("\nReport saved to: %s\n", output_filename);
         }
         printf("===========================\n");
+    } else if (g_dixon_verbose_level == 0) {
+        dixon_complexity_write_report_body(stdout,
+                                           num_polys,
+                                           num_all_vars,
+                                           all_vars,
+                                           elim_arr,
+                                           num_elim_vars,
+                                           num_parameter_vars,
+                                           degrees,
+                                           field_characteristic,
+                                           field_order,
+                                           matrix_size,
+                                           bezout,
+                                           &report,
+                                           omega);
     }
 
     if (output_filename) {

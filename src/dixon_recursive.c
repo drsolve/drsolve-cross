@@ -1,5 +1,5 @@
 /*
- * dixon_fast_flint.c - Recursive block-matrix Dixon construction.
+ * dixon_recursive.c - Recursive block-matrix Dixon construction.
  *
  * This implementation follows the block recursion from Zhao/Fu (2005) and
  * the Maple reference in paper/dixonmaple/快速计算.mpl. At each elimination
@@ -17,7 +17,7 @@
  * Dixon polynomial.
  */
 
-#include "dixon_fast_flint.h"
+#include "dixon_recursive.h"
 
 #include <stdarg.h>
 #include <string.h>
@@ -37,6 +37,14 @@ typedef struct {
     const fq_nmod_ctx_struct *ctx;
     fq_mvpoly_t *entries;
 } fast_dixon_matrix_t;
+
+typedef struct {
+    slong rows;
+    slong total_nonzero;
+    slong *row_counts;
+    slong *row_offsets;
+    slong *col_indices;
+} fast_dixon_matrix_support_t;
 
 #define FAST_DIXON_ENTRY(mat, i, j) ((mat)->entries[(i) * (mat)->cols + (j)])
 
@@ -101,9 +109,16 @@ typedef struct {
     slong *slots;
     fq_mvpoly_t **keys;
     fast_dixon_matrix_t *values;
+    fast_dixon_matrix_support_t *supports;
 } fast_dixon_subproblem_cache_t;
 
 static void fast_dixon_matrix_clear(fast_dixon_matrix_t *mat);
+static void fast_dixon_matrix_support_init(fast_dixon_matrix_support_t *support,
+                                           const fast_dixon_matrix_t *mat);
+static void fast_dixon_matrix_support_clear(fast_dixon_matrix_support_t *support);
+static void fast_dixon_poly_accumulate_inplace(fq_mvpoly_t *dest,
+                                               const fq_mvpoly_t *src,
+                                               int subtract);
 
 static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
                                     const fq_mvpoly_t *const *polys,
@@ -115,16 +130,25 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
 
 static fast_dixon_subproblem_cache_t *g_fast_dixon_subproblem_cache_pool = NULL;
 static int g_fast_dixon_subproblem_cache_threads = 0;
+static slong g_fast_dixon_trace_logs_by_level[FAST_DIXON_MAX_LEVELS];
+static slong g_fast_dixon_trace_total_logs = 0;
 
 static int fast_dixon_profile_enabled(void)
 {
     return g_dixon_verbose_level >= 2;
 }
 
+static int fast_dixon_profile_heavy_enabled(void)
+{
+    return g_dixon_verbose_level >= 3;
+}
+
 static void fast_dixon_profile_reset(slong total_nvars)
 {
     memset(&g_fast_dixon_profile, 0, sizeof(g_fast_dixon_profile));
     g_fast_dixon_profile.total_nvars = total_nvars;
+    memset(g_fast_dixon_trace_logs_by_level, 0, sizeof(g_fast_dixon_trace_logs_by_level));
+    g_fast_dixon_trace_total_logs = 0;
 }
 
 static fast_dixon_level_profile_t *fast_dixon_get_level_profile(slong pos)
@@ -142,6 +166,17 @@ static void fast_dixon_trace_log(slong depth, const char *fmt, ...)
     if (g_dixon_verbose_level < 3) {
         return;
     }
+    if (depth < 0 || depth >= FAST_DIXON_MAX_LEVELS) {
+        return;
+    }
+    if (g_fast_dixon_trace_total_logs >= 24) {
+        return;
+    }
+    if (depth > 0 && g_fast_dixon_trace_logs_by_level[depth] >= 3) {
+        return;
+    }
+    g_fast_dixon_trace_logs_by_level[depth]++;
+    g_fast_dixon_trace_total_logs++;
 
     for (slong i = 0; i < depth * 2; i++) {
         putchar(' ');
@@ -176,6 +211,7 @@ static void fast_dixon_subproblem_cache_init(fast_dixon_subproblem_cache_t *cach
     cache->slots = NULL;
     cache->keys = NULL;
     cache->values = NULL;
+    cache->supports = NULL;
 }
 
 static void fast_dixon_subproblem_cache_clear(fast_dixon_subproblem_cache_t *cache)
@@ -185,6 +221,12 @@ static void fast_dixon_subproblem_cache_clear(fast_dixon_subproblem_cache_t *cac
             fast_dixon_matrix_clear(&cache->values[i]);
         }
         flint_free(cache->values);
+    }
+    if (cache->supports != NULL) {
+        for (slong i = 0; i < cache->count; i++) {
+            fast_dixon_matrix_support_clear(&cache->supports[i]);
+        }
+        flint_free(cache->supports);
     }
     if (cache->keys != NULL) {
         for (slong i = 0; i < cache->count; i++) {
@@ -212,6 +254,7 @@ static void fast_dixon_subproblem_cache_clear(fast_dixon_subproblem_cache_t *cac
     cache->slots = NULL;
     cache->keys = NULL;
     cache->values = NULL;
+    cache->supports = NULL;
 }
 
 static ulong fast_dixon_hash_mix(ulong h, ulong x)
@@ -382,8 +425,15 @@ static void fast_dixon_subproblem_cache_reserve(fast_dixon_subproblem_cache_t *c
     cache->keys = (fq_mvpoly_t **) flint_realloc(cache->keys, (size_t) new_alloc * sizeof(fq_mvpoly_t *));
     cache->values = (fast_dixon_matrix_t *) flint_realloc(cache->values,
                                                           (size_t) new_alloc * sizeof(fast_dixon_matrix_t));
+    cache->supports = (fast_dixon_matrix_support_t *) flint_realloc(cache->supports,
+                                                                    (size_t) new_alloc * sizeof(fast_dixon_matrix_support_t));
     for (slong i = cache->alloc; i < new_alloc; i++) {
         cache->keys[i] = NULL;
+        cache->supports[i].rows = 0;
+        cache->supports[i].total_nonzero = 0;
+        cache->supports[i].row_counts = NULL;
+        cache->supports[i].row_offsets = NULL;
+        cache->supports[i].col_indices = NULL;
     }
     cache->alloc = new_alloc;
 
@@ -509,7 +559,7 @@ static int fast_dixon_parallel_threads_for_level(slong pos,
     int max_threads;
     int capped_threads;
 
-    if (g_dixon_verbose_level >= 2) {
+    if (g_dixon_verbose_level >= 3) {
         return 0;
     }
 
@@ -628,7 +678,7 @@ static void fast_dixon_matrix_init(fast_dixon_matrix_t *mat,
         fast_dixon_poly_init_zero(&mat->entries[i], 0, npars, ctx);
     }
 
-    if (fast_dixon_profile_enabled()) {
+    if (fast_dixon_profile_heavy_enabled()) {
         g_fast_dixon_profile.matrix_inits++;
         g_fast_dixon_profile.matrix_entries_allocated +=
             (unsigned long long) rows * (unsigned long long) cols;
@@ -666,17 +716,157 @@ static void fast_dixon_matrix_add_inplace(fast_dixon_matrix_t *dest,
                 continue;
             }
 
-            if (subtract) {
-                fq_mvpoly_sub(dest_entry, dest_entry, src_entry);
-            } else {
-                fq_mvpoly_add(dest_entry, dest_entry, src_entry);
-            }
+            fast_dixon_poly_accumulate_inplace(dest_entry, src_entry, subtract);
 
-            if (fast_dixon_profile_enabled()) {
+            if (fast_dixon_profile_heavy_enabled()) {
                 g_fast_dixon_profile.poly_add_ops++;
             }
         }
     }
+}
+
+static void fast_dixon_poly_assign_copy(fq_mvpoly_t *dest, const fq_mvpoly_t *src)
+{
+    if (dest->terms != NULL) {
+        fq_mvpoly_clear(dest);
+    }
+    fq_mvpoly_copy(dest, src);
+}
+
+static void fast_dixon_poly_assign_neg_copy(fq_mvpoly_t *dest, const fq_mvpoly_t *src)
+{
+    if (dest->terms != NULL) {
+        fq_mvpoly_clear(dest);
+    }
+
+    fq_mvpoly_init(dest, src->nvars, src->npars, src->ctx);
+    for (slong t = 0; t < src->nterms; t++) {
+        fq_nmod_t neg_coeff;
+        fq_nmod_init(neg_coeff, src->ctx);
+        fq_nmod_neg(neg_coeff, src->terms[t].coeff, src->ctx);
+        fq_mvpoly_add_term_fast(dest, src->terms[t].var_exp, src->terms[t].par_exp, neg_coeff);
+        fq_nmod_clear(neg_coeff, src->ctx);
+    }
+}
+
+static int fast_dixon_poly_use_direct_accumulate(const fq_mvpoly_t *dest,
+                                                 const fq_mvpoly_t *src)
+{
+    slong sum_terms;
+    slong prod_terms;
+
+    if (dest->ctx != src->ctx ||
+        dest->nvars != src->nvars ||
+        dest->npars != src->npars ||
+        fq_nmod_ctx_degree(dest->ctx) != 1) {
+        return 0;
+    }
+
+    sum_terms = dest->nterms + src->nterms;
+    prod_terms = dest->nterms * src->nterms;
+    return (sum_terms <= 48 || prod_terms <= 256);
+}
+
+static void fast_dixon_poly_accumulate_inplace(fq_mvpoly_t *dest,
+                                               const fq_mvpoly_t *src,
+                                               int subtract)
+{
+    if (src->nterms == 0) {
+        return;
+    }
+
+    if (dest->nterms == 0) {
+        if (subtract) {
+            fast_dixon_poly_assign_neg_copy(dest, src);
+        } else {
+            fast_dixon_poly_assign_copy(dest, src);
+        }
+        return;
+    }
+
+    if (fast_dixon_poly_use_direct_accumulate(dest, src)) {
+        for (slong t = 0; t < src->nterms; t++) {
+            if (subtract) {
+                fq_nmod_t neg_coeff;
+                fq_nmod_init(neg_coeff, src->ctx);
+                fq_nmod_neg(neg_coeff, src->terms[t].coeff, src->ctx);
+                fq_mvpoly_add_term(dest,
+                                   src->terms[t].var_exp,
+                                   src->terms[t].par_exp,
+                                   neg_coeff);
+                fq_nmod_clear(neg_coeff, src->ctx);
+            } else {
+                fq_mvpoly_add_term(dest,
+                                   src->terms[t].var_exp,
+                                   src->terms[t].par_exp,
+                                   src->terms[t].coeff);
+            }
+        }
+        return;
+    }
+
+    if (subtract) {
+        fq_mvpoly_sub(dest, dest, src);
+    } else {
+        fq_mvpoly_add(dest, dest, src);
+    }
+}
+
+static void fast_dixon_matrix_support_init(fast_dixon_matrix_support_t *support,
+                                           const fast_dixon_matrix_t *mat)
+{
+    slong total_nonzero = 0;
+
+    support->rows = mat->rows;
+    support->total_nonzero = 0;
+    support->row_counts = (slong *) flint_calloc((size_t) mat->rows, sizeof(slong));
+    support->row_offsets = (slong *) flint_calloc((size_t) (mat->rows + 1), sizeof(slong));
+    support->col_indices = NULL;
+
+    for (slong i = 0; i < mat->rows; i++) {
+        slong count = 0;
+        for (slong j = 0; j < mat->cols; j++) {
+            if (FAST_DIXON_ENTRY(mat, i, j).nterms > 0) {
+                count++;
+            }
+        }
+        support->row_counts[i] = count;
+        support->row_offsets[i] = total_nonzero;
+        total_nonzero += count;
+    }
+    support->row_offsets[mat->rows] = total_nonzero;
+    support->total_nonzero = total_nonzero;
+
+    if (total_nonzero > 0) {
+        support->col_indices = (slong *) flint_malloc((size_t) total_nonzero * sizeof(slong));
+        total_nonzero = 0;
+        for (slong i = 0; i < mat->rows; i++) {
+            for (slong j = 0; j < mat->cols; j++) {
+                if (FAST_DIXON_ENTRY(mat, i, j).nterms > 0) {
+                    support->col_indices[total_nonzero++] = j;
+                }
+            }
+        }
+    }
+}
+
+static void fast_dixon_matrix_support_clear(fast_dixon_matrix_support_t *support)
+{
+    if (support->row_counts != NULL) {
+        flint_free(support->row_counts);
+    }
+    if (support->row_offsets != NULL) {
+        flint_free(support->row_offsets);
+    }
+    if (support->col_indices != NULL) {
+        flint_free(support->col_indices);
+    }
+
+    support->rows = 0;
+    support->total_nonzero = 0;
+    support->row_counts = NULL;
+    support->row_offsets = NULL;
+    support->col_indices = NULL;
 }
 
 static void fast_dixon_matrix_mul_accumulate(fast_dixon_matrix_t *dest,
@@ -700,24 +890,77 @@ static void fast_dixon_matrix_mul_accumulate(fast_dixon_matrix_t *dest,
                     continue;
                 }
 
-                if (fast_dixon_profile_enabled()) {
+                if (fast_dixon_profile_heavy_enabled()) {
                     g_fast_dixon_profile.poly_mul_ops++;
                 }
                 fq_mvpoly_mul(&product, left_entry, right_entry);
-                if (fast_dixon_profile_enabled()) {
+                if (fast_dixon_profile_heavy_enabled()) {
                     g_fast_dixon_profile.poly_mul_generated_terms +=
                         (unsigned long long) product.nterms;
                 }
                 if (subtract) {
-                    fq_mvpoly_sub(&FAST_DIXON_ENTRY(dest, i, j),
-                                  &FAST_DIXON_ENTRY(dest, i, j),
-                                  &product);
+                    fast_dixon_poly_accumulate_inplace(&FAST_DIXON_ENTRY(dest, i, j),
+                                                       &product,
+                                                       1);
                 } else {
-                    fq_mvpoly_add(&FAST_DIXON_ENTRY(dest, i, j),
-                                  &FAST_DIXON_ENTRY(dest, i, j),
-                                  &product);
+                    fast_dixon_poly_accumulate_inplace(&FAST_DIXON_ENTRY(dest, i, j),
+                                                       &product,
+                                                       0);
                 }
-                if (fast_dixon_profile_enabled()) {
+                if (fast_dixon_profile_heavy_enabled()) {
+                    g_fast_dixon_profile.poly_add_ops++;
+                }
+                fq_mvpoly_clear(&product);
+            }
+        }
+    }
+}
+
+static void fast_dixon_matrix_mul_accumulate_supported(fast_dixon_matrix_t *dest,
+                                                       const fast_dixon_matrix_t *left,
+                                                       const fast_dixon_matrix_support_t *left_support,
+                                                       const fast_dixon_matrix_t *right,
+                                                       const fast_dixon_matrix_support_t *right_support,
+                                                       int subtract)
+{
+    if (left_support == NULL || right_support == NULL) {
+        fast_dixon_matrix_mul_accumulate(dest, left, right, subtract);
+        return;
+    }
+
+    for (slong i = 0; i < left->rows; i++) {
+        slong left_count = left_support->row_counts[i];
+        slong left_offset = left_support->row_offsets[i];
+
+        for (slong left_idx = 0; left_idx < left_count; left_idx++) {
+            slong k = left_support->col_indices[left_offset + left_idx];
+            const fq_mvpoly_t *left_entry = &FAST_DIXON_ENTRY(left, i, k);
+            slong right_count = right_support->row_counts[k];
+            slong right_offset = right_support->row_offsets[k];
+
+            for (slong right_idx = 0; right_idx < right_count; right_idx++) {
+                slong j = right_support->col_indices[right_offset + right_idx];
+                const fq_mvpoly_t *right_entry = &FAST_DIXON_ENTRY(right, k, j);
+                fq_mvpoly_t product;
+
+                if (fast_dixon_profile_heavy_enabled()) {
+                    g_fast_dixon_profile.poly_mul_ops++;
+                }
+                fq_mvpoly_mul(&product, left_entry, right_entry);
+                if (fast_dixon_profile_heavy_enabled()) {
+                    g_fast_dixon_profile.poly_mul_generated_terms +=
+                        (unsigned long long) product.nterms;
+                }
+                if (subtract) {
+                    fast_dixon_poly_accumulate_inplace(&FAST_DIXON_ENTRY(dest, i, j),
+                                                       &product,
+                                                       1);
+                } else {
+                    fast_dixon_poly_accumulate_inplace(&FAST_DIXON_ENTRY(dest, i, j),
+                                                       &product,
+                                                       0);
+                }
+                if (fast_dixon_profile_heavy_enabled()) {
                     g_fast_dixon_profile.poly_add_ops++;
                 }
                 fq_mvpoly_clear(&product);
@@ -733,6 +976,9 @@ static void fast_dixon_matrix_copy_block(fast_dixon_matrix_t *dest,
 {
     for (slong i = 0; i < src->rows; i++) {
         for (slong j = 0; j < src->cols; j++) {
+            if (FAST_DIXON_ENTRY(src, i, j).nterms == 0) {
+                continue;
+            }
             fq_mvpoly_copy(&FAST_DIXON_ENTRY(dest, row_offset + i, col_offset + j),
                            &FAST_DIXON_ENTRY(src, i, j));
         }
@@ -924,24 +1170,16 @@ static void fast_dixon_build_p_block(fast_dixon_matrix_t *out,
                                      slong total_nvars,
                                      slong pos,
                                      const slong *mult_table,
+                                     const slong *row_counts,
                                      slong lower_size,
                                      slong rem_vars)
 {
     slong current_vars = total_nvars - pos;
     slong syl_rows = current_vars * lower_size;
-    slong *row_counts;
 
     fast_dixon_matrix_init(out, syl_rows, lower_size, coeff_poly->npars, coeff_poly->ctx);
     if (coeff_poly->nterms == 0) {
         return;
-    }
-
-    row_counts = rem_vars > 0
-        ? (slong *) flint_malloc((size_t) rem_vars * sizeof(slong))
-        : NULL;
-
-    for (slong i = 0; i < rem_vars; i++) {
-        row_counts[i] = (i + 2) * degrees[pos + 1 + i];
     }
 
     for (slong col = 0; col < lower_size; col++) {
@@ -962,10 +1200,6 @@ static void fast_dixon_build_p_block(fast_dixon_matrix_t *out,
                                coeff_poly->terms[t].par_exp,
                                coeff_poly->terms[t].coeff);
         }
-    }
-
-    if (row_counts != NULL) {
-        flint_free(row_counts);
     }
 }
 
@@ -1013,10 +1247,31 @@ static void fast_dixon_build_base_case(fast_dixon_matrix_t *out,
 
 static void fast_dixon_matrix_add_interleaved_rows(fast_dixon_matrix_t *dest,
                                                    const fast_dixon_matrix_t *src,
+                                                   const fast_dixon_matrix_support_t *src_support,
                                                    slong interleave_index,
                                                    slong interleave_width,
                                                    int subtract)
 {
+    if (src_support != NULL) {
+        for (slong i = 0; i < src->rows; i++) {
+            slong dest_row = i * interleave_width + interleave_index;
+            slong row_count = src_support->row_counts[i];
+            slong row_offset = src_support->row_offsets[i];
+
+            for (slong idx = 0; idx < row_count; idx++) {
+                slong j = src_support->col_indices[row_offset + idx];
+                fq_mvpoly_t *dest_entry = &FAST_DIXON_ENTRY(dest, dest_row, j);
+                const fq_mvpoly_t *src_entry = &FAST_DIXON_ENTRY(src, i, j);
+
+                fast_dixon_poly_accumulate_inplace(dest_entry, src_entry, subtract);
+                if (fast_dixon_profile_heavy_enabled()) {
+                    g_fast_dixon_profile.poly_add_ops++;
+                }
+            }
+        }
+        return;
+    }
+
     for (slong i = 0; i < src->rows; i++) {
         slong dest_row = i * interleave_width + interleave_index;
 
@@ -1028,13 +1283,8 @@ static void fast_dixon_matrix_add_interleaved_rows(fast_dixon_matrix_t *dest,
                 continue;
             }
 
-            if (subtract) {
-                fq_mvpoly_sub(dest_entry, dest_entry, src_entry);
-            } else {
-                fq_mvpoly_add(dest_entry, dest_entry, src_entry);
-            }
-
-            if (fast_dixon_profile_enabled()) {
+            fast_dixon_poly_accumulate_inplace(dest_entry, src_entry, subtract);
+            if (fast_dixon_profile_heavy_enabled()) {
                 g_fast_dixon_profile.poly_add_ops++;
             }
         }
@@ -1048,6 +1298,9 @@ static void fast_dixon_matrix_scatter_columns(fast_dixon_matrix_t *dest,
 {
     for (slong i = 0; i < src->rows; i++) {
         for (slong j = 0; j < src->cols; j++) {
+            if (FAST_DIXON_ENTRY(src, i, j).nterms == 0) {
+                continue;
+            }
             fq_mvpoly_copy(&FAST_DIXON_ENTRY(dest, i, j * scatter_width + scatter_index),
                            &FAST_DIXON_ENTRY(src, i, j));
         }
@@ -1075,9 +1328,10 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
                                               slong npolys)
 {
     slong current_degree = degrees[pos];
-    fast_dixon_level_profile_t *level_profile = fast_dixon_get_level_profile(pos);
+    fast_dixon_level_profile_t *level_profile =
+        fast_dixon_profile_heavy_enabled() ? fast_dixon_get_level_profile(pos) : NULL;
 
-    if (fast_dixon_profile_enabled()) {
+    if (fast_dixon_profile_heavy_enabled()) {
         g_fast_dixon_profile.f_recursive_nodes++;
         if (level_profile != NULL) {
             level_profile->f_recursive_nodes++;
@@ -1086,13 +1340,15 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
 
     if (depth == tuple_len) {
         const fast_dixon_matrix_t *submatrix;
+        const fast_dixon_matrix_support_t *submatrix_support = NULL;
         fast_dixon_matrix_t uncached_submatrix;
+        fast_dixon_matrix_support_t uncached_support;
         double child_start;
         double child_elapsed;
         slong cached_index = -1;
         ulong key_hash = 0;
 
-        if (fast_dixon_profile_enabled()) {
+        if (fast_dixon_profile_heavy_enabled()) {
             g_fast_dixon_profile.f_leaf_calls++;
             if (level_profile != NULL) {
                 level_profile->f_leaf_calls++;
@@ -1100,7 +1356,7 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
         }
 
         if (has_zero) {
-            if (fast_dixon_profile_enabled()) {
+            if (fast_dixon_profile_heavy_enabled()) {
                 g_fast_dixon_profile.f_zero_skips++;
                 if (level_profile != NULL) {
                     level_profile->f_zero_skips++;
@@ -1113,7 +1369,7 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
             return;
         }
 
-        if (fast_dixon_profile_enabled()) {
+        if (fast_dixon_profile_heavy_enabled()) {
             g_fast_dixon_profile.f_valid_leaves++;
             if (level_profile != NULL) {
                 level_profile->f_valid_leaves++;
@@ -1127,7 +1383,8 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
             cached_index = fast_dixon_subproblem_cache_lookup(cache, selected, key_hash);
             if (cached_index >= 0) {
                 submatrix = &cache->values[cached_index];
-                if (fast_dixon_profile_enabled()) {
+                submatrix_support = &cache->supports[cached_index];
+                if (fast_dixon_profile_heavy_enabled()) {
                     g_fast_dixon_profile.cache_hits++;
                     if (level_profile != NULL) {
                         level_profile->cache_hits++;
@@ -1146,7 +1403,9 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
                                         ctx);
                 child_elapsed = get_wall_time() - child_start;
                 submatrix = &cache->values[new_index];
-                if (fast_dixon_profile_enabled()) {
+                fast_dixon_matrix_support_init(&cache->supports[new_index], submatrix);
+                submatrix_support = &cache->supports[new_index];
+                if (fast_dixon_profile_heavy_enabled()) {
                     g_fast_dixon_profile.cache_misses++;
                     if (level_profile != NULL) {
                         level_profile->cache_misses++;
@@ -1157,6 +1416,11 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
         }
 
         if (submatrix == NULL) {
+            uncached_support.rows = 0;
+            uncached_support.total_nonzero = 0;
+            uncached_support.row_counts = NULL;
+            uncached_support.row_offsets = NULL;
+            uncached_support.col_indices = NULL;
             child_start = get_wall_time();
             fast_dixon_build_matrix(&uncached_submatrix,
                                     selected,
@@ -1166,8 +1430,10 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
                                     npars,
                                     ctx);
             submatrix = &uncached_submatrix;
+            fast_dixon_matrix_support_init(&uncached_support, submatrix);
+            submatrix_support = &uncached_support;
             child_elapsed = get_wall_time() - child_start;
-            if (fast_dixon_profile_enabled()) {
+            if (fast_dixon_profile_heavy_enabled()) {
                 g_fast_dixon_profile.cache_misses++;
                 if (level_profile != NULL) {
                     level_profile->cache_misses++;
@@ -1176,14 +1442,21 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
             }
             fast_dixon_matrix_add_interleaved_rows(f_block,
                                                    submatrix,
+                                                   submatrix_support,
                                                    omit_idx,
                                                    npolys,
                                                    (omit_idx & 1) != 0);
+            fast_dixon_matrix_support_clear(&uncached_support);
             fast_dixon_matrix_clear(&uncached_submatrix);
             return;
         }
 
-        fast_dixon_matrix_add_interleaved_rows(f_block, submatrix, omit_idx, npolys, (omit_idx & 1) != 0);
+        fast_dixon_matrix_add_interleaved_rows(f_block,
+                                               submatrix,
+                                               submatrix_support,
+                                               omit_idx,
+                                               npolys,
+                                               (omit_idx & 1) != 0);
         return;
     }
 
@@ -1194,7 +1467,7 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
         slong max_possible = new_sum + remaining_slots * current_degree;
 
         if (min_possible > target_sum) {
-            if (fast_dixon_profile_enabled()) {
+            if (fast_dixon_profile_heavy_enabled()) {
                 g_fast_dixon_profile.f_pruned_branches++;
                 if (level_profile != NULL) {
                     level_profile->f_pruned_branches++;
@@ -1203,7 +1476,7 @@ static void fast_dixon_accumulate_f_recursive(fast_dixon_matrix_t *f_block,
             break;
         }
         if (max_possible < target_sum) {
-            if (fast_dixon_profile_enabled()) {
+            if (fast_dixon_profile_heavy_enabled()) {
                 g_fast_dixon_profile.f_pruned_branches++;
                 if (level_profile != NULL) {
                     level_profile->f_pruned_branches++;
@@ -1258,6 +1531,14 @@ static void fast_dixon_build_f_block(fast_dixon_matrix_t *out,
     ulong *selected_hashes = coeff_hashes != NULL
         ? (ulong *) flint_malloc((size_t) tuple_len * sizeof(ulong))
         : NULL;
+    fast_dixon_subproblem_cache_t local_cache;
+    int use_local_cache = 0;
+
+    if (cache == NULL && coeff_hashes != NULL) {
+        fast_dixon_subproblem_cache_init(&local_cache, tuple_len);
+        cache = &local_cache;
+        use_local_cache = 1;
+    }
 
     fast_dixon_matrix_init(out, npolys * lower_size, lower_size, npars, ctx);
 
@@ -1297,6 +1578,9 @@ static void fast_dixon_build_f_block(fast_dixon_matrix_t *out,
     if (selected_hashes != NULL) {
         flint_free(selected_hashes);
     }
+    if (use_local_cache) {
+        fast_dixon_subproblem_cache_clear(&local_cache);
+    }
 }
 
 static void fast_dixon_build_s_block(fast_dixon_matrix_t *out,
@@ -1306,16 +1590,14 @@ static void fast_dixon_build_s_block(fast_dixon_matrix_t *out,
                                      slong pos,
                                      slong npars,
                                      const fq_nmod_ctx_t ctx,
-                                     slong coeff_degree)
+                                     slong coeff_degree,
+                                     const slong *mult_table,
+                                     const slong *row_counts,
+                                     slong lower_size,
+                                     slong rem_vars)
 {
     slong current_vars = total_nvars - pos;
     slong npolys = current_vars + 1;
-    slong lower_size = fast_dixon_level_size(degrees, total_nvars, pos + 1);
-    slong rem_vars = total_nvars - pos - 1;
-    slong mult_count = 0;
-    slong mult_nvars = 0;
-    slong *mult_table = fast_dixon_build_multiplier_table(degrees, total_nvars, pos,
-                                                          &mult_count, &mult_nvars);
 
     fast_dixon_matrix_init(out,
                            current_vars * lower_size,
@@ -1332,15 +1614,12 @@ static void fast_dixon_build_s_block(fast_dixon_matrix_t *out,
                                  total_nvars,
                                  pos,
                                  mult_table,
+                                 row_counts,
                                  lower_size,
                                  rem_vars);
         fast_dixon_matrix_scatter_columns(out, &poly_block, poly_idx, npolys);
         fast_dixon_matrix_clear(&poly_block);
     }
-
-    flint_free(mult_table);
-    (void) mult_count;
-    (void) mult_nvars;
 }
 
 static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
@@ -1356,11 +1635,14 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
     slong npolys = current_vars + 1;
     fq_mvpoly_t **coeffs;
     ulong **coeff_hashes = NULL;
-    fast_dixon_level_profile_t *level_profile = fast_dixon_get_level_profile(pos);
+    int collect_level_profile = fast_dixon_profile_enabled() &&
+                                (pos == 0 || fast_dixon_profile_heavy_enabled());
+    fast_dixon_level_profile_t *level_profile =
+        collect_level_profile ? fast_dixon_get_level_profile(pos) : NULL;
     double call_start = get_wall_time();
     double phase_start;
 
-    if (fast_dixon_profile_enabled()) {
+    if (fast_dixon_profile_heavy_enabled()) {
         g_fast_dixon_profile.recursive_calls++;
         if (level_profile != NULL) {
             level_profile->calls++;
@@ -1377,14 +1659,14 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
     phase_start = get_wall_time();
     coeffs = fast_dixon_split_polys_by_degree(polys, npolys, current_degree);
     coeff_hashes = fast_dixon_build_split_hashes(coeffs, npolys, current_degree, ctx);
-    if (fast_dixon_profile_enabled() && level_profile != NULL) {
+    if (level_profile != NULL) {
         level_profile->split_time += get_wall_time() - phase_start;
     }
 
     if (current_vars == 1) {
         phase_start = get_wall_time();
         fast_dixon_build_base_case(out, coeffs, current_degree, npars, ctx);
-        if (fast_dixon_profile_enabled()) {
+        if (fast_dixon_profile_heavy_enabled()) {
             double base_elapsed = get_wall_time() - phase_start;
             g_fast_dixon_profile.base_case_calls++;
             if (level_profile != NULL) {
@@ -1407,15 +1689,46 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
         slong lower_size = fast_dixon_level_size(degrees, total_nvars, pos + 1);
         slong d_block_rows = current_vars * lower_size;
         slong num_f_blocks = current_vars * current_degree;
+        slong rem_vars = total_nvars - pos - 1;
+        slong mult_count = 0;
+        slong mult_nvars = 0;
+        slong *mult_table = fast_dixon_build_multiplier_table(degrees, total_nvars, pos,
+                                                              &mult_count, &mult_nvars);
+        slong *row_counts = rem_vars > 0
+            ? (slong *) flint_malloc((size_t) rem_vars * sizeof(slong))
+            : NULL;
         int parallel_threads = fast_dixon_parallel_threads_for_level(pos, current_degree, num_f_blocks);
         fast_dixon_matrix_t *s_blocks =
             (fast_dixon_matrix_t *) flint_malloc((size_t) current_degree * sizeof(fast_dixon_matrix_t));
+        fast_dixon_matrix_support_t *s_supports =
+            (fast_dixon_matrix_support_t *) flint_malloc((size_t) current_degree * sizeof(fast_dixon_matrix_support_t));
         fast_dixon_matrix_t *f_blocks =
             (fast_dixon_matrix_t *) flint_malloc((size_t) num_f_blocks * sizeof(fast_dixon_matrix_t));
+        fast_dixon_matrix_support_t *f_supports =
+            (fast_dixon_matrix_support_t *) flint_malloc((size_t) num_f_blocks * sizeof(fast_dixon_matrix_support_t));
         fast_dixon_matrix_t *d_blocks =
             (fast_dixon_matrix_t *) flint_malloc((size_t) current_degree * num_f_blocks * sizeof(fast_dixon_matrix_t));
 
-        if (fast_dixon_profile_enabled() && level_profile != NULL) {
+        for (slong i = 0; i < current_degree; i++) {
+            s_supports[i].rows = 0;
+            s_supports[i].total_nonzero = 0;
+            s_supports[i].row_counts = NULL;
+            s_supports[i].row_offsets = NULL;
+            s_supports[i].col_indices = NULL;
+        }
+        for (slong i = 0; i < num_f_blocks; i++) {
+            f_supports[i].rows = 0;
+            f_supports[i].total_nonzero = 0;
+            f_supports[i].row_counts = NULL;
+            f_supports[i].row_offsets = NULL;
+            f_supports[i].col_indices = NULL;
+        }
+
+        for (slong i = 0; i < rem_vars; i++) {
+            row_counts[i] = (i + 2) * degrees[pos + 1 + i];
+        }
+
+        if (level_profile != NULL) {
             level_profile->s_blocks += current_degree;
             level_profile->f_blocks += num_f_blocks;
             level_profile->d_block_products += current_degree * num_f_blocks;
@@ -1435,9 +1748,14 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
                                      pos,
                                      npars,
                                      ctx,
-                                     i);
+                                     i,
+                                     mult_table,
+                                     row_counts,
+                                     lower_size,
+                                     rem_vars);
+            fast_dixon_matrix_support_init(&s_supports[i], &s_blocks[i]);
         }
-        if (fast_dixon_profile_enabled() && level_profile != NULL) {
+        if (level_profile != NULL) {
             level_profile->s_build_time += get_wall_time() - phase_start;
         }
 
@@ -1458,8 +1776,9 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
                                      ctx,
                                      j,
                                      child_cache);
+            fast_dixon_matrix_support_init(&f_supports[j], &f_blocks[j]);
         }
-        if (fast_dixon_profile_enabled() && level_profile != NULL) {
+        if (level_profile != NULL) {
             level_profile->f_build_time += get_wall_time() - phase_start;
         }
 
@@ -1475,13 +1794,15 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
 
                 fast_dixon_matrix_init(&d_blocks[block_idx],
                                        d_block_rows, lower_size, npars, ctx);
-                fast_dixon_matrix_mul_accumulate(&d_blocks[block_idx],
-                                                 &s_blocks[i],
-                                                 &f_blocks[j],
-                                                 0);
+                fast_dixon_matrix_mul_accumulate_supported(&d_blocks[block_idx],
+                                                           &s_blocks[i],
+                                                           &s_supports[i],
+                                                           &f_blocks[j],
+                                                           &f_supports[j],
+                                                           0);
             }
         }
-        if (fast_dixon_profile_enabled() && level_profile != NULL) {
+        if (level_profile != NULL) {
             level_profile->mul_time += get_wall_time() - phase_start;
         }
 
@@ -1493,7 +1814,7 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
                                               0);
             }
         }
-        if (fast_dixon_profile_enabled() && level_profile != NULL) {
+        if (level_profile != NULL) {
             level_profile->recurrence_time += get_wall_time() - phase_start;
         }
 
@@ -1519,7 +1840,7 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
                                              &d_blocks[block_idx]);
             }
         }
-        if (fast_dixon_profile_enabled() && level_profile != NULL) {
+        if (level_profile != NULL) {
             level_profile->assemble_time += get_wall_time() - phase_start;
         }
 
@@ -1527,18 +1848,28 @@ static void fast_dixon_build_matrix(fast_dixon_matrix_t *out,
             fast_dixon_matrix_clear(&d_blocks[i]);
         }
         for (slong i = 0; i < current_degree; i++) {
+            fast_dixon_matrix_support_clear(&s_supports[i]);
             fast_dixon_matrix_clear(&s_blocks[i]);
         }
         for (slong i = 0; i < num_f_blocks; i++) {
+            fast_dixon_matrix_support_clear(&f_supports[i]);
             fast_dixon_matrix_clear(&f_blocks[i]);
         }
 
         flint_free(d_blocks);
         flint_free(s_blocks);
+        flint_free(s_supports);
         flint_free(f_blocks);
+        flint_free(f_supports);
+        if (row_counts != NULL) {
+            flint_free(row_counts);
+        }
+        flint_free(mult_table);
+        (void) mult_count;
+        (void) mult_nvars;
     }
 
-    if (fast_dixon_profile_enabled() && level_profile != NULL) {
+    if (level_profile != NULL) {
         level_profile->total_time += get_wall_time() - call_start;
     }
 
@@ -1683,39 +2014,42 @@ static void fast_dixon_print_profile_report(const fast_dixon_matrix_t *full_matr
         return;
     }
 
-    nnz = fast_dixon_matrix_count_nonzero(full_matrix);
-
     fast_dixon_info_log("\n  Fast Dixon construction profile:\n");
-    fast_dixon_info_log("    Recursive calls: %ld total (%ld base cases)\n",
-                        g_fast_dixon_profile.recursive_calls,
-                        g_fast_dixon_profile.base_case_calls);
-    fast_dixon_info_log("    Matrix allocations: %ld blocks, %llu total entry slots\n",
-                        g_fast_dixon_profile.matrix_inits,
-                        g_fast_dixon_profile.matrix_entries_allocated);
-    fast_dixon_info_log("    Full matrix support: %ld / %ld non-zero entries (%.2f%% density)\n",
-                        nnz,
-                        full_matrix->rows * full_matrix->cols,
-                        full_matrix->rows * full_matrix->cols > 0
-                            ? (100.0 * (double) nnz /
-                               (double) (full_matrix->rows * full_matrix->cols))
-                            : 0.0);
-    fast_dixon_info_log("    Polynomial kernel ops: %llu muls, %llu generated terms, %llu adds/subs\n",
-                        g_fast_dixon_profile.poly_mul_ops,
-                        g_fast_dixon_profile.poly_mul_generated_terms,
-                        g_fast_dixon_profile.poly_add_ops);
-    fast_dixon_info_log("    F-block tuple search: %llu recursion nodes, %llu leaves, %llu valid tuples, %llu zero skips, %llu pruned branches\n",
-                        g_fast_dixon_profile.f_recursive_nodes,
-                        g_fast_dixon_profile.f_leaf_calls,
-                        g_fast_dixon_profile.f_valid_leaves,
-                        g_fast_dixon_profile.f_zero_skips,
-                        g_fast_dixon_profile.f_pruned_branches);
-    fast_dixon_info_log("    Recursive subproblem cache: %llu hits, %llu misses (hit rate %.2f%%)\n",
-                        g_fast_dixon_profile.cache_hits,
-                        g_fast_dixon_profile.cache_misses,
-                        (g_fast_dixon_profile.cache_hits + g_fast_dixon_profile.cache_misses) > 0
-                            ? (100.0 * (double) g_fast_dixon_profile.cache_hits /
-                               (double) (g_fast_dixon_profile.cache_hits + g_fast_dixon_profile.cache_misses))
-                            : 0.0);
+    if (fast_dixon_profile_heavy_enabled()) {
+        nnz = fast_dixon_matrix_count_nonzero(full_matrix);
+        fast_dixon_info_log("    Recursive calls: %ld total (%ld base cases)\n",
+                            g_fast_dixon_profile.recursive_calls,
+                            g_fast_dixon_profile.base_case_calls);
+        fast_dixon_info_log("    Matrix allocations: %ld blocks, %llu total entry slots\n",
+                            g_fast_dixon_profile.matrix_inits,
+                            g_fast_dixon_profile.matrix_entries_allocated);
+        fast_dixon_info_log("    Full matrix support: %ld / %ld non-zero entries (%.2f%% density)\n",
+                            nnz,
+                            full_matrix->rows * full_matrix->cols,
+                            full_matrix->rows * full_matrix->cols > 0
+                                ? (100.0 * (double) nnz /
+                                   (double) (full_matrix->rows * full_matrix->cols))
+                                : 0.0);
+        fast_dixon_info_log("    Polynomial kernel ops: %llu muls, %llu generated terms, %llu adds/subs\n",
+                            g_fast_dixon_profile.poly_mul_ops,
+                            g_fast_dixon_profile.poly_mul_generated_terms,
+                            g_fast_dixon_profile.poly_add_ops);
+        fast_dixon_info_log("    F-block tuple search: %llu recursion nodes, %llu leaves, %llu valid tuples, %llu zero skips, %llu pruned branches\n",
+                            g_fast_dixon_profile.f_recursive_nodes,
+                            g_fast_dixon_profile.f_leaf_calls,
+                            g_fast_dixon_profile.f_valid_leaves,
+                            g_fast_dixon_profile.f_zero_skips,
+                            g_fast_dixon_profile.f_pruned_branches);
+        fast_dixon_info_log("    Recursive subproblem cache: %llu hits, %llu misses (hit rate %.2f%%)\n",
+                            g_fast_dixon_profile.cache_hits,
+                            g_fast_dixon_profile.cache_misses,
+                            (g_fast_dixon_profile.cache_hits + g_fast_dixon_profile.cache_misses) > 0
+                                ? (100.0 * (double) g_fast_dixon_profile.cache_hits /
+                                   (double) (g_fast_dixon_profile.cache_hits + g_fast_dixon_profile.cache_misses))
+                                : 0.0);
+    } else {
+        fast_dixon_info_log("    Detailed recursive counters are disabled at -v 2 to avoid profiling overhead.\n");
+    }
 
     fast_dixon_info_log("    Top-level phase times:\n");
     fast_dixon_info_log("      split coefficients      : %.3f s\n", top->split_time);
@@ -1726,44 +2060,46 @@ static void fast_dixon_print_profile_report(const fast_dixon_matrix_t *full_matr
     fast_dixon_info_log("      recurrence accumulation : %.3f s\n", top->recurrence_time);
     fast_dixon_info_log("      final block assembly    : %.3f s\n", top->assemble_time);
 
-    fast_dixon_info_log("    Per-level inclusive summary:\n");
-    fast_dixon_info_log("      (lower-level phase totals are aggregated over many recursive calls and may overlap with child-build time; do not sum them directly)\n");
-    for (slong pos = 0; pos < FAST_DIXON_MAX_LEVELS; pos++) {
-        fast_dixon_level_profile_t *level = &g_fast_dixon_profile.levels[pos];
+    if (fast_dixon_profile_heavy_enabled()) {
+        fast_dixon_info_log("    Per-level inclusive summary:\n");
+        fast_dixon_info_log("      (lower-level phase totals are aggregated over many recursive calls and may overlap with child-build time; do not sum them directly)\n");
+        for (slong pos = 0; pos < FAST_DIXON_MAX_LEVELS; pos++) {
+            fast_dixon_level_profile_t *level = &g_fast_dixon_profile.levels[pos];
 
-        if (level->calls == 0) {
-            continue;
+            if (level->calls == 0) {
+                continue;
+            }
+
+            fast_dixon_info_log("      level %ld: calls=%ld vars_left=%ld degree=%ld lower=%ld output=%ldx%ld total=%.3f s\n",
+                                pos,
+                                level->calls,
+                                level->current_vars,
+                                level->current_degree,
+                                level->lower_size,
+                                level->output_rows,
+                                level->output_cols,
+                                level->total_time);
+            fast_dixon_info_log("               S=%ld F=%ld products=%ld | split=%.3f Sbuild=%.3f Fbuild=%.3f child=%.3f mul=%.3f recur=%.3f asm=%.3f base=%.3f\n",
+                                level->s_blocks,
+                                level->f_blocks,
+                                level->d_block_products,
+                                fast_dixon_report_time(level->split_time),
+                                fast_dixon_report_time(level->s_build_time),
+                                fast_dixon_report_time(level->f_build_time),
+                                fast_dixon_report_time(level->f_child_build_time),
+                                fast_dixon_report_time(level->mul_time),
+                                fast_dixon_report_time(level->recurrence_time),
+                                fast_dixon_report_time(level->assemble_time),
+                                fast_dixon_report_time(level->base_case_time));
+            fast_dixon_info_log("               F-search nodes=%ld leaves=%ld valid=%ld zero=%ld pruned=%ld cache=%ld/%ld\n",
+                                level->f_recursive_nodes,
+                                level->f_leaf_calls,
+                                level->f_valid_leaves,
+                                level->f_zero_skips,
+                                level->f_pruned_branches,
+                                level->cache_hits,
+                                level->cache_misses);
         }
-
-        fast_dixon_info_log("      level %ld: calls=%ld vars_left=%ld degree=%ld lower=%ld output=%ldx%ld total=%.3f s\n",
-                            pos,
-                            level->calls,
-                            level->current_vars,
-                            level->current_degree,
-                            level->lower_size,
-                            level->output_rows,
-                            level->output_cols,
-                            level->total_time);
-        fast_dixon_info_log("               S=%ld F=%ld products=%ld | split=%.3f Sbuild=%.3f Fbuild=%.3f child=%.3f mul=%.3f recur=%.3f asm=%.3f base=%.3f\n",
-                            level->s_blocks,
-                            level->f_blocks,
-                            level->d_block_products,
-                            fast_dixon_report_time(level->split_time),
-                            fast_dixon_report_time(level->s_build_time),
-                            fast_dixon_report_time(level->f_build_time),
-                            fast_dixon_report_time(level->f_child_build_time),
-                            fast_dixon_report_time(level->mul_time),
-                            fast_dixon_report_time(level->recurrence_time),
-                            fast_dixon_report_time(level->assemble_time),
-                            fast_dixon_report_time(level->base_case_time));
-        fast_dixon_info_log("               F-search nodes=%ld leaves=%ld valid=%ld zero=%ld pruned=%ld cache=%ld/%ld\n",
-                            level->f_recursive_nodes,
-                            level->f_leaf_calls,
-                            level->f_valid_leaves,
-                            level->f_zero_skips,
-                            level->f_pruned_branches,
-                            level->cache_hits,
-                            level->cache_misses);
     }
 
     fast_dixon_print_bottleneck_hint(top);
@@ -1789,12 +2125,16 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
     double support_scan_elapsed;
     double trim_grid_start;
     double trim_grid_elapsed;
+    double step3_wall_start;
     double rank_select_start;
     double rank_select_elapsed;
     double copy_start;
     double copy_elapsed;
 
-    fast_dixon_info_log("\nStep 3: Extract maximal-rank submatrix\n");
+    if (fast_dixon_profile_enabled()) {
+        fast_dixon_info_log("  Raw Dixon matrix size: %ld x %ld\n",
+                            full_matrix->rows, full_matrix->cols);
+    }
 
     support_scan_start = get_wall_time();
     trimmed_rows = (slong *) flint_malloc((size_t) full_matrix->rows * sizeof(slong));
@@ -1847,12 +2187,14 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
     }
     trim_grid_elapsed = get_wall_time() - trim_grid_start;
 
-    fast_dixon_info_log("  Non-zero support size: %ld x %ld\n", trimmed_nrows, trimmed_ncols);
-    if (fast_dixon_profile_enabled()) {
+    fast_dixon_info_log("  Dixon matrix size: %ld x %ld\n", trimmed_nrows, trimmed_ncols);
+    if (fast_dixon_profile_heavy_enabled()) {
         fast_dixon_info_log("  Support scan: %.3f s | trim grid build: %.3f s\n",
                             support_scan_elapsed, trim_grid_elapsed);
     }
 
+    fast_dixon_info_log("\nStep 3: Extract maximal-rank submatrix\n");
+    step3_wall_start = get_wall_time();
     rank_select_start = get_wall_time();
     if (npars == 0) {
         fq_nmod_mat_t eval_mat;
@@ -1912,6 +2254,7 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
         if (row_idx_array != NULL) flint_free(row_idx_array);
         if (col_idx_array != NULL) flint_free(col_idx_array);
         fast_dixon_info_log("Warning: Fast Dixon matrix has rank 0\n");
+        dixon_maybe_print_step_time("Step 3", get_wall_time() - step3_wall_start);
         return;
     }
 
@@ -1932,10 +2275,11 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
 
     *matrix_size_out = submat_rank;
     fast_dixon_info_log("  Submatrix size: %ld x %ld\n", submat_rank, submat_rank);
-    if (fast_dixon_profile_enabled()) {
+    if (fast_dixon_profile_heavy_enabled()) {
         fast_dixon_info_log("  Rank/select: %.3f s | copy selected submatrix: %.3f s\n",
                             rank_select_elapsed, copy_elapsed);
     }
+    dixon_maybe_print_step_time("Step 3", get_wall_time() - step3_wall_start);
 
     fast_dixon_free_pointer_grid(trimmed_grid, trimmed_nrows);
     fast_dixon_free_pointer_grid(grid, full_matrix->rows);
@@ -2017,23 +2361,22 @@ static void fq_dixon_fast_resultant_common(fq_mvpoly_t *result, fq_mvpoly_t *pol
         }
     }
 
-    fast_dixon_info_log("\nStep 1: Build fast Dixon matrix (recursive block construction)\n");
+    fast_dixon_info_log("\nStep 1: Skip explicit Dixon polynomial construction\n");
+    fast_dixon_info_log("  Recursive block construction builds the Dixon matrix directly.\n");
+    fast_dixon_info_log("\nStep 2: Construct Dixon matrix (recursive block construction)\n");
     {
-        clock_t step1_cpu_start = clock();
-        double step1_wall_start = get_wall_time();
+        clock_t step2_cpu_start = clock();
+        double step2_wall_start = get_wall_time();
 
         fast_dixon_build_matrix(&full_matrix, poly_ptrs, degrees, nvars, 0, npars, polys[0].ctx);
 
-        fast_dixon_info_log("  Fast Dixon matrix size: %ld x %ld\n",
-                            full_matrix.rows, full_matrix.cols);
-        fast_dixon_print_small_matrix(&full_matrix, "Fast Dixon");
+        fast_dixon_print_small_matrix(&full_matrix, "Dixon");
         fast_dixon_print_profile_report(&full_matrix);
         fast_dixon_subproblem_cache_clear_all();
 
-        dixon_maybe_print_step_method_time("Step 1",
-                                           DET_METHOD_RECURSIVE,
-                                           ((double) (clock() - step1_cpu_start) / CLOCKS_PER_SEC),
-                                           get_wall_time() - step1_wall_start);
+        dixon_maybe_print_parallel_step_time("Step 2",
+                                             ((double) (clock() - step2_cpu_start) / CLOCKS_PER_SEC),
+                                             get_wall_time() - step2_wall_start);
     }
 
     fast_dixon_extract_square_submatrix(&coeff_matrix, &matrix_size, &full_matrix, npars);

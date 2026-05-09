@@ -85,6 +85,12 @@ typedef struct {
     double step1_sparse_retry_factor;
     double step1_sparse_expected_log2;
     double step1_sparse_q_for_three_quarters_log2;
+    double step12_recursive_log2;
+    double step12_recursive_factorial_log2;
+    double step12_recursive_tail_degree_product_log2;
+    double step12_standard_table_log2;
+    slong step12_recursive_n;
+    long step12_recursive_m1;
     const char *step1_best_method;
     double step1_best_log2;
     slong macaulay_degree;

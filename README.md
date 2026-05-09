@@ -123,8 +123,11 @@ Run:
 ./drsolve -v 0 <arguments>
 ./drsolve -v 1 <arguments>
 ./drsolve -v 2 <arguments>
+./drsolve -v 3 <arguments>
 ```
-`-v 0` prints nothing but still writes the output file. `-v 1` is the default. `-v 2` restores the debug-level console output and timing.
+`-v 0` prints nothing but still writes the output file. `-v 1` is the default. `-v 2` restores the debug-level console output and timing. `-v 3` additionally dumps small intermediate matrices.
+
+For `--comp`: `-v 0` prints only the final overall complexity, `-v 1` prints the per-step / per-method summary, `-v 2` adds formulas and parameter values, and `-v 3` adds extra detail.
 
 Example:
 ```bash
@@ -200,8 +203,13 @@ Example:
 ### Method Selection
 ```bash
 ./drsolve --method <num> --threads <num> <args>
+./drsolve --dixon <args>
+./drsolve --macaulay <args>
+./drsolve --subres <args>
 ```
-Available methods: 0. Recursive; 1. Kronecker+HNF; 2. Interpolation; 3. sparse interpolation
+Available methods: 0. Recursive; 1. Kronecker+HNF; 2. Interpolation; 3. sparse interpolation; 5. fast recursive Dixon construction.
+
+For convenience, 2 equations + 1 elimination variable auto-enable `--subres`, and 3/4 equations with standard Dixon shape auto-enable the fast recursive Dixon construction unless a method is explicitly selected.
 
 **Note:** Only the `Interpolation` method supports multi-threading. The default method HNF or sparse interpolation does not support parallel acceleration.
 

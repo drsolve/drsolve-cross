@@ -158,10 +158,10 @@ static void print_usage(const char *prog_name)
     printf("    -> --fast-ksy enables a KSY precondition check for method 5 submatrix extraction; --no-fast-ksy disables it\n");
     printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
     printf("  Resultant construction:\n");
-    printf("    %s --resultant dixon|macaulay|subres <args>\n", prog_name);
+    printf("    %s --dixon <args>\n", prog_name);
     printf("    %s --macaulay <args>\n", prog_name);
     printf("    %s --subres <args>\n", prog_name);
-    printf("    -> --macaulay is shorthand for --resultant macaulay\n");
+    printf("    -> --dixon / --macaulay / --subres are direct method selectors\n");
     printf("    -> --subres is for exactly 2 polynomials and 1 elimination variable\n");
 
     printf("  Process count:\n");
@@ -1491,7 +1491,9 @@ static void save_solver_result_to_file(const char *filename,
     }
     fprintf(out_fp, "\n");
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
-    fprintf(out_fp, "CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_time, wall_time, threads_num);
+    (void) cpu_time;
+    (void) threads_num;
+    fprintf(out_fp, "Time: %.3f seconds\n", wall_time);
     fprintf(out_fp, "\nSolutions:\n==========\n");
 
     if (!sols) { fprintf(out_fp, "Solution structure is null\n"); fclose(out_fp); return; }
@@ -1582,7 +1584,9 @@ static void save_rational_solver_result_to_file(const char *filename,
     fprintf(out_fp, "==================================\n");
     fprintf(out_fp, "Field: Q\n");
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
-    fprintf(out_fp, "CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_time, wall_time, threads_num);
+    (void) cpu_time;
+    (void) threads_num;
+    fprintf(out_fp, "Time: %.3f seconds\n", wall_time);
     fprintf(out_fp, "\nSolutions:\n==========\n");
 
     if (!sols) { fprintf(out_fp, "Solution structure is null\n"); fclose(out_fp); return; }
@@ -1946,7 +1950,9 @@ static void save_result_to_file(const char *filename,
     }
     fprintf(out_fp, "Variables eliminated: %s\n", vars_str);
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
-    fprintf(out_fp, "CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_time, wall_time, threads_num);
+    (void) cpu_time;
+    (void) threads_num;
+    fprintf(out_fp, "Time: %.3f seconds\n", wall_time);
     fprintf(out_fp, "\nResultant:\n%s\n", result);
     fclose(out_fp);
 }
@@ -2294,6 +2300,8 @@ int main(int argc, char *argv[])
     int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
     resultant_method_t resultant_method = RESULTANT_METHOD_DIXON;
+    int resultant_method_explicit = 0;
+    int determinant_method_explicit = 0;
     int fast_ksy_precondition = 0;
     long fast_ksy_constant_col = 0;
     const char *cli_input_filename = NULL;
@@ -2344,10 +2352,15 @@ int main(int argc, char *argv[])
                    strcmp(argv[i], "-v")        == 0) {
             fprintf(stderr, "Error: %s requires an integer argument 0, 1, or 2.\n", argv[i]);
             return 1;
+        } else if (strcmp(argv[i], "--dixon") == 0) {
+            resultant_method = RESULTANT_METHOD_DIXON;
+            resultant_method_explicit = 1;
         } else if (strcmp(argv[i], "--macaulay") == 0) {
             resultant_method = RESULTANT_METHOD_MACAULAY;
+            resultant_method_explicit = 1;
         } else if (strcmp(argv[i], "--subres") == 0) {
             resultant_method = RESULTANT_METHOD_SUBRES;
+            resultant_method_explicit = 1;
         } else if ((strcmp(argv[i], "--resultant") == 0 ||
                     strcmp(argv[i], "--resultant-method") == 0) && i + 1 < argc) {
             if (strcmp(argv[i + 1], "macaulay") == 0) {
@@ -2360,6 +2373,7 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "Warning: invalid resultant method '%s', using dixon.\n",
                                 argv[i + 1]);
             }
+            resultant_method_explicit = 1;
             i++;
         } else if ((strcmp(argv[i], "--omega") == 0 ||
                     strcmp(argv[i], "-w")      == 0) && i + 1 < argc) {
@@ -2376,8 +2390,10 @@ int main(int argc, char *argv[])
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
             if (endptr && *endptr == '\0' && val >= 0 && val <= 5) {
+                determinant_method_explicit = 1;
                 if (val == 5) {
                     resultant_method = RESULTANT_METHOD_DIXON_FAST;
+                    resultant_method_explicit = 1;
                     det_method_step1 = -1;
                     det_method_step4 = -1;
                 } else {
@@ -2410,6 +2426,7 @@ int main(int argc, char *argv[])
             long val = strtol(argv[i + 1], &endptr, 10);
             if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
                 det_method_step1 = (int)val;
+                determinant_method_explicit = 1;
             } else {
                 fprintf(stderr, "Warning: invalid --step1 value '%s', "
                                 "must be 0-4. Using default.\n", argv[i + 1]);
@@ -2420,6 +2437,7 @@ int main(int argc, char *argv[])
             long val = strtol(argv[i + 1], &endptr, 10);
             if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
                 det_method_step4 = (int)val;
+                determinant_method_explicit = 1;
             } else {
                 fprintf(stderr, "Warning: invalid --step4 value '%s', "
                                 "must be 0-4. Using default.\n", argv[i + 1]);
@@ -2815,26 +2833,6 @@ int main(int argc, char *argv[])
         prime = fmpz_get_ui(p_fmpz);
     }
 
-    if (!silent_mode) {
-        if (!comp_mode && !solve_mode) {
-            printf("=== %s ===\n", resultant_method_heading(resultant_method));
-            printf("Field: ");
-            print_field_label(stdout, p_fmpz, power);
-            printf("\n");
-            if (!rational_mode && power > 1) {
-                printf("Field extension generator: t\n");
-            }
-        } else if (comp_mode) {
-            printf("Mode: Complexity analysis  |  Field: ");
-            print_field_label(stdout, p_fmpz, power);
-            printf("\n");
-        } else {
-            printf("Mode: Polynomial system solver  |  Field: ");
-            print_field_label(stdout, p_fmpz, power);
-            printf("\n");
-        }
-    }
-
     if (rational_mode) {
         if (ideal_str) {
             fprintf(stderr, "Error: field_size=0 currently does not support --ideal.\n");
@@ -3078,6 +3076,28 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (!comp_mode && !solve_mode && !ideal_str &&
+        !resultant_method_explicit && !determinant_method_explicit &&
+        polys_str && vars_str) {
+        int poly_count = count_comma_separated_items(polys_str);
+        int var_count = count_comma_separated_items(vars_str);
+
+        if (!rational_mode && !large_prime_mode && poly_count == 2 && var_count == 1) {
+            resultant_method = RESULTANT_METHOD_SUBRES;
+            if (!silent_mode) {
+                printf("Hint: detected 2 equations with 1 elimination variable; auto-enabling --subres.\n");
+            }
+        } else if (!rational_mode && !large_prime_mode &&
+                   (poly_count == 3 || poly_count == 4) &&
+                   var_count == poly_count - 1) {
+            resultant_method = RESULTANT_METHOD_DIXON_FAST;
+            if (!silent_mode) {
+                printf("Hint: detected %d equations; auto-enabling fast Dixon construction (--method 5).\n",
+                       poly_count);
+            }
+        }
+    }
+
     if (resultant_method == RESULTANT_METHOD_SUBRES) {
         if (comp_mode) {
             fprintf(stderr, "Error: --subres does not support --comp.\n");
@@ -3101,6 +3121,26 @@ int main(int argc, char *argv[])
         }
         if (!validate_subres_input(polys_str, vars_str, silent_mode)) {
             goto cleanup_fail;
+        }
+    }
+
+    if (!silent_mode) {
+        if (!comp_mode && !solve_mode) {
+            printf("=== %s ===\n", resultant_method_heading(resultant_method));
+            printf("Field: ");
+            print_field_label(stdout, p_fmpz, power);
+            printf("\n");
+            if (!rational_mode && power > 1) {
+                printf("Field extension generator: t\n");
+            }
+        } else if (comp_mode) {
+            printf("Mode: Complexity analysis  |  Field: ");
+            print_field_label(stdout, p_fmpz, power);
+            printf("\n");
+        } else {
+            printf("Mode: Polynomial system solver  |  Field: ");
+            print_field_label(stdout, p_fmpz, power);
+            printf("\n");
         }
     }
 
@@ -3433,8 +3473,12 @@ int main(int argc, char *argv[])
     }
 
     if (!silent_mode) {
-        printf("Total - CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
-               cpu_time, wall_time, total_threads);
+        if (time_mode || verbose_level >= 2) {
+            printf("Total - CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
+                   cpu_time, wall_time, total_threads);
+        } else {
+            printf("Time: %.3f seconds\n", wall_time);
+        }
     }
 
     /* ---- cleanup ---- */

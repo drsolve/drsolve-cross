@@ -78,6 +78,19 @@ void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed)
     dixon_info_log("%s time: %.3f seconds\n", step_label, wall_elapsed);
 }
 
+void dixon_maybe_print_parallel_step_time(const char *step_label,
+                                          double cpu_elapsed,
+                                          double wall_elapsed)
+{
+    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
+        return;
+    }
+
+    dixon_info_log("%s time: CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
+                   step_label, cpu_elapsed, wall_elapsed,
+                   dixon_get_effective_interpolation_threads());
+}
+
 void dixon_maybe_print_step_method_time(const char *step_label,
                                         det_method_t method,
                                         double cpu_elapsed,
