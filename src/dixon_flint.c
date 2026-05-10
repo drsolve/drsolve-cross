@@ -17,6 +17,7 @@ resultant_method_t g_resultant_method = RESULTANT_METHOD_DIXON;
 int g_dixon_verbose_level = 1;
 int g_dixon_debug_mode = 0;
 int g_dixon_show_step_timing = 0;
+rational_root_scan_mode_t g_rational_root_scan_mode = RATIONAL_ROOT_SCAN_AUTO;
 int g_dixon_fast_use_ksy_precondition = 0;
 slong g_dixon_fast_ksy_constant_col = 0;
 

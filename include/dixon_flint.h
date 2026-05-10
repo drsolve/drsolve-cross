@@ -61,6 +61,12 @@ typedef enum {
     RESULTANT_METHOD_DIXON_FAST = 3
 } resultant_method_t;
 
+typedef enum {
+    RATIONAL_ROOT_SCAN_AUTO = 0,
+    RATIONAL_ROOT_SCAN_OFF = 1,
+    RATIONAL_ROOT_SCAN_FORCE = 2
+} rational_root_scan_mode_t;
+
 // Global method selection variables
 extern det_method_t dixon_global_method_step1;
 extern det_method_t dixon_global_method_step4;
@@ -69,6 +75,7 @@ extern resultant_method_t g_resultant_method;
 extern int g_dixon_verbose_level;
 extern int g_dixon_debug_mode;
 extern int g_dixon_show_step_timing;
+extern rational_root_scan_mode_t g_rational_root_scan_mode;
 extern int g_matrix_transpose_threshold;
 extern int g_dixon_fast_use_ksy_precondition;
 extern slong g_dixon_fast_ksy_constant_col;

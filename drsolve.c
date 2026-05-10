@@ -72,6 +72,34 @@ static void print_version()
     printf("===============================================\n");
 }
 
+static void print_short_usage(const char *prog_name)
+{
+    printf("USAGE:\n");
+    printf("  %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
+    printf("  %s \"polynomials\" field_size\n", prog_name);
+    printf("  %s input_file\n", prog_name);
+    printf("\n");
+
+    printf("CORE MODES:\n");
+    printf("  Elimination/resultant:\n");
+    printf("    %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("  Polynomial system solving:\n");
+    printf("    %s \"x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1\" 257\n", prog_name);
+    printf("  Complexity analysis:\n");
+    printf("    %s -c \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
+    printf("  Random input:\n");
+    printf("    %s -r \"[3]*3\" 0\n", prog_name);
+    printf("  File input:\n");
+    printf("    %s example.dr\n", prog_name);
+    printf("\n");
+
+    printf("NOTES:\n");
+    printf("  - Use -v 2 or -v 3 for detailed diagnostics\n");
+    printf("  - In extension fields, 't' is default field generator\n");
+    printf("\n");
+    printf("Run '%s --help' or '%s -h' for full help.\n", prog_name, prog_name);
+}
+
 static void print_usage(const char *prog_name)
 {
     printf("USAGE:\n");
@@ -149,6 +177,12 @@ static void print_usage(const char *prog_name)
     printf("    %s -v 2 <args>\n", prog_name);
     printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
     printf("    -> `--silent`, `--debug`, `--solve-verbose` and `--solve` remain accepted for compatibility\n");
+    printf("  Root search controls:\n");
+    printf("    %s --rational-root-scan <auto|off|force> <args>\n", prog_name);
+    printf("    %s --no-rational-root-scan <args>\n", prog_name);
+    printf("    %s --force-rational-root-scan <args>\n", prog_name);
+    printf("    -> controls the exhaustive Rational Root Theorem scan used before approximate real-root finding\n");
+    printf("    -> default `auto` skips only pathological candidate explosions; `off` disables that exact scan; `force` always runs it\n");
 
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
@@ -194,6 +228,7 @@ static void print_usage(const char *prog_name)
     printf("  %s -v 0 \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
     printf("  %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("  (AES polynomial for GF(2^8), 't' is the field extension generator)\n");
+    printf("  In Q and prime fields, 't' is treated as an ordinary variable; only extension fields reserve it as the generator.\n");
     printf("  %s example.dr\n", prog_name);
     printf("  %s -v 2 -f in.dr -o out.dr\n", prog_name);
     printf("  %s example_solve.dr\n", prog_name);
@@ -1488,6 +1523,7 @@ static void save_solver_result_to_file(const char *filename,
     print_field_label(out_fp, prime, power);
     if (!fmpz_is_zero(prime) && power > 1) {
         fprintf(out_fp, "\nField extension generator: t");
+        fprintf(out_fp, "\nNote: in extension fields, symbol 't' is interpreted as the field generator.");
     }
     fprintf(out_fp, "\n");
     fprintf(out_fp, "Polynomials: %s\n", polys_str);
@@ -1938,6 +1974,7 @@ static void save_result_to_file(const char *filename,
     print_field_label(out_fp, prime, power);
     if (!fmpz_is_zero(prime) && power > 1) {
         fprintf(out_fp, "\nField extension generator: t");
+        fprintf(out_fp, "\nNote: in extension fields, symbol 't' is interpreted as the field generator.");
     }
     fprintf(out_fp, "\n");
 
@@ -2284,7 +2321,17 @@ int main(int argc, char *argv[])
     struct timeval program_start;
     gettimeofday(&program_start, NULL);
 
-    if (argc == 1) { print_version(); print_usage(prog_name); return 0; }
+    if (argc == 1) {
+        print_version();
+        print_short_usage(prog_name);
+        return 0;
+    }
+    if (argc == 2 &&
+        (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
+        print_version();
+        print_usage(prog_name);
+        return 0;
+    }
 
     /* ---- parse flags ---- */
     int    verbose_level = 1;
@@ -2304,6 +2351,8 @@ int main(int argc, char *argv[])
     int determinant_method_explicit = 0;
     int fast_ksy_precondition = 0;
     long fast_ksy_constant_col = 0;
+    rational_root_scan_mode_t rational_root_scan_mode = RATIONAL_ROOT_SCAN_AUTO;
+    int rational_root_scan_mode_explicit = 0;
     const char *cli_input_filename = NULL;
     const char *cli_output_filename = NULL;
     char *positional_args[argc];
@@ -2338,6 +2387,31 @@ int main(int argc, char *argv[])
             field_eq_mode = 1;
         } else if (strcmp(argv[i], "--time") == 0) {
             time_mode = 1;
+        } else if (strcmp(argv[i], "--no-rational-root-scan") == 0) {
+            rational_root_scan_mode = RATIONAL_ROOT_SCAN_OFF;
+            rational_root_scan_mode_explicit = 1;
+        } else if (strcmp(argv[i], "--force-rational-root-scan") == 0) {
+            rational_root_scan_mode = RATIONAL_ROOT_SCAN_FORCE;
+            rational_root_scan_mode_explicit = 1;
+        } else if (strcmp(argv[i], "--rational-root-scan") == 0 && i + 1 < argc) {
+            if (strcmp(argv[i + 1], "auto") == 0) {
+                rational_root_scan_mode = RATIONAL_ROOT_SCAN_AUTO;
+            } else if (strcmp(argv[i + 1], "off") == 0) {
+                rational_root_scan_mode = RATIONAL_ROOT_SCAN_OFF;
+            } else if (strcmp(argv[i + 1], "force") == 0) {
+                rational_root_scan_mode = RATIONAL_ROOT_SCAN_FORCE;
+            } else {
+                fprintf(stderr,
+                        "Error: invalid --rational-root-scan value '%s'; expected auto, off, or force.\n",
+                        argv[i + 1]);
+                return 1;
+            }
+            rational_root_scan_mode_explicit = 1;
+            i++;
+        } else if (strcmp(argv[i], "--rational-root-scan") == 0) {
+            fprintf(stderr,
+                    "Error: --rational-root-scan requires one of: auto, off, force.\n");
+            return 1;
         } else if (strcmp(argv[i], "--debug") == 0) {
             verbose_level = 2;
         } else if ((strcmp(argv[i], "--verbose") == 0 ||
@@ -3132,6 +3206,7 @@ int main(int argc, char *argv[])
             printf("\n");
             if (!rational_mode && power > 1) {
                 printf("Field extension generator: t\n");
+                printf("Note: in extension fields, symbol 't' is interpreted as the field generator.\n");
             }
         } else if (comp_mode) {
             printf("Mode: Complexity analysis  |  Field: ");
@@ -3154,6 +3229,7 @@ int main(int argc, char *argv[])
     g_dixon_verbose_level = verbose_level;
     g_dixon_show_step_timing = (!silent_mode) && (time_mode || debug_mode);
     g_dixon_debug_mode = debug_mode;
+    g_rational_root_scan_mode = rational_root_scan_mode;
     g_dixon_fast_use_ksy_precondition = fast_ksy_precondition;
     g_dixon_fast_ksy_constant_col = fast_ksy_constant_col;
     if (det_method_step1 != -1) {
@@ -3171,6 +3247,15 @@ int main(int argc, char *argv[])
             printf("Step 4 determinant method: %s\n",
                    det_method_name_cli(det_method_step4));
         }
+    }
+    if (!silent_mode && rational_root_scan_mode_explicit) {
+        const char *mode_name = "auto";
+        if (rational_root_scan_mode == RATIONAL_ROOT_SCAN_OFF) {
+            mode_name = "off";
+        } else if (rational_root_scan_mode == RATIONAL_ROOT_SCAN_FORCE) {
+            mode_name = "force";
+        }
+        printf("Rational root scan mode: %s\n", mode_name);
     }
     int threads_requested_explicitly = (num_threads != -1);
     if (num_threads == -1) {

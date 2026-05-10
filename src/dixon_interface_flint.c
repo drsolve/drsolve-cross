@@ -826,7 +826,13 @@ void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, par
 
 // Get field generator name
 char* get_generator_name(const fq_nmod_ctx_t ctx) {
-    return strdup(ctx->var);
+    if (ctx == NULL || fq_nmod_ctx_degree(ctx) <= 1) {
+        return strdup("");
+    }
+    if (ctx->var && strlen(ctx->var) > 0) {
+        return strdup(ctx->var);
+    }
+    return strdup("t");
 }
 
 // Convert fq_nmod_t to string with field generator

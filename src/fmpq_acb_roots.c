@@ -1,4 +1,5 @@
 #include "fmpq_acb_roots.h"
+#include "dixon_flint.h"
 #include <flint/arith.h>
 #include <flint/acb_poly.h>
 #include <flint/arb.h>
@@ -6,6 +7,7 @@
 #include <time.h>
 
 extern int g_dixon_verbose_level;
+extern rational_root_scan_mode_t g_rational_root_scan_mode;
 
 static const slong FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD = 50000;
 
@@ -141,12 +143,24 @@ slong fmpq_poly_roots(fmpq_roots_t *roots, const fmpq_poly_t poly, int with_mult
             fmpq_clear(value);
             goto cleanup;
         }
-        if (candidate_count > FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD) {
+        if (g_rational_root_scan_mode == RATIONAL_ROOT_SCAN_OFF) {
+            root_trace_log("[root-debug:v3] Rational-root scan disabled by CLI option.\n");
+            fmpq_clear(candidate);
+            fmpq_clear(value);
+            goto cleanup;
+        }
+        if (g_rational_root_scan_mode == RATIONAL_ROOT_SCAN_AUTO &&
+            candidate_count > FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD) {
             root_trace_log("[root-debug:v3] Skipping exhaustive rational-root scan: %ld candidates exceed threshold %ld.\n",
                            candidate_count, FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD);
             fmpq_clear(candidate);
             fmpq_clear(value);
             goto cleanup;
+        }
+        if (g_rational_root_scan_mode == RATIONAL_ROOT_SCAN_FORCE &&
+            candidate_count > FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD) {
+            root_trace_log("[root-debug:v3] Forcing exhaustive rational-root scan despite %ld candidates (threshold %ld).\n",
+                           candidate_count, FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD);
         }
          
         for (slong i = 0; i < fmpz_poly_length(num_divs); i++) {
