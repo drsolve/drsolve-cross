@@ -18,6 +18,136 @@ static const slong QQ_ROOT_SEARCH_MAX_DEGREE = 1000;
 static const slong QQ_ROOT_SEARCH_MAX_CANDIDATES = 1000000;
 static char *g_last_root_report = NULL;
 
+static int qq_root_debug_enabled(void)
+{
+    return g_dixon_verbose_level >= 2;
+}
+
+static void qq_root_debug_log(const char *fmt, ...)
+{
+    va_list args;
+
+    if (!qq_root_debug_enabled() || !fmt) return;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+static void qq_arb_roots_add_unique(arb_roots_t *roots, const arb_t root, slong mult)
+{
+    if (!roots) return;
+
+    for (slong i = 0; i < roots->num_roots; i++) {
+        if (arb_overlaps(roots->roots[i], root)) {
+            if (mult > roots->multiplicities[i]) {
+                roots->multiplicities[i] = mult;
+            }
+            return;
+        }
+    }
+
+    if (roots->num_roots >= roots->alloc) {
+        slong new_alloc = roots->alloc ? 2 * roots->alloc : 4;
+        roots->roots = (arb_t *) realloc(roots->roots, (size_t) new_alloc * sizeof(arb_t));
+        roots->multiplicities = (slong *) realloc(roots->multiplicities,
+                                                  (size_t) new_alloc * sizeof(slong));
+        for (slong i = roots->alloc; i < new_alloc; i++) {
+            arb_init(roots->roots[i]);
+        }
+        roots->alloc = new_alloc;
+    }
+
+    arb_set(roots->roots[roots->num_roots], root);
+    roots->multiplicities[roots->num_roots] = mult;
+    roots->num_roots++;
+}
+
+static slong qq_fmpq_poly_exponent_gcd(const fmpq_poly_t poly)
+{
+    slong degree = fmpq_poly_degree(poly);
+    slong gcd_exp = 0;
+    fmpq_t coeff;
+
+    if (degree <= 0) {
+        return 1;
+    }
+
+    fmpq_init(coeff);
+    for (slong i = 0; i <= degree; i++) {
+        fmpq_poly_get_coeff_fmpq(coeff, poly, i);
+        if (!fmpq_is_zero(coeff)) {
+            if (gcd_exp == 0) {
+                gcd_exp = i;
+            } else {
+                gcd_exp = n_gcd((ulong) gcd_exp, (ulong) i);
+            }
+        }
+    }
+    fmpq_clear(coeff);
+
+    if (gcd_exp <= 0) {
+        gcd_exp = 1;
+    }
+    return gcd_exp;
+}
+
+static void qq_compress_fmpq_poly_by_exp_gcd(fmpq_poly_t compressed,
+                                             const fmpq_poly_t poly,
+                                             slong gcd_exp)
+{
+    slong degree = fmpq_poly_degree(poly);
+    fmpq_t coeff;
+
+    fmpq_poly_zero(compressed);
+    fmpq_init(coeff);
+    for (slong i = 0; i <= degree; i++) {
+        fmpq_poly_get_coeff_fmpq(coeff, poly, i);
+        if (!fmpq_is_zero(coeff)) {
+            fmpq_poly_set_coeff_fmpq(compressed, i / gcd_exp, coeff);
+        }
+    }
+    fmpq_clear(coeff);
+    fmpq_poly_canonicalise(compressed);
+}
+
+static void qq_lift_real_root_from_power_relation(arb_roots_t *lifted,
+                                                  const arb_t base_root,
+                                                  slong mult,
+                                                  ulong power,
+                                                  slong prec)
+{
+    arb_t lifted_root;
+
+    if (!lifted || !base_root || power == 0) return;
+
+    arb_init(lifted_root);
+
+    if (arb_is_zero(base_root)) {
+        arb_zero(lifted_root);
+        qq_arb_roots_add_unique(lifted, lifted_root, mult * (slong) power);
+        arb_clear(lifted_root);
+        return;
+    }
+
+    if ((power % 2UL) == 0UL) {
+        if (!arb_contains_nonnegative(base_root)) {
+            arb_clear(lifted_root);
+            return;
+        }
+
+        arb_root_ui(lifted_root, base_root, power, prec);
+        qq_arb_roots_add_unique(lifted, lifted_root, mult);
+        arb_neg(lifted_root, lifted_root);
+        qq_arb_roots_add_unique(lifted, lifted_root, mult);
+    } else {
+        arb_root_ui(lifted_root, base_root, power, prec);
+        qq_arb_roots_add_unique(lifted, lifted_root, mult);
+    }
+
+    arb_clear(lifted_root);
+}
+
 static void root_report_appendf(char **buffer, size_t *length, size_t *capacity,
                                 const char *fmt, ...)
 {
@@ -1987,6 +2117,14 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
     slong actual_par_count = 0;
     slong main_par_idx = -1;
     int *par_used;
+    clock_t coeff_recon_start;
+    clock_t root_search_start;
+    double coeff_recon_seconds = 0.0;
+    double root_search_seconds = 0.0;
+    int have_file = (fp_file != NULL);
+    slong exponent_gcd = 1;
+    int use_compressed_root_search = 0;
+    slong root_search_degree = 0;
 
     if (!acc) return;
 
@@ -2016,6 +2154,10 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
 
     fmpq_poly_t rat_poly;
     fmpq_poly_init(rat_poly);
+    coeff_recon_start = clock();
+
+    qq_root_debug_log("[root-debug] Start univariate root analysis from reconstructed resultant (%ld term(s), %ld parameter slot(s)).\n",
+                      acc->nterms, acc->npars);
 
     for (slong i = 0; i < acc->nterms; i++) {
         slong degree = 0;
@@ -2039,6 +2181,7 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
     }
 
     fmpq_poly_canonicalise(rat_poly);
+    coeff_recon_seconds = (double) (clock() - coeff_recon_start) / CLOCKS_PER_SEC;
 
     const char *var_name = acc->par_names[main_par_idx];
     slong degree = fmpq_poly_degree(rat_poly);
@@ -2049,20 +2192,117 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
         return;
     }
 
-    fmpq_acb_roots_t all_roots;
-    fmpq_acb_roots_init(&all_roots);
-    slong prec = 64;
-    fmpq_poly_real_roots(&all_roots, rat_poly, prec);
-    
+    qq_root_debug_log("[root-debug] Rational univariate polynomial in %s built: degree=%ld, coefficient reconstruction %.3f s.\n",
+                      var_name, degree, coeff_recon_seconds);
+
     printf("\nRoots in %s (degree %ld):\n", var_name, degree);
-    fmpq_acb_roots_print_real(&all_roots);
-    
-    if (fp_file) {
-        fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
-        fmpq_acb_roots_print_all_to_file(fp_file, &all_roots);
+
+    exponent_gcd = qq_fmpq_poly_exponent_gcd(rat_poly);
+    use_compressed_root_search = (exponent_gcd > 1);
+    root_search_degree = use_compressed_root_search ? degree / exponent_gcd : degree;
+
+    if (use_compressed_root_search) {
+        slong prec = 64;
+        fmpq_poly_t compressed_poly;
+        fmpq_acb_roots_t compressed_roots;
+        arb_roots_t lifted_real_roots;
+
+        qq_root_debug_log("[root-debug] Exponent gcd detected: %ld. Compressing root search via %s = u^%ld (degree %ld -> %ld).\n",
+                          exponent_gcd, var_name, exponent_gcd, degree, root_search_degree);
+
+        fmpq_poly_init(compressed_poly);
+        qq_compress_fmpq_poly_by_exp_gcd(compressed_poly, rat_poly, exponent_gcd);
+
+        fmpq_acb_roots_init(&compressed_roots);
+        arb_roots_init(&lifted_real_roots);
+
+        root_search_start = clock();
+        qq_root_debug_log("[root-debug] Calling compressed approximate real-root pipeline (prec=%ld).\n",
+                          prec);
+        fmpq_poly_real_roots(&compressed_roots, compressed_poly, prec);
+
+        for (slong i = 0; i < compressed_roots.rational_roots.num_roots; i++) {
+            arb_t base_root;
+            arb_init(base_root);
+            arb_set_fmpq(base_root, compressed_roots.rational_roots.roots[i], prec);
+            qq_lift_real_root_from_power_relation(&lifted_real_roots, base_root,
+                                                  compressed_roots.rational_roots.multiplicities[i],
+                                                  (ulong) exponent_gcd, prec);
+            arb_clear(base_root);
+        }
+
+        for (slong i = 0; i < compressed_roots.real_roots.num_roots; i++) {
+            qq_lift_real_root_from_power_relation(&lifted_real_roots,
+                                                  compressed_roots.real_roots.roots[i],
+                                                  compressed_roots.real_roots.multiplicities[i],
+                                                  (ulong) exponent_gcd, prec);
+        }
+
+        root_search_seconds = (double) (clock() - root_search_start) / CLOCKS_PER_SEC;
+        qq_root_debug_log("[root-debug] Compressed root pipeline finished in %.3f s.\n",
+                          root_search_seconds);
+
+        if (lifted_real_roots.num_roots > 0) {
+            printf("\nApproximate real roots:\n");
+            arb_roots_print(&lifted_real_roots);
+        } else {
+            printf("No roots found.\n");
+        }
+
+        if (have_file) {
+            fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+            if (lifted_real_roots.num_roots > 0) {
+                fprintf(fp_file, "\nApproximate real roots:\n");
+                arb_roots_print_to_file(fp_file, &lifted_real_roots);
+            } else {
+                fprintf(fp_file, "No roots found.\n");
+            }
+            if (g_dixon_verbose_level >= 3) {
+                fprintf(fp_file,
+                        "\n[root-debug] Exponent gcd %ld used for compressed real-root search (degree %ld -> %ld).\n",
+                        exponent_gcd, degree, root_search_degree);
+            }
+        }
+
+        arb_roots_clear(&lifted_real_roots);
+        fmpq_acb_roots_clear(&compressed_roots);
+        fmpq_poly_clear(compressed_poly);
+    } else {
+        slong prec = 64;
+        fmpq_acb_roots_t all_roots;
+        fmpq_acb_roots_init(&all_roots);
+        root_search_start = clock();
+        qq_root_debug_log("[root-debug] Calling approximate real-root pipeline (prec=%ld, also computes complex roots internally).\n",
+                          prec);
+        fmpq_poly_real_roots(&all_roots, rat_poly, prec);
+        root_search_seconds = (double) (clock() - root_search_start) / CLOCKS_PER_SEC;
+        qq_root_debug_log("[root-debug] Approximate real-root pipeline finished in %.3f s.\n",
+                          root_search_seconds);
+
+        fmpq_acb_roots_print_real(&all_roots);
+        
+        if (have_file) {
+            fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+            if (all_roots.rational_roots.num_roots > 0) {
+                fprintf(fp_file, "\nRational roots:\n");
+                fmpq_roots_print_to_file(fp_file, &all_roots.rational_roots);
+            }
+            if (all_roots.real_roots.num_roots > 0) {
+                fprintf(fp_file, "\nApproximate real roots:\n");
+                arb_roots_print_to_file(fp_file, &all_roots.real_roots);
+            }
+            if (g_dixon_verbose_level >= 3 && all_roots.approximate_roots.num_roots > 0) {
+                fprintf(fp_file, "\nApproximate complex roots:\n");
+                acb_roots_print_to_file(fp_file, &all_roots.approximate_roots);
+            }
+            if (all_roots.rational_roots.num_roots == 0 &&
+                all_roots.real_roots.num_roots == 0) {
+                fprintf(fp_file, "No roots found.\n");
+            }
+        }
+        
+        fmpq_acb_roots_clear(&all_roots);
     }
-    
-    fmpq_acb_roots_clear(&all_roots);
 
     fmpq_poly_clear(rat_poly);
     free(par_used);

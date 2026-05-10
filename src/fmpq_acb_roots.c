@@ -2,6 +2,28 @@
 #include <flint/arith.h>
 #include <flint/acb_poly.h>
 #include <flint/arb.h>
+#include <stdarg.h>
+#include <time.h>
+
+extern int g_dixon_verbose_level;
+
+static const slong FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD = 50000;
+
+static int root_trace_enabled(void)
+{
+    return g_dixon_verbose_level >= 3;
+}
+
+static void root_trace_log(const char *fmt, ...)
+{
+    va_list args;
+
+    if (!root_trace_enabled() || !fmt) return;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
 
 void fmpq_roots_init(fmpq_roots_t *roots) {
     roots->roots = NULL;
@@ -43,7 +65,8 @@ static void fmpq_roots_add_root(fmpq_roots_t *roots, const fmpq_t root, slong mu
 
 slong fmpq_poly_roots(fmpq_roots_t *roots, const fmpq_poly_t poly, int with_multiplicity) {
     slong degree = fmpq_poly_degree(poly);
-    
+    clock_t start_time = clock();
+     
     if (degree <= 0) {
         return 0;
     }
@@ -109,14 +132,23 @@ slong fmpq_poly_roots(fmpq_roots_t *roots, const fmpq_poly_t poly, int with_mult
         
         arith_divisors(num_divs, abs_const);
         arith_divisors(den_divs, abs_lead);
-        
+         
         slong candidate_count = 2 * fmpz_poly_length(num_divs) * fmpz_poly_length(den_divs);
+        root_trace_log("[root-debug:v3] Rational-root test: degree=%ld, numerator divisors=%ld, denominator divisors=%ld, candidates=%ld.\n",
+                       degree, fmpz_poly_length(num_divs), fmpz_poly_length(den_divs), candidate_count);
         if (candidate_count > FMPQ_ROOT_SEARCH_MAX_CANDIDATES) {
             fmpq_clear(candidate);
             fmpq_clear(value);
             goto cleanup;
         }
-        
+        if (candidate_count > FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD) {
+            root_trace_log("[root-debug:v3] Skipping exhaustive rational-root scan: %ld candidates exceed threshold %ld.\n",
+                           candidate_count, FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD);
+            fmpq_clear(candidate);
+            fmpq_clear(value);
+            goto cleanup;
+        }
+         
         for (slong i = 0; i < fmpz_poly_length(num_divs); i++) {
             fmpz_t num;
             fmpz_init(num);
@@ -172,7 +204,11 @@ cleanup:
     fmpz_clear(abs_lead);
     fmpz_clear(coeff);
     fmpz_clear(gcd_nd);
-    
+
+    root_trace_log("[root-debug:v3] Rational-root test finished in %.3f s, found %ld root(s).\n",
+                   (double) (clock() - start_time) / CLOCKS_PER_SEC,
+                   roots->num_roots);
+     
     return roots->num_roots;
 }
 
@@ -252,7 +288,8 @@ static void acb_roots_add_root(acb_roots_t *roots, const acb_t root, slong mult)
 
 slong acb_poly_roots(acb_roots_t *roots, const acb_poly_t poly, slong prec) {
     slong degree = acb_poly_degree(poly);
-    
+    clock_t start_time = clock();
+     
     if (degree <= 0) {
         return 0;
     }
@@ -266,13 +303,19 @@ slong acb_poly_roots(acb_roots_t *roots, const acb_poly_t poly, slong prec) {
     }
     
     _acb_vec_clear(roots_array, degree);
-    
+
+    root_trace_log("[root-debug:v3] acb_poly_find_roots finished in %.3f s for degree %ld.\n",
+                   (double) (clock() - start_time) / CLOCKS_PER_SEC,
+                   degree);
+     
     return roots->num_roots;
 }
 
 slong fmpq_poly_acb_roots(acb_roots_t *roots, const fmpq_poly_t poly, slong prec) {
     slong degree = fmpq_poly_degree(poly);
-    
+    clock_t convert_start = clock();
+    clock_t solve_start;
+     
     if (degree <= 0) {
         return 0;
     }
@@ -280,11 +323,17 @@ slong fmpq_poly_acb_roots(acb_roots_t *roots, const fmpq_poly_t poly, slong prec
     acb_poly_t acb_poly;
     acb_poly_init(acb_poly);
     acb_poly_set_fmpq_poly(acb_poly, poly, prec);
-    
+    root_trace_log("[root-debug:v3] Converted fmpq polynomial to acb polynomial in %.3f s (degree %ld, prec=%ld).\n",
+                   (double) (clock() - convert_start) / CLOCKS_PER_SEC,
+                   degree, prec);
+     
+    solve_start = clock();
     slong result = acb_poly_roots(roots, acb_poly, prec);
-    
+    root_trace_log("[root-debug:v3] Approximate complex-root phase total %.3f s.\n",
+                   (double) (clock() - solve_start) / CLOCKS_PER_SEC);
+     
     acb_poly_clear(acb_poly);
-    
+     
     return result;
 }
 
@@ -378,6 +427,8 @@ static void arb_roots_add_root(arb_roots_t *roots, const arb_t root, slong mult)
 }
 
 slong acb_roots_to_real(arb_roots_t *real_roots, const acb_roots_t *complex_roots, slong prec) {
+    clock_t start_time = clock();
+    (void) prec;
     for (slong i = 0; i < complex_roots->num_roots; i++) {
         arb_t real_part, imag_part;
         arb_init(real_part);
@@ -423,7 +474,11 @@ slong acb_roots_to_real(arb_roots_t *real_roots, const acb_roots_t *complex_root
         arb_clear(real_part);
         arb_clear(imag_part);
     }
-    
+
+    root_trace_log("[root-debug:v3] Filtered %ld complex root(s) down to %ld real root interval(s) in %.3f s.\n",
+                   complex_roots->num_roots, real_roots->num_roots,
+                   (double) (clock() - start_time) / CLOCKS_PER_SEC);
+     
     return real_roots->num_roots;
 }
 
@@ -438,17 +493,25 @@ void arb_roots_print(const arb_roots_t *roots) {
 
 slong fmpq_poly_real_roots(fmpq_acb_roots_t *roots, const fmpq_poly_t poly, slong prec) {
     slong degree = fmpq_poly_degree(poly);
-    
+    clock_t start_time = clock();
+     
     if (degree <= 0) {
         return 0;
     }
-    
+     
     fmpq_poly_roots(&roots->rational_roots, poly, 0);
-    
+     
     fmpq_poly_acb_roots(&roots->approximate_roots, poly, prec);
-    
+     
     acb_roots_to_real(&roots->real_roots, &roots->approximate_roots, prec);
-    
+
+    root_trace_log("[root-debug:v3] Real-root pipeline summary: degree=%ld, rational=%ld, approx_complex=%ld, real=%ld, total=%.3f s.\n",
+                   degree,
+                   roots->rational_roots.num_roots,
+                   roots->approximate_roots.num_roots,
+                   roots->real_roots.num_roots,
+                   (double) (clock() - start_time) / CLOCKS_PER_SEC);
+     
     return roots->rational_roots.num_roots + roots->real_roots.num_roots;
 }
 
