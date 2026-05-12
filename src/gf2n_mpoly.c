@@ -1751,8 +1751,8 @@ cleanup:
     free(dA);free(dB);free(bo); return success;
 }
 
-int gf28_mpoly_mul(gf28_mpoly_t res, const gf28_mpoly_t a,
-    const gf28_mpoly_t b, const gf28_mpoly_ctx_t ctx)
+int gf28_mpoly_mul_with_fqctx(gf28_mpoly_t res, const gf28_mpoly_t a,
+    const gf28_mpoly_t b, const gf28_mpoly_ctx_t ctx, const fq_nmod_ctx_t fq_ctx)
 {
     if (a->length == 0 || b->length == 0) { gf28_mpoly_zero(res,ctx); return 1; }
     slong mva, mvb;
@@ -1770,13 +1770,21 @@ int gf28_mpoly_mul(gf28_mpoly_t res, const gf28_mpoly_t a,
         else if (mx <= 10000) gf28_poly_mul_karatsuba(pr,pa,pb);
         else {
             gf28_poly_clear(pa);gf28_poly_clear(pb);gf28_poly_clear(pr);
-            return 0;
+            if (fq_ctx == NULL) return 0;
+            gf28_mpoly_mul_flint_univar(res, a, b, ctx, mva, fq_ctx);
+            return 1;
         }
         gf28_poly_to_gf28_mpoly_univar(res,pr,ctx,mva);
         gf28_poly_clear(pa);gf28_poly_clear(pb);gf28_poly_clear(pr);
         return 1;
     }
     return gf28_mpoly_mul_array(res, a, b, ctx);
+}
+
+int gf28_mpoly_mul(gf28_mpoly_t res, const gf28_mpoly_t a,
+    const gf28_mpoly_t b, const gf28_mpoly_ctx_t ctx)
+{
+    return gf28_mpoly_mul_with_fqctx(res, a, b, ctx, NULL);
 }
 
 int gf28_mpoly_divides(gf28_mpoly_t Q, const gf28_mpoly_t A,

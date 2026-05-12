@@ -112,9 +112,9 @@ void fq_tensor_interpolation_all_vars_optimized(fq_mvpoly_t *result,
                                                slong npars,
                                                const fq_nmod_ctx_t ctx);
 
-void fq_generate_evaluation_points_optimized(fq_nmod_t **grids, slong *grid_sizes, 
-                                            slong total_vars, slong *degrees, 
-                                            const fq_nmod_ctx_t ctx);
+int fq_generate_evaluation_points_optimized(fq_nmod_t **grids, slong *grid_sizes, 
+                                           slong total_vars, slong *degrees, 
+                                           const fq_nmod_ctx_t ctx);
 
 void fq_compute_det_degree_bounds_optimized(slong *bounds, fq_mvpoly_t **matrix, 
                                            slong size, slong total_vars);

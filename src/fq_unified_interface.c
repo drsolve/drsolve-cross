@@ -3,6 +3,36 @@
 #include "fq_unified_interface.h"
 extern int g_field_equation_reduction;
 
+static int gf216_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
+{
+    return extract_irred_poly(fq_ctx) == 0x1002D;
+}
+
+static int gf232_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
+{
+    uint64_t poly = extract_irred_poly(fq_ctx);
+    return ((poly >> 32) == 1ULL) && (((uint32_t) poly) == 0x8299U);
+}
+
+static int gf264_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
+{
+    uint64_t low = 0, high = 0;
+    extract_gf264_poly(fq_ctx, &low, &high);
+    return high == 0x2ULL && low == 0x47F43CB7ULL;
+}
+
+static int gf2128_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
+{
+    const nmod_poly_struct *modulus = fq_nmod_ctx_modulus(fq_ctx);
+    if (nmod_poly_degree(modulus) != 128) return 0;
+    for (slong i = 0; i <= 128; i++) {
+        mp_limb_t coeff = nmod_poly_get_coeff_ui(modulus, i);
+        int expected = (i == 0 || i == 1 || i == 2 || i == 7 || i == 128);
+        if ((coeff != 0) != expected) return 0;
+    }
+    return 1;
+}
+
 /* ============================================================================
    GLOBAL WORKSPACE
    ============================================================================ */
@@ -51,37 +81,49 @@ void field_ctx_init_enhanced(field_ctx_t *ctx, const fq_nmod_ctx_t fq_ctx, ulong
                 ctx->description = "GF(2^8) lookup tables";
                 break;
             case 16:
-                ctx->field_id = FIELD_ID_GF216;
-                ctx->ctx.fq_ctx = fq_ctx;
-                ctx->elem_size = sizeof(uint16_t);
-                init_gf216_standard();
-                init_gf216_conversion(fq_ctx);
-                ctx->description = "GF(2^16) tower field";
-                break;
+                if (gf216_native_modulus_supported(fq_ctx)) {
+                    ctx->field_id = FIELD_ID_GF216;
+                    ctx->ctx.fq_ctx = fq_ctx;
+                    ctx->elem_size = sizeof(uint16_t);
+                    init_gf216_standard();
+                    init_gf216_conversion(fq_ctx);
+                    ctx->description = "GF(2^16) tower field";
+                    break;
+                }
+                goto check_zech;
             case 32:
-                ctx->field_id = FIELD_ID_GF232;
-                ctx->ctx.fq_ctx = fq_ctx;
-                ctx->elem_size = sizeof(gf232_t);
-                init_gf232();
-                init_gf232_conversion(fq_ctx);
-                ctx->description = "GF(2^32) PCLMUL";
-                break;
+                if (gf232_native_modulus_supported(fq_ctx)) {
+                    ctx->field_id = FIELD_ID_GF232;
+                    ctx->ctx.fq_ctx = fq_ctx;
+                    ctx->elem_size = sizeof(gf232_t);
+                    init_gf232();
+                    init_gf232_conversion(fq_ctx);
+                    ctx->description = "GF(2^32) PCLMUL";
+                    break;
+                }
+                goto check_zech;
             case 64:
-                ctx->field_id = FIELD_ID_GF264;
-                ctx->ctx.fq_ctx = fq_ctx;
-                ctx->elem_size = sizeof(gf264_t);
-                init_gf264();
-                init_gf264_conversion(fq_ctx);
-                ctx->description = "GF(2^64) PCLMUL";
-                break;
+                if (gf264_native_modulus_supported(fq_ctx)) {
+                    ctx->field_id = FIELD_ID_GF264;
+                    ctx->ctx.fq_ctx = fq_ctx;
+                    ctx->elem_size = sizeof(gf264_t);
+                    init_gf264();
+                    init_gf264_conversion(fq_ctx);
+                    ctx->description = "GF(2^64) PCLMUL";
+                    break;
+                }
+                goto check_zech;
             case 128:
-                ctx->field_id = FIELD_ID_GF2128;
-                ctx->ctx.fq_ctx = fq_ctx;
-                ctx->elem_size = sizeof(gf2128_t);
-                init_gf2128();
-                init_gf2128_conversion(fq_ctx);
-                ctx->description = "GF(2^128) PCLMUL";
-                break;
+                if (gf2128_native_modulus_supported(fq_ctx)) {
+                    ctx->field_id = FIELD_ID_GF2128;
+                    ctx->ctx.fq_ctx = fq_ctx;
+                    ctx->elem_size = sizeof(gf2128_t);
+                    init_gf2128();
+                    init_gf2128_conversion(fq_ctx);
+                    ctx->description = "GF(2^128) PCLMUL";
+                    break;
+                }
+                goto check_zech;
             default:
                 goto check_zech;
         }

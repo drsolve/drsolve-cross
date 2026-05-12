@@ -7,6 +7,7 @@
 
 #include "fq_multivariate_interpolation.h"
 extern int g_field_equation_reduction;
+extern int g_dixon_verbose_level;
 
 // Global control for parallelization
 int USE_PARALLEL = 1;
@@ -1094,329 +1095,189 @@ void fq_tensor_interpolation_all_vars_optimized(fq_mvpoly_t *result,
     // print_interpolation_stats();
 }
 
-void fq_generate_evaluation_points_optimized(fq_nmod_t **grids, slong *grid_sizes, 
-                                            slong total_vars, slong *degrees, 
-                                            const fq_nmod_ctx_t ctx) {
+int fq_generate_evaluation_points_optimized(fq_nmod_t **grids, slong *grid_sizes,
+                                           slong total_vars, slong *degrees,
+                                           const fq_nmod_ctx_t ctx) {
     slong extra_points = 1;
-    
     slong field_degree = fq_nmod_ctx_degree(ctx);
     mp_limb_t prime = fq_nmod_ctx_prime(ctx);
-    
-    // Calculate field size
     slong field_size;
+    fq_nmod_t one;
+    fq_nmod_t *basis_powers = NULL;
+    fq_nmod_t scalar_coeff, term;
+
     if (field_degree == 1) {
         field_size = prime;
     } else {
-        // For extension fields, field_size = prime^field_degree
-        // Be careful with overflow for large fields
         field_size = 1;
         for (slong i = 0; i < field_degree; i++) {
             if (field_size > WORD_MAX / prime) {
-                // Field is too large to represent as slong
                 field_size = WORD_MAX;
                 break;
             }
             field_size *= prime;
         }
     }
-    
-    FQ_INTERP_PRINT("Field size: %ld (prime=%lu, degree=%ld)\n", 
+
+    FQ_INTERP_PRINT("Field size: %ld (prime=%lu, degree=%ld)\n",
                     field_size, prime, field_degree);
-    
-    // Initialize unified field context for ALL field types
-    field_ctx_t unified_ctx;
-    field_ctx_init(&unified_ctx, ctx);
-    
-    // Initialize unified elements
-    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ? 
-                   (void*)&unified_ctx.ctx.nmod_ctx : 
-                   (void*)unified_ctx.ctx.fq_ctx;
-    
-    field_elem_u generator_unified, temp_unified, one_unified;
-    field_init_elem(&generator_unified, unified_ctx.field_id, ctx_ptr);
-    field_init_elem(&temp_unified, unified_ctx.field_id, ctx_ptr);
-    field_init_elem(&one_unified, unified_ctx.field_id, ctx_ptr);
-    field_set_one(&one_unified, unified_ctx.field_id, ctx_ptr);
-    
-    // Regular FLINT elements for compatibility
-    fq_nmod_t generator, temp, one;
-    fq_nmod_init(generator, ctx);
-    fq_nmod_init(temp, ctx);
+
     fq_nmod_init(one, ctx);
     fq_nmod_one(one, ctx);
-    
-    fq_nmod_gen(generator, ctx);
-    // Convert generator to unified format
-    fq_nmod_to_field_elem(&generator_unified, generator, &unified_ctx);
-    
-    FQ_INTERP_PRINT("Field generator = ");
-    
-    // Generate evaluation points for each variable
+
+    if (field_degree > 1) {
+        fq_nmod_t gen;
+        basis_powers = (fq_nmod_t *) flint_malloc((size_t) field_degree * sizeof(fq_nmod_t));
+        for (slong e = 0; e < field_degree; e++) {
+            fq_nmod_init(basis_powers[e], ctx);
+        }
+        fq_nmod_one(basis_powers[0], ctx);
+        fq_nmod_init(gen, ctx);
+        fq_nmod_gen(gen, ctx);
+        for (slong e = 1; e < field_degree; e++) {
+            fq_nmod_mul(basis_powers[e], basis_powers[e - 1], gen, ctx);
+        }
+        fq_nmod_clear(gen, ctx);
+        fq_nmod_init(scalar_coeff, ctx);
+        fq_nmod_init(term, ctx);
+    }
+
     for (slong i = 0; i < total_vars; i++) {
         slong requested_degree = degrees[i];
         slong effective_degree = requested_degree;
+        int capped_to_field_size = 0;
+
         if (effective_degree < 0) {
             effective_degree = 0;
         }
         if (g_field_equation_reduction && field_size > 1 && effective_degree >= field_size) {
             effective_degree = field_size - 1;
         }
+
         grid_sizes[i] = effective_degree + extra_points;
-        
-        // IMPORTANT: Cap grid size at field size
         if (grid_sizes[i] > field_size && field_size > 0) {
-            printf("Variable %ld: capping grid size from %ld to field size %ld\n", 
-                   i, grid_sizes[i], field_size);
+            capped_to_field_size = 1;
+            if (g_dixon_verbose_level >= 2) {
+                printf("Variable %ld: capping grid size from %ld to field size %ld\n",
+                       i, grid_sizes[i], field_size);
+            }
             grid_sizes[i] = field_size;
         }
-        
-        grids[i] = (fq_nmod_t*) flint_malloc(grid_sizes[i] * sizeof(fq_nmod_t));
-        
-        FQ_INTERP_PRINT("Generating grid for variable %ld, requested_degree=%ld, effective_degree=%ld, grid_size=%ld\n", 
-                       i, requested_degree, effective_degree, grid_sizes[i]);
-        
-        // Initialize all grid points
+
+        grids[i] = (fq_nmod_t*) flint_malloc((size_t) grid_sizes[i] * sizeof(fq_nmod_t));
+        FQ_INTERP_PRINT("Generating grid for variable %ld, requested_degree=%ld, effective_degree=%ld, grid_size=%ld\n",
+                        i, requested_degree, effective_degree, grid_sizes[i]);
+
         for (slong j = 0; j < grid_sizes[i]; j++) {
             fq_nmod_init(grids[i][j], ctx);
         }
-        
+
         if (effective_degree == 0 && extra_points == 1) {
-            // Special case: degree 0 only needs one point
-            FQ_INTERP_PRINT("Case: degree 0, using single point\n");
             fq_nmod_set(grids[i][0], one, ctx);
-        } else {
-            FQ_INTERP_PRINT("Generating %ld distinct points for variable %ld\n", grid_sizes[i], i);
-            
-            slong points_generated = 0;
-            
-            // ========== PRIME FIELD FAST PATH ==========
-            // For prime fields GF(p), use consecutive integers 0, 1, 2, ..., n-1
-            // This is simple, efficient, and guaranteed to give distinct points
-            if (field_degree == 1 && grid_sizes[i] <= prime) {
-                FQ_INTERP_PRINT("  Prime field detected, using consecutive integers\n");
-                
-                for (slong j = 0; j < grid_sizes[i]; j++) {
-                    // Set grid[i][j] = j (as field element)
-                    fq_nmod_set_ui(grids[i][j], j, ctx);
-                }
-                points_generated = grid_sizes[i];
-                
-                FQ_INTERP_PRINT("  Generated %ld points: 0, 1, 2, ..., %ld\n", 
-                               points_generated, points_generated - 1);
-                
-            } else {
-                // ========== EXTENSION FIELD OR COMPLEX CASE ==========
-                // For extension fields or when we need more sophisticated point generation
-                
-                // Point 1: Always use 0
-                fq_nmod_zero(grids[i][0], ctx);
-                points_generated = 1;
-                
-                if (grid_sizes[i] > 1) {
-                    // Point 2: Always use 1
-                    fq_nmod_one(grids[i][1], ctx);
-                    points_generated = 2;
-                    
-                    if (grid_sizes[i] > 2) {
-                        // Phase 1: Try powers of generator (with duplicate detection)
-                        field_elem_u current_power;
-                        field_init_elem(&current_power, unified_ctx.field_id, ctx_ptr);
-                        field_set_elem(&current_power, &generator_unified, unified_ctx.field_id, ctx_ptr);
-                        
-                        int cycle_detected = 0;
-                        for (slong j = 2; j < grid_sizes[i] && !cycle_detected; j++) {
-                            // Convert current power to fq_nmod
-                            field_elem_to_fq_nmod(grids[i][j], &current_power, &unified_ctx);
-                            
-                            // Check for duplicates with all previous points
-                            int is_duplicate = 0;
-                            for (slong k = 0; k < points_generated; k++) {
-                                if (fq_nmod_equal(grids[i][j], grids[i][k], ctx)) {
-                                    is_duplicate = 1;
-                                    cycle_detected = 1;  // Generator cycle completed
-                                    break;
-                                }
-                            }
-                            
-                            if (!is_duplicate) {
-                                points_generated++;
-                                // Compute next power: current = current * generator
-                                field_mul(&current_power, &current_power, &generator_unified, 
-                                         unified_ctx.field_id, ctx_ptr);
-                            } else {
-                                break;
-                            }
-                        }
-                        
-                        field_clear_elem(&current_power, unified_ctx.field_id, ctx_ptr);
-                        
-                        FQ_INTERP_PRINT("  Generated %ld points from powers of generator\n", points_generated);
-                        
-                        // Phase 2: If we still need more points, use linear combinations
-                        if (points_generated < grid_sizes[i]) {
-                            FQ_INTERP_PRINT("  Need %ld more points, trying linear combinations...\n", 
-                                           grid_sizes[i] - points_generated);
-                            
-                            field_elem_u combo, gen_mult, const_part;
-                            field_init_elem(&combo, unified_ctx.field_id, ctx_ptr);
-                            field_init_elem(&gen_mult, unified_ctx.field_id, ctx_ptr);
-                            field_init_elem(&const_part, unified_ctx.field_id, ctx_ptr);
-                            
-                            // Try combinations: a*g + b for small a, b
-                            int found_enough = 0;
-                            for (slong a = 1; a <= 10 && !found_enough; a++) {
-                                for (slong b = 2; b <= 10 && !found_enough; b++) {  // Start b at 2 (already have 0,1)
-                                    // Compute a*generator
-                                    field_set_zero(&gen_mult, unified_ctx.field_id, ctx_ptr);
-                                    for (slong m = 0; m < a; m++) {
-                                        field_add(&gen_mult, &gen_mult, &generator_unified,
-                                                 unified_ctx.field_id, ctx_ptr);
-                                    }
-                                    
-                                    // Compute b*1
-                                    field_set_zero(&const_part, unified_ctx.field_id, ctx_ptr);
-                                    for (slong m = 0; m < b; m++) {
-                                        field_add(&const_part, &const_part, &one_unified,
-                                                 unified_ctx.field_id, ctx_ptr);
-                                    }
-                                    
-                                    // combo = a*g + b
-                                    field_add(&combo, &gen_mult, &const_part,
-                                             unified_ctx.field_id, ctx_ptr);
-                                    
-                                    // Convert to fq_nmod
-                                    fq_nmod_t candidate;
-                                    fq_nmod_init(candidate, ctx);
-                                    field_elem_to_fq_nmod(candidate, &combo, &unified_ctx);
-                                    
-                                    // Check if unique
-                                    int is_duplicate = 0;
-                                    for (slong k = 0; k < points_generated; k++) {
-                                        if (fq_nmod_equal(candidate, grids[i][k], ctx)) {
-                                            is_duplicate = 1;
-                                            break;
-                                        }
-                                    }
-                                    
-                                    if (!is_duplicate) {
-                                        fq_nmod_set(grids[i][points_generated], candidate, ctx);
-                                        points_generated++;
-                                        
-                                        if (points_generated >= grid_sizes[i]) {
-                                            found_enough = 1;
-                                        }
-                                    }
-                                    
-                                    fq_nmod_clear(candidate, ctx);
-                                }
-                            }
-                            
-                            field_clear_elem(&combo, unified_ctx.field_id, ctx_ptr);
-                            field_clear_elem(&gen_mult, unified_ctx.field_id, ctx_ptr);
-                            field_clear_elem(&const_part, unified_ctx.field_id, ctx_ptr);
-                            
-                            FQ_INTERP_PRINT("  After linear combinations: %ld total points\n", points_generated);
-                        }
-                    }
-                }
-            }
-            
-            // ========== CRITICAL CHECK ==========
-            // Verify we generated enough distinct points
-            if (points_generated < grid_sizes[i]) {
-                printf("\n!!! CRITICAL WARNING !!!\n");
-                printf("Field GF(%lu^%ld) is too small!\n", prime, field_degree);
-                printf("  Field size: %ld elements\n", field_size);
-                printf("  Requested: %ld distinct points for variable %ld\n", 
-                       grid_sizes[i], i);
-                printf("  Generated: %ld distinct points\n", points_generated);
-                printf("  Degree bound: %ld (needs %ld+1 points)\n", 
-                       effective_degree, effective_degree);
-                
-                if (points_generated < effective_degree + 1) {
-                    printf("\n!!! FATAL ERROR !!!\n");
-                    printf("Cannot perform interpolation: need at least %ld points for degree %ld\n",
-                           effective_degree + 1, effective_degree);
-                    printf("Possible solutions:\n");
-                    printf("  1. Use a larger field (e.g., increase field degree)\n");
-                    printf("  2. Reduce degree bounds\n");
-                    printf("  3. Use modular methods or different interpolation approach\n");
-                    
-                    // Cleanup before returning
-                    for (slong j = 0; j < i; j++) {
-                        for (slong k = 0; k < grid_sizes[j]; k++) {
-                            fq_nmod_clear(grids[j][k], ctx);
-                        }
-                        free(grids[j]);
-                    }
-                    for (slong j = 0; j < grid_sizes[i]; j++) {
-                        fq_nmod_clear(grids[i][j], ctx);
-                    }
-                    free(grids[i]);
-                    
-                    fq_nmod_clear(generator, ctx);
-                    fq_nmod_clear(temp, ctx);
-                    fq_nmod_clear(one, ctx);
-                    field_clear_elem(&generator_unified, unified_ctx.field_id, ctx_ptr);
-                    field_clear_elem(&temp_unified, unified_ctx.field_id, ctx_ptr);
-                    field_clear_elem(&one_unified, unified_ctx.field_id, ctx_ptr);
-                    
-                    return;  // Fatal error - cannot continue
-                }
-                
-                printf("Adjusting grid size from %ld to %ld for variable %ld\n",
-                       grid_sizes[i], points_generated, i);
-                grid_sizes[i] = points_generated;
-            }
-            
-            // ========== FINAL VERIFICATION ==========
-            // Verify all points are actually distinct (sanity check)
-            FQ_INTERP_PRINT("  Verifying all %ld points are distinct...\n", grid_sizes[i]);
-            for (slong j = 0; j < grid_sizes[i]; j++) {
-                for (slong k = j + 1; k < grid_sizes[i]; k++) {
-                    if (fq_nmod_equal(grids[i][j], grids[i][k], ctx)) {
-                        printf("\n!!! FATAL BUG !!!\n");
-                        printf("Duplicate points detected after generation!\n");
-                        printf("  Variable %ld: point[%ld] == point[%ld]\n", i, j, k);
-                        printf("  Point value: ");
-                        fq_nmod_print_pretty(grids[i][j], ctx);
-                        printf("\n");
-                        printf("This is a bug in the point generation code!\n");
-                        
-                        // Cleanup and abort
-                        for (slong v = 0; v <= i; v++) {
-                            for (slong p = 0; p < grid_sizes[v]; p++) {
-                                fq_nmod_clear(grids[v][p], ctx);
-                            }
-                            free(grids[v]);
-                        }
-                        
-                        fq_nmod_clear(generator, ctx);
-                        fq_nmod_clear(temp, ctx);
-                        fq_nmod_clear(one, ctx);
-                        field_clear_elem(&generator_unified, unified_ctx.field_id, ctx_ptr);
-                        field_clear_elem(&temp_unified, unified_ctx.field_id, ctx_ptr);
-                        field_clear_elem(&one_unified, unified_ctx.field_id, ctx_ptr);
-                        
-                        return;  // Fatal bug
-                    }
-                }
-            }
-            FQ_INTERP_PRINT("  ✓ All points verified distinct\n");
+            continue;
         }
-        
-        // Debug: print first few points
-        FQ_INTERP_PRINT("Grid[%ld]: ", i);
+
+        FQ_INTERP_PRINT("Generating %ld distinct points for variable %ld\n", grid_sizes[i], i);
+
+        if (field_degree == 1 && grid_sizes[i] <= prime) {
+            for (slong j = 0; j < grid_sizes[i]; j++) {
+                fq_nmod_set_ui(grids[i][j], j, ctx);
+            }
+        } else {
+            for (slong j = 0; j < grid_sizes[i]; j++) {
+                ulong code = (ulong) j;
+                fq_nmod_zero(grids[i][j], ctx);
+                for (slong e = 0; e < field_degree; e++) {
+                    ulong digit = code % prime;
+                    code /= prime;
+                    if (digit == 0) continue;
+                    fq_nmod_set_ui(scalar_coeff, digit, ctx);
+                    fq_nmod_mul(term, basis_powers[e], scalar_coeff, ctx);
+                    fq_nmod_add(grids[i][j], grids[i][j], term, ctx);
+                }
+            }
+        }
+
+        if (grid_sizes[i] < effective_degree + 1 && !capped_to_field_size) {
+            printf("\n!!! FATAL ERROR !!!\n");
+            printf("Cannot perform interpolation: need at least %ld points for degree %ld\n",
+                   effective_degree + 1, effective_degree);
+            printf("Possible solutions:\n");
+            printf("  1. Use a larger field (e.g., increase field degree)\n");
+            printf("  2. Reduce degree bounds\n");
+            printf("  3. Use modular methods or different interpolation approach\n");
+
+            for (slong v = 0; v <= i; v++) {
+                for (slong p = 0; p < grid_sizes[v]; p++) {
+                    fq_nmod_clear(grids[v][p], ctx);
+                }
+                flint_free(grids[v]);
+                grids[v] = NULL;
+            }
+
+            fq_nmod_clear(one, ctx);
+            if (basis_powers) {
+                for (slong e = 0; e < field_degree; e++) {
+                    fq_nmod_clear(basis_powers[e], ctx);
+                }
+                flint_free(basis_powers);
+                fq_nmod_clear(scalar_coeff, ctx);
+                fq_nmod_clear(term, ctx);
+            }
+            return 0;
+        }
+
+        if (capped_to_field_size && g_dixon_verbose_level >= 2) {
+            printf("  Variable %ld: using all %ld field elements for interpolation; "
+                   "recovering an equivalent polynomial modulo z^%ld - z\n",
+                   i, field_size, field_size);
+        }
+
+        FQ_INTERP_PRINT("  Verifying all %ld points are distinct...\n", grid_sizes[i]);
+        for (slong j = 0; j < grid_sizes[i]; j++) {
+            for (slong k = j + 1; k < grid_sizes[i]; k++) {
+                if (fq_nmod_equal(grids[i][j], grids[i][k], ctx)) {
+                    printf("\n!!! FATAL BUG !!!\n");
+                    printf("Duplicate points detected after generation!\n");
+                    printf("  Variable %ld: point[%ld] == point[%ld]\n", i, j, k);
+                    printf("  Point value: ");
+                    fq_nmod_print_pretty(grids[i][j], ctx);
+                    printf("\n");
+
+                    for (slong v = 0; v <= i; v++) {
+                        for (slong p = 0; p < grid_sizes[v]; p++) {
+                            fq_nmod_clear(grids[v][p], ctx);
+                        }
+                        flint_free(grids[v]);
+                        grids[v] = NULL;
+                    }
+
+                    fq_nmod_clear(one, ctx);
+                    if (basis_powers) {
+                        for (slong e = 0; e < field_degree; e++) {
+                            fq_nmod_clear(basis_powers[e], ctx);
+                        }
+                        flint_free(basis_powers);
+                        fq_nmod_clear(scalar_coeff, ctx);
+                        fq_nmod_clear(term, ctx);
+                    }
+                    return 0;
+                }
+            }
+        }
+        FQ_INTERP_PRINT("  ✓ All points verified distinct\n");
     }
-    
-    // Cleanup
-    fq_nmod_clear(generator, ctx);
-    fq_nmod_clear(temp, ctx);
+
     fq_nmod_clear(one, ctx);
-    
-    field_clear_elem(&generator_unified, unified_ctx.field_id, ctx_ptr);
-    field_clear_elem(&temp_unified, unified_ctx.field_id, ctx_ptr);
-    field_clear_elem(&one_unified, unified_ctx.field_id, ctx_ptr);
+    if (basis_powers) {
+        for (slong e = 0; e < field_degree; e++) {
+            fq_nmod_clear(basis_powers[e], ctx);
+        }
+        flint_free(basis_powers);
+        fq_nmod_clear(scalar_coeff, ctx);
+        fq_nmod_clear(term, ctx);
+    }
+    return 1;
 }
     
 
@@ -1544,7 +1405,15 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
     fq_nmod_t **grids = (fq_nmod_t**) malloc(total_vars * sizeof(fq_nmod_t*));
     slong *grid_sizes = (slong*) malloc(total_vars * sizeof(slong));
     
-    fq_generate_evaluation_points_optimized(grids, grid_sizes, total_vars, degree_bounds, ctx);
+    if (!fq_generate_evaluation_points_optimized(grids, grid_sizes, total_vars, degree_bounds, ctx)) {
+        if (computed_bounds) {
+            free(computed_bounds);
+        }
+        free(grids);
+        free(grid_sizes);
+        fq_mvpoly_init(result, actual_nvars, actual_npars, ctx);
+        return;
+    }
     
     // Calculate total points
     slong total_points = 1;

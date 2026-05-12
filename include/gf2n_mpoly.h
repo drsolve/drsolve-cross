@@ -236,6 +236,9 @@ void gf28_mpoly_set_coeff_ui_ui(gf28_mpoly_t poly, uint8_t c,
 /* Multiplication */
 int gf28_mpoly_mul(gf28_mpoly_t res, const gf28_mpoly_t a, const gf28_mpoly_t b, 
                    const gf28_mpoly_ctx_t ctx);
+int gf28_mpoly_mul_with_fqctx(gf28_mpoly_t res, const gf28_mpoly_t a,
+                              const gf28_mpoly_t b, const gf28_mpoly_ctx_t ctx,
+                              const fq_nmod_ctx_t fq_ctx);
 int gf28_mpoly_mul_array(gf28_mpoly_t A, const gf28_mpoly_t B,
                          const gf28_mpoly_t C, const gf28_mpoly_ctx_t ctx);
 int gf28_mpoly_can_use_array_mul(const gf28_mpoly_t B, const gf28_mpoly_t C,

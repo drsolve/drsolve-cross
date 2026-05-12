@@ -497,7 +497,8 @@ int unified_mpoly_mul(unified_mpoly_t poly1, const unified_mpoly_t poly2,
                 use_native_try = gf28_mpoly_can_use_array_mul(A, B, native_ctx);
                 int success = 0;
                 if (use_native_try) {
-                    success = gf28_mpoly_mul(C, A, B, native_ctx);
+                    success = gf28_mpoly_mul_with_fqctx(C, A, B, native_ctx,
+                                                        ctx->field_ctx->ctx.fq_ctx);
                 }
                 if (success) {
                     gf28_mpoly_to_fq_nmod_mpoly(GET_FQ_POLY(poly1), C, 

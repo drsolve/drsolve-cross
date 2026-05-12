@@ -297,9 +297,7 @@ static void init_evaluation_parameters(fq_nmod_t *param_vals, slong npars,
     for (slong i = 0; i < npars; i++) {
         fq_nmod_init(param_vals[i], ctx);
         fq_nmod_set_si(param_vals[i], 7 * (attempt + 1) * (i + 1) + 13, ctx);
-        if (fq_nmod_is_zero(param_vals[i], ctx)) {
-            fq_nmod_one(param_vals[i], ctx);
-        }
+        // if (fq_nmod_is_zero(param_vals[i], ctx)) fq_nmod_one(param_vals[i], ctx);
     }
 }
 

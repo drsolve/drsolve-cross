@@ -1155,6 +1155,31 @@ void cleanup_all_gf2n_fields(void) {
    CONVERSION FUNCTIONS IMPLEMENTATION
    ============================================================================ */
 
+static int gf2_small_find_primitive_element(fq_nmod_t primitive,
+                                            const fq_nmod_ctx_t ctx,
+                                            int degree)
+{
+    uint64_t max_code = (degree >= 63) ? 0 : (1ULL << degree);
+
+    if (fq_nmod_is_primitive(primitive, ctx)) {
+        return 1;
+    }
+
+    for (uint64_t code = 2; code < max_code; code++) {
+        fq_nmod_zero(primitive, ctx);
+        for (int j = 0; j < degree; j++) {
+            if ((code >> j) & 1ULL) {
+                nmod_poly_set_coeff_ui(primitive, j, 1);
+            }
+        }
+        if (fq_nmod_is_primitive(primitive, ctx)) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 /* Initialize GF(2^128) conversion - stub implementation */
 void init_gf2128_conversion(const fq_nmod_ctx_t ctx) {
     if (g_gf2128_conversion && g_gf2128_conversion->initialized) {
@@ -1238,8 +1263,14 @@ void init_gf28_conversion(const fq_nmod_ctx_t ctx) {
        fq_nmod_t gen, elem;
        fq_nmod_init(gen, ctx);
        fq_nmod_init(elem, ctx);
-       
+
        fq_nmod_gen(gen, ctx);
+       if (!gf2_small_find_primitive_element(gen, ctx, 8)) {
+           fq_nmod_clear(gen, ctx);
+           fq_nmod_clear(elem, ctx);
+           g_gf28_conversion->initialized = 0;
+           return;
+       }
        
        uint8_t flint_log[256];
        uint8_t flint_exp[256];
@@ -1303,8 +1334,14 @@ void init_gf216_conversion(const fq_nmod_ctx_t ctx) {
         fq_nmod_t elem, gen;
         fq_nmod_init(elem, ctx);
         fq_nmod_init(gen, ctx);
-        
+
         fq_nmod_gen(gen, ctx);
+        if (!gf2_small_find_primitive_element(gen, ctx, 16)) {
+            fq_nmod_clear(elem, ctx);
+            fq_nmod_clear(gen, ctx);
+            g_gf216_conversion->initialized = 0;
+            return;
+        }
         
         // Map zero
         g_gf216_conversion->flint_to_gf216[0] = 0;

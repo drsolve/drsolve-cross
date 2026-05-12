@@ -8,6 +8,7 @@
 #include <flint/fmpz_poly.h>
 #include <stdarg.h>
 #include <fcntl.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 // Fixed string parser implementation
@@ -32,6 +33,83 @@ static void qq_root_debug_log(const char *fmt, ...)
     va_start(args, fmt);
     vprintf(fmt, args);
     va_end(args);
+}
+
+static int subres_cli_logging_enabled(int level)
+{
+    return g_dixon_verbose_level >= level;
+}
+
+static void subres_cli_log(int level, const char *fmt, ...)
+{
+    va_list args;
+
+    if (!subres_cli_logging_enabled(level) || !fmt) return;
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+static double elapsed_wall_seconds(const struct timeval *start,
+                                   const struct timeval *end)
+{
+    if (!start || !end) return 0.0;
+
+    return (double) (end->tv_sec - start->tv_sec) +
+           (double) (end->tv_usec - start->tv_usec) / 1000000.0;
+}
+
+static void subres_cli_print_name_list(char **names, slong count)
+{
+    if (count <= 0 || !names) {
+        printf("(none)");
+        return;
+    }
+
+    for (slong i = 0; i < count; i++) {
+        printf("%s%s", (i == 0) ? "" : ", ", names[i]);
+    }
+}
+
+static slong fq_mvpoly_parameter_total_degree(const fq_mvpoly_t *poly,
+                                              slong *par_degs)
+{
+    slong total_degree = -1;
+
+    if (!poly) return -1;
+
+    for (slong j = 0; j < poly->npars; j++) {
+        par_degs[j] = -1;
+    }
+
+    for (slong i = 0; i < poly->nterms; i++) {
+        slong term_degree = 0;
+
+        for (slong j = 0; j < poly->npars; j++) {
+            slong exp = 0;
+
+            if (poly->terms[i].par_exp) {
+                exp = poly->terms[i].par_exp[j];
+            }
+
+            if (exp > par_degs[j]) {
+                par_degs[j] = exp;
+            }
+
+            term_degree += exp;
+        }
+
+        if (term_degree > total_degree) {
+            total_degree = term_degree;
+        }
+    }
+
+    if (poly->nterms > 0 && poly->npars == 0) {
+        total_degree = 0;
+    }
+
+    return total_degree;
 }
 
 static void qq_arb_roots_add_unique(arb_roots_t *roots, const arb_t root, slong mult)
@@ -1264,7 +1342,7 @@ char* compute_dixon_internal_with_file(const char **poly_strings, slong npoly_st
     if (g_resultant_method == RESULTANT_METHOD_MACAULAY) {
         fq_macaulay_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
                                          state.var_names, state.par_names, gen_name);
-    } else if (g_resultant_method == RESULTANT_METHOD_DIXON_FAST) {
+    } else if (g_resultant_method == RESULTANT_METHOD_DIXON_RECURSIVE) {
         fq_dixon_fast_resultant_with_names(&dixon_result_poly, polys, nvars, state.npars,
                                            state.var_names, state.par_names, gen_name);
     } else {
@@ -2425,6 +2503,17 @@ char* dixon(const char **poly_strings, slong num_polys,
 char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
                                          const char *elim_var, const fq_nmod_ctx_t ctx) {
     clock_t total_start = clock();
+    clock_t compute_start, compute_end;
+    clock_t total_end;
+    struct timeval wall_total_start, wall_setup_end, wall_compute_end, wall_total_end;
+    slong *a_degs = NULL;
+    slong *b_degs = NULL;
+    slong *result_par_degs = NULL;
+    slong a_total_deg = -1;
+    slong b_total_deg = -1;
+    slong result_total_deg = -1;
+
+    gettimeofday(&wall_total_start, NULL);
     // Get generator name
     char *gen_name = get_generator_name(ctx);
     char **remaining_vars = NULL;
@@ -2539,18 +2628,67 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         unified_mpoly_set_coeff_ui(B, &coeff, exp);
         free(exp);
     }
-    
+
+    a_degs = (slong *) calloc((size_t) total_vars, sizeof(slong));
+    b_degs = (slong *) calloc((size_t) total_vars, sizeof(slong));
+    result_par_degs = (slong *) calloc((size_t) (state.npars > 0 ? state.npars : 1), sizeof(slong));
+
+    unified_mpoly_degrees_si(a_degs, A);
+    unified_mpoly_degrees_si(b_degs, B);
+    a_total_deg = unified_mpoly_total_degree_si(A);
+    b_total_deg = unified_mpoly_total_degree_si(B);
+
+    subres_cli_log(1, "Subresultant: computing resultant eliminating %s.\n", elim_var);
+    subres_cli_log(1,
+                   "  Input summary: terms=(%ld, %ld), deg_%s=(%ld, %ld), remaining vars=%ld",
+                   poly1.nterms, poly2.nterms, elim_var, a_degs[0], b_degs[0], num_remaining);
+    if (num_remaining > 0) {
+        printf(" [");
+        subres_cli_print_name_list(state.par_names, state.npars);
+        printf("]\n");
+    } else if (subres_cli_logging_enabled(1)) {
+        printf(" (constant resultant)\n");
+    }
+
+    if (subres_cli_logging_enabled(2)) {
+        subres_cli_log(2,
+                       "  Input total degrees: (%ld, %ld)\n",
+                       a_total_deg, b_total_deg);
+    }
+
+    if (subres_cli_logging_enabled(3) && num_remaining > 0) {
+        printf("  Remaining-variable degree profile:\n");
+        printf("    poly1: ");
+        for (slong j = 0; j < state.npars; j++) {
+            printf("%s%s:%ld", (j == 0) ? "" : ", ",
+                   state.par_names[j], a_degs[1 + j]);
+        }
+        printf("\n");
+        printf("    poly2: ");
+        for (slong j = 0; j < state.npars; j++) {
+            printf("%s%s:%ld", (j == 0) ? "" : ", ",
+                   state.par_names[j], b_degs[1 + j]);
+        }
+        printf("\n");
+    }
+
+    gettimeofday(&wall_setup_end, NULL);
+
     // Compute resultant
-    clock_t start = clock();
+    compute_start = clock();
     int success = unified_mpoly_resultant(R, A, B, 0, unified_ctx);
-    clock_t end = clock();
-    
+    compute_end = clock();
+    gettimeofday(&wall_compute_end, NULL);
+
     if (!success) {
-        printf("Unified resultant computation failed!\n");
+        subres_cli_log(1, "Subresultant: resultant computation failed.\n");
         unified_mpoly_clear(A);
         unified_mpoly_clear(B);
         unified_mpoly_clear(R);
         unified_mpoly_ctx_clear(unified_ctx);
+        free(a_degs);
+        free(b_degs);
+        free(result_par_degs);
         
         // Clean up other resources
         for (slong i = 0; i < state.nvars; i++) {
@@ -2680,6 +2818,36 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         fq_mvpoly_reduce_field_equation(&result_mvpoly);
     }
     fq_mvpoly_make_monic(&result_mvpoly);
+    result_total_deg = fq_mvpoly_parameter_total_degree(&result_mvpoly, result_par_degs);
+
+    if (result_mvpoly.nterms == 0) {
+        subres_cli_log(1, "Subresultant: obtained zero resultant.\n");
+    } else {
+        subres_cli_log(1, "Subresultant: resultant computed.\n");
+    }
+
+    if (subres_cli_logging_enabled(2)) {
+        if (result_mvpoly.nterms == 0) {
+            subres_cli_log(2, "  Output summary: zero polynomial.\n");
+        } else {
+            subres_cli_log(2,
+                           "  Output summary: terms=%ld, total degree in remaining vars=%ld\n",
+                           result_mvpoly.nterms, result_total_deg);
+        }
+    }
+
+    if (subres_cli_logging_enabled(3) && result_mvpoly.nterms > 0) {
+        if (state.npars > 0) {
+            printf("  Result degree profile: ");
+            for (slong j = 0; j < state.npars; j++) {
+                printf("%s%s:%ld", (j == 0) ? "" : ", ",
+                       state.par_names[j], result_par_degs[j]);
+            }
+            printf("\n");
+        } else {
+            printf("  Result degree profile: constant\n");
+        }
+    }
 
     // If it's a univariate polynomial, try to find roots
     find_and_print_roots_of_univariate_resultant(&result_mvpoly, &state);
@@ -2723,9 +2891,31 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     if (state.current.str) free(state.current.str);
     free(gen_name);
 
-    clock_t total_end = clock();
-    (void) total_end;
-    (void) total_start;
+    total_end = clock();
+    gettimeofday(&wall_total_end, NULL);
+
+    if (subres_cli_logging_enabled(2)) {
+        double setup_wall = elapsed_wall_seconds(&wall_total_start, &wall_setup_end);
+        double core_wall = elapsed_wall_seconds(&wall_setup_end, &wall_compute_end);
+        double total_wall = elapsed_wall_seconds(&wall_total_start, &wall_total_end);
+
+        if (subres_cli_logging_enabled(3)) {
+            double core_cpu = (double) (compute_end - compute_start) / CLOCKS_PER_SEC;
+            double total_cpu = (double) (total_end - total_start) / CLOCKS_PER_SEC;
+
+            subres_cli_log(3,
+                           "  Timing: setup wall %.3f s | core CPU %.3f s / wall %.3f s | total CPU %.3f s / wall %.3f s\n",
+                           setup_wall, core_cpu, core_wall, total_cpu, total_wall);
+        } else {
+            subres_cli_log(2,
+                           "  Timing: setup %.3f s | core %.3f s | total %.3f s\n",
+                           setup_wall, core_wall, total_wall);
+        }
+    }
+
+    free(a_degs);
+    free(b_degs);
+    free(result_par_degs);
 
     return result_string;
 }
