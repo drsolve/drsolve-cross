@@ -1366,12 +1366,11 @@ int gf28_mpoly_mul_array(gf28_mpoly_t A, const gf28_mpoly_t B,
         init_gf28_standard();
 
     if (B->length == 0 || C->length == 0) { gf28_mpoly_zero(A, ctx); return 1; }
-    if (B->bits == 0 || C->bits == 0)      return 0;
+    if (B->bits == 0 || C->bits == 0) return 0;
 
-    if (ctx->minfo->nvars < 1 ||
-        mpoly_words_per_exp(B->bits, ctx->minfo) > 2 ||
-        mpoly_words_per_exp(C->bits, ctx->minfo) > 2)
-        return 0;
+    if (ctx->minfo->nvars < 1) return 0;
+    if (mpoly_words_per_exp(B->bits, ctx->minfo) > 2 ||
+        mpoly_words_per_exp(C->bits, ctx->minfo) > 2) return 0;
 
     TMP_START;
     maxBf = (fmpz *)TMP_ALLOC(ctx->minfo->nfields * sizeof(fmpz));
@@ -1397,6 +1396,17 @@ int gf28_mpoly_mul_array(gf28_mpoly_t A, const gf28_mpoly_t B,
     }
     TMP_END;
     return success;
+}
+
+int gf28_mpoly_can_use_array_mul(const gf28_mpoly_t B, const gf28_mpoly_t C,
+                                 const gf28_mpoly_ctx_t ctx)
+{
+    if (B->length == 0 || C->length == 0) return 1;
+    if (B->bits == 0 || C->bits == 0) return 0;
+    if (ctx->minfo->nvars < 1) return 0;
+    if (mpoly_words_per_exp(B->bits, ctx->minfo) > 2 ||
+        mpoly_words_per_exp(C->bits, ctx->minfo) > 2) return 0;
+    return 1;
 }
 
 double get_wall_time_8(void) {
@@ -1653,17 +1663,10 @@ void gf28_poly_to_gf28_mpoly_univar(gf28_mpoly_t res, const gf28_poly_t poly,
     res->length = nz;
 }
 
-void gf28_mpoly_mul_flint_univar(gf28_mpoly_t res, const gf28_mpoly_t a,
-    const gf28_mpoly_t b, const gf28_mpoly_ctx_t ctx, slong main_var)
+static void gf28_mpoly_mul_flint_univar(gf28_mpoly_t res, const gf28_mpoly_t a,
+    const gf28_mpoly_t b, const gf28_mpoly_ctx_t ctx, slong main_var,
+    const fq_nmod_ctx_t fq_ctx)
 {
-    nmod_poly_t modulus; fq_nmod_ctx_t fq_ctx;
-    nmod_poly_init(modulus, 2);
-    nmod_poly_set_coeff_ui(modulus, 0, 1);
-    nmod_poly_set_coeff_ui(modulus, 2, 1);
-    nmod_poly_set_coeff_ui(modulus, 3, 1);
-    nmod_poly_set_coeff_ui(modulus, 4, 1);
-    nmod_poly_set_coeff_ui(modulus, 8, 1);
-    fq_nmod_ctx_init_modulus(fq_ctx, modulus, "x");
     gf28_poly_t pa, pb, pr;
     gf28_poly_init(pa); gf28_poly_init(pb); gf28_poly_init(pr);
     gf28_mpoly_to_gf28_poly_univar(pa, a, ctx, main_var);
@@ -1677,7 +1680,6 @@ void gf28_mpoly_mul_flint_univar(gf28_mpoly_t res, const gf28_mpoly_t a,
     gf28_poly_to_gf28_mpoly_univar(res, pr, ctx, main_var);
     gf28_poly_clear(pa); gf28_poly_clear(pb); gf28_poly_clear(pr);
     fq_nmod_poly_clear(fa,fq_ctx); fq_nmod_poly_clear(fb,fq_ctx); fq_nmod_poly_clear(fr,fq_ctx);
-    fq_nmod_ctx_clear(fq_ctx); nmod_poly_clear(modulus);
 }
 
 int gf28_mpoly_divides_monomial(gf28_mpoly_t Q, const gf28_mpoly_t A,
@@ -1768,7 +1770,7 @@ int gf28_mpoly_mul(gf28_mpoly_t res, const gf28_mpoly_t a,
         else if (mx <= 10000) gf28_poly_mul_karatsuba(pr,pa,pb);
         else {
             gf28_poly_clear(pa);gf28_poly_clear(pb);gf28_poly_clear(pr);
-            gf28_mpoly_mul_flint_univar(res,a,b,ctx,mva); return 1;
+            return 0;
         }
         gf28_poly_to_gf28_mpoly_univar(res,pr,ctx,mva);
         gf28_poly_clear(pa);gf28_poly_clear(pb);gf28_poly_clear(pr);
@@ -1834,23 +1836,6 @@ void gf28_mpoly_to_fq_nmod_mpoly(fq_nmod_mpoly_t res, const gf28_mpoly_t poly,
             flint_free(exp); fq_nmod_clear(coeff, fqctx);
         }
     }
-}
-
-/* ============================================================================
-   HELPER: set up the GF(2^8) context used throughout this file.
-   Irreducible poly: x^8 + x^4 + x^3 + x^2 + 1  (same as gf28_mpoly_mul_flint_univar)
-   ============================================================================ */
-static void _gf28_fq_ctx_init(fq_nmod_ctx_t fq_ctx)
-{
-    nmod_poly_t modulus;
-    nmod_poly_init(modulus, 2);
-    nmod_poly_set_coeff_ui(modulus, 0, 1);
-    nmod_poly_set_coeff_ui(modulus, 2, 1);
-    nmod_poly_set_coeff_ui(modulus, 3, 1);
-    nmod_poly_set_coeff_ui(modulus, 4, 1);
-    nmod_poly_set_coeff_ui(modulus, 8, 1);
-    fq_nmod_ctx_init_modulus(fq_ctx, modulus, "z");
-    nmod_poly_clear(modulus);
 }
 
 /* ============================================================================

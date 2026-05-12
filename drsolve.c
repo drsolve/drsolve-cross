@@ -34,7 +34,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.2.4"
+#define PROGRAM_VERSION "0.2.5"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -43,17 +43,6 @@
 #endif
 
 #define DEFAULT_OUTPUT_DIR "out"
-
-static int drsolve_default_thread_count(void)
-{
-#ifdef _OPENMP
-    int threads = omp_get_max_threads();
-    int half_threads = (threads + 1) / 2;
-    return half_threads > 0 ? half_threads : 1;
-#else
-    return 1;
-#endif
-}
 
 /* =========================================================================
  * Print usage
@@ -237,6 +226,17 @@ static void print_usage(const char *prog_name)
 /* =========================================================================
  * Utility helpers
  * ========================================================================= */
+
+static int drsolve_default_thread_count(void)
+{
+#ifdef _OPENMP
+    int threads = omp_get_max_threads();
+    int half_threads = (threads + 1) / 2;
+    return half_threads > 0 ? half_threads : 1;
+#else
+    return 1;
+#endif
+}
 
 static char *dixon_arb_to_string(const arb_t value, slong digits)
 {
@@ -2330,6 +2330,11 @@ int main(int argc, char *argv[])
         (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         print_version();
         print_usage(prog_name);
+        return 0;
+    }
+    if (argc == 2 &&
+        (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
+        print_version();
         return 0;
     }
 

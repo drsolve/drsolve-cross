@@ -238,6 +238,8 @@ int gf28_mpoly_mul(gf28_mpoly_t res, const gf28_mpoly_t a, const gf28_mpoly_t b,
                    const gf28_mpoly_ctx_t ctx);
 int gf28_mpoly_mul_array(gf28_mpoly_t A, const gf28_mpoly_t B,
                          const gf28_mpoly_t C, const gf28_mpoly_ctx_t ctx);
+int gf28_mpoly_can_use_array_mul(const gf28_mpoly_t B, const gf28_mpoly_t C,
+                                 const gf28_mpoly_ctx_t ctx);
 
 /* Division */
 int gf28_mpoly_divides(gf28_mpoly_t Q, const gf28_mpoly_t A, 

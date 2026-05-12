@@ -464,6 +464,28 @@ static slong get_variable_index(parser_state_t *state, const char *name) {
     return -1;
 }
 
+static void scan_identifiers_for_parameters(parser_state_t *state, const char *input)
+{
+    if (!state || !input) return;
+
+    state->input = input;
+    state->pos = 0;
+    state->len = strlen(input);
+
+    if (state->current.str) {
+        free(state->current.str);
+        state->current.str = NULL;
+    }
+
+    next_token(state);
+    while (state->current.type != TOK_EOF) {
+        if (state->current.type == TOK_VARIABLE && state->current.str) {
+            (void) find_or_add_parameter(state, state->current.str);
+        }
+        next_token(state);
+    }
+}
+
 void parse_primary(parser_state_t *state, fq_mvpoly_t *poly) {
     if (state->current.type == TOK_NUMBER) {
         fq_mvpoly_add_term(poly, NULL, NULL, state->current.value);
@@ -514,7 +536,7 @@ void parse_primary(parser_state_t *state, fq_mvpoly_t *poly) {
     } else if (state->current.type == TOK_MINUS) {
         next_token(state);
         fq_mvpoly_t temp;
-        fq_mvpoly_init(&temp, state->nvars, state->max_pars, state->ctx);
+        fq_mvpoly_init(&temp, state->nvars, state->npars, state->ctx);
         parse_primary(state, &temp);
         
         for (slong i = 0; i < temp.nterms; i++) {
@@ -530,7 +552,7 @@ void parse_primary(parser_state_t *state, fq_mvpoly_t *poly) {
 
 void parse_factor(parser_state_t *state, fq_mvpoly_t *poly) {
     fq_mvpoly_t base;
-    fq_mvpoly_init(&base, state->nvars, state->max_pars, state->ctx);
+    fq_mvpoly_init(&base, state->nvars, state->npars, state->ctx);
     parse_primary(state, &base);
     
     if (state->current.type == TOK_POWER) {
@@ -564,7 +586,7 @@ void parse_factor(parser_state_t *state, fq_mvpoly_t *poly) {
 
 void parse_term(parser_state_t *state, fq_mvpoly_t *poly) {
     fq_mvpoly_t result;
-    fq_mvpoly_init(&result, state->nvars, state->max_pars, state->ctx);
+    fq_mvpoly_init(&result, state->nvars, state->npars, state->ctx);
     
     parse_factor(state, &result);
     
@@ -572,7 +594,7 @@ void parse_term(parser_state_t *state, fq_mvpoly_t *poly) {
         next_token(state);
         
         fq_mvpoly_t factor;
-        fq_mvpoly_init(&factor, state->nvars, state->max_pars, state->ctx);
+        fq_mvpoly_init(&factor, state->nvars, state->npars, state->ctx);
         parse_factor(state, &factor);
         
         fq_mvpoly_t temp;
@@ -600,7 +622,7 @@ void parse_expression(parser_state_t *state, fq_mvpoly_t *poly) {
     }
     
     fq_mvpoly_t first_term;
-    fq_mvpoly_init(&first_term, state->nvars, state->max_pars, state->ctx);
+    fq_mvpoly_init(&first_term, state->nvars, state->npars, state->ctx);
     parse_term(state, &first_term);
     
     if (negate) {
@@ -624,7 +646,7 @@ void parse_expression(parser_state_t *state, fq_mvpoly_t *poly) {
         next_token(state);
         
         fq_mvpoly_t term;
-        fq_mvpoly_init(&term, state->nvars, state->max_pars, state->ctx);
+        fq_mvpoly_init(&term, state->nvars, state->npars, state->ctx);
         parse_term(state, &term);
         
         for (slong i = 0; i < term.nterms; i++) {
@@ -1204,18 +1226,9 @@ char* compute_dixon_internal_with_file(const char **poly_strings, slong npoly_st
     fq_nmod_init(state.current.value, ctx);
     state.generator_name = strdup(gen_name);
     
-    // First pass: identify parameters
+    // First pass: identify parameters without constructing temporary polynomials.
     for (slong i = 0; i < npoly_strings; i++) {
-        fq_mvpoly_t temp;
-        fq_mvpoly_init(&temp, nvars, state.max_pars, ctx);
-        
-        state.input = poly_strings[i];
-        state.pos = 0;
-        state.len = strlen(poly_strings[i]);
-        next_token(&state);
-        
-        parse_expression(&state, &temp);
-        fq_mvpoly_clear(&temp);
+        scan_identifiers_for_parameters(&state, poly_strings[i]);
     }
     
     // Save parameters as remaining variables
@@ -2430,29 +2443,9 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     fq_nmod_init(state.current.value, ctx);
     state.generator_name = strdup(gen_name);
     
-    // First pass: parse to identify parameters
-    fq_mvpoly_t temp1, temp2;
-    fq_mvpoly_init(&temp1, 1, state.max_pars, ctx);
-    fq_mvpoly_init(&temp2, 1, state.max_pars, ctx);
-
-    state.input = poly1_str;
-    state.pos = 0;
-    state.len = strlen(poly1_str);
-    next_token(&state);
-    parse_expression(&state, &temp1);
-
-    state.input = poly2_str;
-    state.pos = 0;
-    state.len = strlen(poly2_str);
-    if (state.current.str) {
-        free(state.current.str);
-        state.current.str = NULL;
-    }
-    next_token(&state);
-    parse_expression(&state, &temp2);
-    
-    fq_mvpoly_clear(&temp1);
-    fq_mvpoly_clear(&temp2);
+    // First pass: identify parameters without constructing temporary polynomials.
+    scan_identifiers_for_parameters(&state, poly1_str);
+    scan_identifiers_for_parameters(&state, poly2_str);
     
     // Save parameters
     num_remaining = state.npars;
@@ -2803,18 +2796,9 @@ void append_roots_to_file_from_result(const char *result_str,
     fq_nmod_init(state.current.value, ctx);
     state.generator_name = strdup(gen_name);
     
-    // First pass: identify parameters
+    // First pass: identify parameters without constructing temporary polynomials.
     for (slong i = 0; i < num_polys; i++) {
-        fq_mvpoly_t temp;
-        fq_mvpoly_init(&temp, num_vars, state.max_pars, ctx);
-        
-        state.input = poly_array[i];
-        state.pos = 0;
-        state.len = strlen(poly_array[i]);
-        next_token(&state);
-        
-        parse_expression(&state, &temp);
-        fq_mvpoly_clear(&temp);
+        scan_identifiers_for_parameters(&state, poly_array[i]);
     }
     
     // Parse the result string into a polynomial

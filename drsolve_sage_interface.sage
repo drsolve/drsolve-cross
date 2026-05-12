@@ -11,7 +11,7 @@ set_dixon_path("./drsolve")
 
 R.<x, y, z> = GF(257)[]
 F = [x + y + z - 3, x*y + y*z + z*x - 3, x*y*z - 1]
-res  = drsolveultant(F, [x, y])
+res  = DixonRes(F, [x, y])
 sols = DixonSolve(F)
 info = DixonComplexity(F, [x, y])
 print(res, "\n", sols, "\n", info, "\n")
@@ -24,9 +24,9 @@ f1 = x + y + z
 f2 = x*y + y*z + z*x + 1
 f3 = y*z - 1
 f4 = z - 2
-res1 = drsolveultant([f1, f2], [x])
-res2 = drsolveultant([res1, f3], [y])
-res3 = drsolveultant([res2, f4], [z])
+res1 = DixonRes([f1, f2], [x])
+res2 = DixonRes([res1, f3], [y])
+res3 = DixonRes([res2, f4], [z])
 print("res1 =", res1, "\nres2 =", res2, "\nres3 =", res3)
 
 # Pass debug=True to any function for verbose diagnostics.
@@ -288,7 +288,7 @@ def ToDixon(F, elim_vars, field_size=257, finput="/tmp/drsolve_in.dat", debug=Fa
     Write a drsolve input file (resultant / complexity mode).
 
     Each element of F may be a Sage polynomial **or** a plain string
-    (e.g. the output of a previous drsolveultant call).
+    (e.g. the output of a previous DixonRes call).
 
     Format:
       Line 1      : comma-separated variables to ELIMINATE
@@ -479,7 +479,7 @@ def _parse_complexity_file(foutput, debug):
 # Public API
 # ---------------------------------------------------------------------------
 
-def drsolveultant(
+def DixonRes(
     F,
     elim_vars,
     field_size=None,
@@ -495,7 +495,7 @@ def drsolveultant(
     ----------
     F          : list of Sage polynomials **and/or plain strings**.
                  Strings are accepted so that the output of a previous
-                 drsolveultant call can be fed in directly, enabling
+                 DixonRes call can be fed in directly, enabling
                  iterative / cascaded elimination.
     elim_vars  : variables to eliminate (Sage vars or strings)
     field_size : prime, prime power, (p,k), GF(...), or 0 for Q.
@@ -519,8 +519,8 @@ def drsolveultant(
         R.<x, y, z> = GF(257)[]
         F = [x + y + z, x*y + y*z + z*x, x*y*z + 1]
 
-        res  = drsolveultant(F, [x, y])
-        res2 = drsolveultant([res, str(z)], ["z"], field_size=257)
+        res  = DixonRes(F, [x, y])
+        res2 = DixonRes([res, str(z)], ["z"], field_size=257)
     """
     dixon_path = _resolve_dixon_path(dixon_path)
     field_size = _infer_field_size(F, field_size)
@@ -531,14 +531,14 @@ def drsolveultant(
     proc = _run(cmd, timeout, debug)
 
     if proc.returncode != 0:
-        print("[drsolveultant] drsolve exited with code %d" % proc.returncode)
+        print("[DixonRes] drsolve exited with code %d" % proc.returncode)
         if proc.stderr:
             print(proc.stderr)
         return None
 
     foutput = _locate_output_file(finput, "_solution", debug)
     if foutput is None:
-        print("[drsolveultant] could not locate output file")
+        print("[DixonRes] could not locate output file")
         return None
 
     result = _parse_resultant_file(foutput, debug)
@@ -743,4 +743,4 @@ def DixonIdeal(
 
 
 # Backward-compatible alias matching the README/API name.
-DixonResultant = drsolveultant
+DixonResultant = DixonRes

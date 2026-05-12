@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(drsolve
-  VERSION 0.2.4
+  VERSION 0.2.5
   DESCRIPTION "DRsolve: Dixon Resultant & Polynomial System Solver"
   LANGUAGES C
 )

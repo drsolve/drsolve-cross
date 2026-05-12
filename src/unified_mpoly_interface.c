@@ -481,6 +481,8 @@ int unified_mpoly_mul(unified_mpoly_t poly1, const unified_mpoly_t poly2,
             if (use_gf28_array_mul) {
                 gf28_mpoly_t A, B, C;
                 gf28_mpoly_ctx_t native_ctx;
+                slong mva = -1, mvb = -1;
+                int use_native_try = 0;
                 
                 gf28_mpoly_ctx_init(native_ctx, ctx->nvars, ctx->ord);
                 gf28_mpoly_init(A, native_ctx);
@@ -491,9 +493,12 @@ int unified_mpoly_mul(unified_mpoly_t poly1, const unified_mpoly_t poly2,
                                             ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
                 fq_nmod_mpoly_to_gf28_mpoly(B, GET_FQ_POLY(poly3), 
                                             ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
-                
-                int success = gf28_mpoly_mul(C, A, B, native_ctx);
-                //printf("%d\n",success);
+
+                use_native_try = gf28_mpoly_can_use_array_mul(A, B, native_ctx);
+                int success = 0;
+                if (use_native_try) {
+                    success = gf28_mpoly_mul(C, A, B, native_ctx);
+                }
                 if (success) {
                     gf28_mpoly_to_fq_nmod_mpoly(GET_FQ_POLY(poly1), C, 
                                                 ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
@@ -504,11 +509,14 @@ int unified_mpoly_mul(unified_mpoly_t poly1, const unified_mpoly_t poly2,
                     gf28_mpoly_clear(C, native_ctx);
                     gf28_mpoly_ctx_clear(native_ctx);
                     return 1;
-                } else {
-                    gf28_mpoly_clear(A, native_ctx);
-                    gf28_mpoly_clear(B, native_ctx);
-                    gf28_mpoly_clear(C, native_ctx);
-                    gf28_mpoly_ctx_clear(native_ctx);
+                }
+
+                gf28_mpoly_clear(A, native_ctx);
+                gf28_mpoly_clear(B, native_ctx);
+                gf28_mpoly_clear(C, native_ctx);
+                gf28_mpoly_ctx_clear(native_ctx);
+
+                if (use_native_try && !success) {
                     WARN_THRICE("GF(2^8) array multiplication failed, using standard method\n");
                 }
             }
