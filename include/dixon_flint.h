@@ -79,6 +79,7 @@ extern rational_root_scan_mode_t g_rational_root_scan_mode;
 extern int g_matrix_transpose_threshold;
 extern int g_dixon_fast_use_ksy_precondition;
 extern slong g_dixon_fast_ksy_constant_col;
+extern int g_dixon_step3_second_verification;
 
 int dixon_method_uses_parallel_timing(det_method_t method);
 int dixon_get_effective_interpolation_threads(void);
@@ -171,7 +172,9 @@ void fill_coefficient_matrix_optimized(fq_mvpoly_t ***full_matrix,
                                       monom_t *dual_monoms, slong ndual_monoms,
                                       const fq_mvpoly_t *dixon_poly,
                                       const slong *d0, const slong *d1, 
-                                      slong nvars, slong npars);
+                                      slong nvars, slong npars,
+                                      hash_entry_t **x_index, slong x_hash_size,
+                                      hash_entry_t **dual_index, slong dual_hash_size);
 
 // Extract coefficient matrix from Dixon polynomial
 void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,

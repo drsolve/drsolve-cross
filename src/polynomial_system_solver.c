@@ -322,73 +322,6 @@ static int polynomial_string_exists(char **poly_strings, slong count, const char
     return 0;
 }
 
-static char *rename_placeholder_variables(const char *input, char **var_names, slong nvars)
-{
-    if (!input) {
-        return NULL;
-    }
-    if (!var_names || nvars <= 0) {
-        return strdup(input);
-    }
-
-    size_t in_len = strlen(input);
-    size_t cap = in_len + 1;
-    for (slong i = 0; i < nvars; i++) {
-        if (var_names[i]) {
-            cap += strlen(var_names[i]) + 8;
-        }
-    }
-
-    char *out = (char *) malloc(cap);
-    if (!out) {
-        return strdup(input);
-    }
-
-    size_t oi = 0;
-    for (size_t i = 0; i < in_len; ) {
-        if (input[i] == 'x' && i + 1 < in_len && isdigit((unsigned char) input[i + 1]) &&
-            (i == 0 || !isalnum((unsigned char) input[i - 1]))) {
-            size_t j = i + 1;
-            slong idx = 0;
-            while (j < in_len && isdigit((unsigned char) input[j])) {
-                idx = idx * 10 + (input[j] - '0');
-                j++;
-            }
-            if ((j >= in_len || !isalnum((unsigned char) input[j])) &&
-                idx >= 0 && idx < nvars && var_names[idx]) {
-                size_t need = oi + strlen(var_names[idx]) + (in_len - j) + 1;
-                if (need > cap) {
-                    cap = need * 2;
-                    char *grown = (char *) realloc(out, cap);
-                    if (!grown) {
-                        free(out);
-                        return strdup(input);
-                    }
-                    out = grown;
-                }
-                memcpy(out + oi, var_names[idx], strlen(var_names[idx]));
-                oi += strlen(var_names[idx]);
-                i = j;
-                continue;
-            }
-        }
-
-        if (oi + 2 > cap) {
-            cap *= 2;
-            char *grown = (char *) realloc(out, cap);
-            if (!grown) {
-                free(out);
-                return strdup(input);
-            }
-            out = grown;
-        }
-        out[oi++] = input[i++];
-    }
-
-    out[oi] = '\0';
-    return out;
-}
-
 // Get extension field generator name (reference DIXON_INTERFACE_FLINT_H)
 char* get_generator_name_for_solver(const fq_nmod_ctx_t ctx) {
     if (fq_nmod_ctx_degree(ctx) > 1) {
@@ -1070,9 +1003,7 @@ char* substitute_variable_in_polynomial(const char *poly_str, const char *var_na
     }
     
     // Convert result to string
-    char *raw_result_str = fq_mvpoly_to_string(&result_poly, out_var_names, gen_name);
-    char *result_str = rename_placeholder_variables(raw_result_str, out_var_names, out_nvars);
-    free(raw_result_str);
+    char *result_str = fq_mvpoly_to_string(&result_poly, out_var_names, gen_name);
     
     // Cleanup
     fq_mvpoly_clear(&poly);

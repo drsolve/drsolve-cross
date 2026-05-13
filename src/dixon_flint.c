@@ -8,6 +8,9 @@
 #include "dixon_flint.h"
 #include <stdarg.h>
 #include <sys/time.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 // Global method selection variable definitions
 det_method_t dixon_global_method_step1 = -1;
@@ -20,6 +23,7 @@ int g_dixon_show_step_timing = 0;
 rational_root_scan_mode_t g_rational_root_scan_mode = RATIONAL_ROOT_SCAN_AUTO;
 int g_dixon_fast_use_ksy_precondition = 0;
 slong g_dixon_fast_ksy_constant_col = 0;
+int g_dixon_step3_second_verification = 0;
 
 static const char *dixon_det_method_name(det_method_t method)
 {
@@ -58,6 +62,16 @@ int dixon_get_effective_interpolation_threads(void)
     return threads > 0 ? threads : 1;
 }
 
+static int dixon_get_effective_parallel_threads(void)
+{
+    int threads = 1;
+
+#ifdef _OPENMP
+    threads = omp_get_max_threads();
+#endif
+    return threads > 0 ? threads : 1;
+}
+
 static void dixon_info_log(const char *fmt, ...)
 {
     va_list args;
@@ -89,7 +103,22 @@ void dixon_maybe_print_parallel_step_time(const char *step_label,
 
     dixon_info_log("%s time: CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
                    step_label, cpu_elapsed, wall_elapsed,
-                   dixon_get_effective_interpolation_threads());
+                   dixon_get_effective_parallel_threads());
+}
+
+static void dixon_maybe_print_step_detail_time(const char *label,
+                                               clock_t cpu_start,
+                                               double wall_start)
+{
+    if (g_dixon_verbose_level < 3 || !g_dixon_show_step_timing) {
+        return;
+    }
+
+    dixon_info_log("  %s time: CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n",
+                   label,
+                   (double) (clock() - cpu_start) / CLOCKS_PER_SEC,
+                   get_wall_time() - wall_start,
+                   dixon_get_effective_parallel_threads());
 }
 
 void dixon_maybe_print_step_method_time(const char *step_label,
@@ -129,6 +158,83 @@ static void dixon_debug_log(const char *fmt, ...)
     va_end(args);
 }
 
+static ulong hash_monom_exponents(const slong *exp, slong nvars)
+{
+    ulong hash = 1469598103934665603UL;
+
+    for (slong i = 0; i < nvars; i++) {
+        hash ^= (ulong) exp[i] + 0x9e3779b97f4a7c15UL + (hash << 6) + (hash >> 2);
+    }
+
+    return hash;
+}
+
+static hash_entry_t **build_monom_index(monom_t *monoms,
+                                        slong nmonoms,
+                                        slong nvars,
+                                        slong *hash_size_out)
+{
+    slong hash_size = 16;
+    hash_entry_t **buckets;
+
+    while (hash_size < 2 * FLINT_MAX(1, nmonoms)) {
+        hash_size <<= 1;
+    }
+
+    buckets = (hash_entry_t **) flint_calloc((size_t) hash_size, sizeof(hash_entry_t *));
+    for (slong i = 0; i < nmonoms; i++) {
+        ulong hash = hash_monom_exponents(monoms[i].exp, nvars) & (ulong) (hash_size - 1);
+        hash_entry_t *entry = (hash_entry_t *) flint_malloc(sizeof(hash_entry_t));
+        entry->exp = monoms[i].exp;
+        entry->idx = monoms[i].idx;
+        entry->next = buckets[hash];
+        buckets[hash] = entry;
+    }
+
+    *hash_size_out = hash_size;
+    return buckets;
+}
+
+static void free_monom_index(hash_entry_t **buckets, slong hash_size)
+{
+    if (buckets == NULL) {
+        return;
+    }
+
+    for (slong i = 0; i < hash_size; i++) {
+        hash_entry_t *entry = buckets[i];
+        while (entry != NULL) {
+            hash_entry_t *next = entry->next;
+            flint_free(entry);
+            entry = next;
+        }
+    }
+
+    flint_free(buckets);
+}
+
+static slong lookup_monom_index(hash_entry_t **buckets,
+                                slong hash_size,
+                                const slong *exp,
+                                slong nvars)
+{
+    if (buckets == NULL || exp == NULL || hash_size <= 0) {
+        return -1;
+    }
+
+    ulong hash = hash_monom_exponents(exp, nvars) & (ulong) (hash_size - 1);
+    hash_entry_t *entry = buckets[hash];
+
+    while (entry != NULL) {
+        if (memcmp(entry->exp, exp, (size_t) nvars * sizeof(slong)) == 0) {
+            return entry->idx;
+        }
+        entry = entry->next;
+    }
+
+    return -1;
+}
+
 static int dixon_show_step_details(void)
 {
     return g_dixon_verbose_level >= 2;
@@ -136,7 +242,7 @@ static int dixon_show_step_details(void)
 
 static int dixon_should_dump_small_matrix(slong nrows, slong ncols)
 {
-    return g_dixon_verbose_level >= 3 && nrows <= 10 && ncols <= 10;
+    return g_dixon_verbose_level >= 3 && nrows <= 3 && ncols <= 3;
 }
 
 static void dixon_print_basis_monomial(const monom_t *monom,
@@ -389,8 +495,27 @@ static slong evaluate_selected_submatrix_rank(fq_mvpoly_t ***full_matrix,
     fq_nmod_mat_t mat;
     fq_nmod_t value;
     fq_nmod_mat_init(mat, size, size, ctx);
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+        fq_nmod_t local_value;
+        fq_nmod_init(local_value, ctx);
+        #pragma omp for schedule(static)
+        for (slong i = 0; i < size; i++) {
+            for (slong j = 0; j < size; j++) {
+                fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+                if (entry != NULL) {
+                    evaluate_fq_mvpoly_at_params(local_value, entry, param_vals);
+                    fq_nmod_set(fq_nmod_mat_entry(mat, i, j), local_value, ctx);
+                } else {
+                    fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+                }
+            }
+        }
+        fq_nmod_clear(local_value, ctx);
+    }
+#else
     fq_nmod_init(value, ctx);
-
     for (slong i = 0; i < size; i++) {
         for (slong j = 0; j < size; j++) {
             fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
@@ -402,9 +527,10 @@ static slong evaluate_selected_submatrix_rank(fq_mvpoly_t ***full_matrix,
             }
         }
     }
+    fq_nmod_clear(value, ctx);
+#endif
 
     slong rank = fq_nmod_mat_rank(mat, ctx);
-    fq_nmod_clear(value, ctx);
     fq_nmod_mat_clear(mat, ctx);
     return rank;
 }
@@ -421,8 +547,27 @@ static slong evaluate_selected_rectangular_submatrix_rank(fq_mvpoly_t ***full_ma
     fq_nmod_t value;
 
     fq_nmod_mat_init(mat, num_rows, num_cols, ctx);
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+        fq_nmod_t local_value;
+        fq_nmod_init(local_value, ctx);
+        #pragma omp for schedule(static)
+        for (slong i = 0; i < num_rows; i++) {
+            for (slong j = 0; j < num_cols; j++) {
+                fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+                if (entry != NULL) {
+                    evaluate_fq_mvpoly_at_params(local_value, entry, param_vals);
+                    fq_nmod_set(fq_nmod_mat_entry(mat, i, j), local_value, ctx);
+                } else {
+                    fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+                }
+            }
+        }
+        fq_nmod_clear(local_value, ctx);
+    }
+#else
     fq_nmod_init(value, ctx);
-
     for (slong i = 0; i < num_rows; i++) {
         for (slong j = 0; j < num_cols; j++) {
             fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
@@ -434,9 +579,10 @@ static slong evaluate_selected_rectangular_submatrix_rank(fq_mvpoly_t ***full_ma
             }
         }
     }
+    fq_nmod_clear(value, ctx);
+#endif
 
     slong rank = fq_nmod_mat_rank(mat, ctx);
-    fq_nmod_clear(value, ctx);
     fq_nmod_mat_clear(mat, ctx);
     return rank;
 }
@@ -451,8 +597,27 @@ static slong evaluate_selected_submatrix_rank_extension(fq_mvpoly_t ***full_matr
     fq_nmod_mat_t mat;
     fq_nmod_t value;
     fq_nmod_mat_init(mat, size, size, ext_ctx);
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+        fq_nmod_t local_value;
+        fq_nmod_init(local_value, ext_ctx);
+        #pragma omp for schedule(static)
+        for (slong i = 0; i < size; i++) {
+            for (slong j = 0; j < size; j++) {
+                fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+                if (entry != NULL) {
+                    evaluate_fq_mvpoly_at_extension_params(local_value, entry, param_vals, ext_ctx);
+                    fq_nmod_set(fq_nmod_mat_entry(mat, i, j), local_value, ext_ctx);
+                } else {
+                    fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ext_ctx);
+                }
+            }
+        }
+        fq_nmod_clear(local_value, ext_ctx);
+    }
+#else
     fq_nmod_init(value, ext_ctx);
-
     for (slong i = 0; i < size; i++) {
         for (slong j = 0; j < size; j++) {
             fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
@@ -464,9 +629,10 @@ static slong evaluate_selected_submatrix_rank_extension(fq_mvpoly_t ***full_matr
             }
         }
     }
+    fq_nmod_clear(value, ext_ctx);
+#endif
 
     slong rank = fq_nmod_mat_rank(mat, ext_ctx);
-    fq_nmod_clear(value, ext_ctx);
     fq_nmod_mat_clear(mat, ext_ctx);
     return rank;
 }
@@ -484,8 +650,27 @@ static slong evaluate_selected_rectangular_submatrix_rank_extension(
     fq_nmod_t value;
 
     fq_nmod_mat_init(mat, num_rows, num_cols, ext_ctx);
+#ifdef _OPENMP
+    #pragma omp parallel
+    {
+        fq_nmod_t local_value;
+        fq_nmod_init(local_value, ext_ctx);
+        #pragma omp for schedule(static)
+        for (slong i = 0; i < num_rows; i++) {
+            for (slong j = 0; j < num_cols; j++) {
+                fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+                if (entry != NULL) {
+                    evaluate_fq_mvpoly_at_extension_params(local_value, entry, param_vals, ext_ctx);
+                    fq_nmod_set(fq_nmod_mat_entry(mat, i, j), local_value, ext_ctx);
+                } else {
+                    fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ext_ctx);
+                }
+            }
+        }
+        fq_nmod_clear(local_value, ext_ctx);
+    }
+#else
     fq_nmod_init(value, ext_ctx);
-
     for (slong i = 0; i < num_rows; i++) {
         for (slong j = 0; j < num_cols; j++) {
             fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
@@ -497,11 +682,200 @@ static slong evaluate_selected_rectangular_submatrix_rank_extension(
             }
         }
     }
+    fq_nmod_clear(value, ext_ctx);
+#endif
 
     slong rank = fq_nmod_mat_rank(mat, ext_ctx);
-    fq_nmod_clear(value, ext_ctx);
     fq_nmod_mat_clear(mat, ext_ctx);
     return rank;
+}
+
+static void evaluate_fq_mvpoly_at_nmod_params_direct(fq_nmod_t result,
+                                                     const fq_mvpoly_t *poly,
+                                                     const fq_nmod_t *param_vals,
+                                                     const fq_nmod_ctx_t ctx)
+{
+    fq_nmod_t term_val, coeff_val, pow_val;
+
+    fq_nmod_init(term_val, ctx);
+    fq_nmod_init(coeff_val, ctx);
+    fq_nmod_init(pow_val, ctx);
+    fq_nmod_zero(result, ctx);
+
+    if (poly == NULL || poly->nterms == 0) {
+        fq_nmod_clear(term_val, ctx);
+        fq_nmod_clear(coeff_val, ctx);
+        fq_nmod_clear(pow_val, ctx);
+        return;
+    }
+
+    for (slong i = 0; i < poly->nterms; i++) {
+        fq_nmod_set_ui(coeff_val, nmod_poly_get_coeff_ui(poly->terms[i].coeff, 0), ctx);
+        fq_nmod_set(term_val, coeff_val, ctx);
+
+        if (poly->terms[i].par_exp && poly->npars > 0) {
+            for (slong j = 0; j < poly->npars; j++) {
+                slong exp = poly->terms[i].par_exp[j];
+                if (exp > 0) {
+                    fq_nmod_pow_ui(pow_val, param_vals[j], exp, ctx);
+                    fq_nmod_mul(term_val, term_val, pow_val, ctx);
+                }
+            }
+        }
+
+        fq_nmod_add(result, result, term_val, ctx);
+    }
+
+    fq_nmod_clear(term_val, ctx);
+    fq_nmod_clear(coeff_val, ctx);
+    fq_nmod_clear(pow_val, ctx);
+}
+
+static slong evaluate_selected_submatrix_rank_nmod(fq_mvpoly_t ***full_matrix,
+                                                   const slong *row_indices,
+                                                   const slong *col_indices,
+                                                   slong size,
+                                                   const fq_nmod_t *param_vals,
+                                                   const fq_nmod_ctx_t ctx)
+{
+    fq_nmod_mat_t mat;
+    fq_nmod_t value;
+
+    fq_nmod_mat_init(mat, size, size, ctx);
+    fq_nmod_init(value, ctx);
+
+    #ifdef _OPENMP
+    #pragma omp parallel
+    {
+        fq_nmod_t local_value;
+        fq_nmod_init(local_value, ctx);
+        #pragma omp for schedule(static)
+        for (slong i = 0; i < size; i++) {
+            for (slong j = 0; j < size; j++) {
+                fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+                if (entry != NULL) {
+                    evaluate_fq_mvpoly_at_nmod_params_direct(local_value, entry, param_vals, ctx);
+                    fq_nmod_set(fq_nmod_mat_entry(mat, i, j), local_value, ctx);
+                } else {
+                    fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+                }
+            }
+        }
+        fq_nmod_clear(local_value, ctx);
+    }
+    #else
+    for (slong i = 0; i < size; i++) {
+        for (slong j = 0; j < size; j++) {
+            fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+            if (entry != NULL) {
+                evaluate_fq_mvpoly_at_nmod_params_direct(value, entry, param_vals, ctx);
+                fq_nmod_set(fq_nmod_mat_entry(mat, i, j), value, ctx);
+            } else {
+                fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+            }
+        }
+    }
+    #endif
+
+    slong rank = fq_nmod_mat_rank(mat, ctx);
+    fq_nmod_clear(value, ctx);
+    fq_nmod_mat_clear(mat, ctx);
+    return rank;
+}
+
+static slong evaluate_selected_rectangular_submatrix_rank_nmod(
+    fq_mvpoly_t ***full_matrix,
+    const slong *row_indices,
+    slong num_rows,
+    const slong *col_indices,
+    slong num_cols,
+    const fq_nmod_t *param_vals,
+    const fq_nmod_ctx_t ctx)
+{
+    fq_nmod_mat_t mat;
+    fq_nmod_t value;
+
+    fq_nmod_mat_init(mat, num_rows, num_cols, ctx);
+    fq_nmod_init(value, ctx);
+
+    #ifdef _OPENMP
+    #pragma omp parallel
+    {
+        fq_nmod_t local_value;
+        fq_nmod_init(local_value, ctx);
+        #pragma omp for schedule(static)
+        for (slong i = 0; i < num_rows; i++) {
+            for (slong j = 0; j < num_cols; j++) {
+                fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+                if (entry != NULL) {
+                    evaluate_fq_mvpoly_at_nmod_params_direct(local_value, entry, param_vals, ctx);
+                    fq_nmod_set(fq_nmod_mat_entry(mat, i, j), local_value, ctx);
+                } else {
+                    fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+                }
+            }
+        }
+        fq_nmod_clear(local_value, ctx);
+    }
+    #else
+    for (slong i = 0; i < num_rows; i++) {
+        for (slong j = 0; j < num_cols; j++) {
+            fq_mvpoly_t *entry = full_matrix[row_indices[i]][col_indices[j]];
+            if (entry != NULL) {
+                evaluate_fq_mvpoly_at_nmod_params_direct(value, entry, param_vals, ctx);
+                fq_nmod_set(fq_nmod_mat_entry(mat, i, j), value, ctx);
+            } else {
+                fq_nmod_zero(fq_nmod_mat_entry(mat, i, j), ctx);
+            }
+        }
+    }
+    #endif
+
+    slong rank = fq_nmod_mat_rank(mat, ctx);
+    fq_nmod_clear(value, ctx);
+    fq_nmod_mat_clear(mat, ctx);
+    return rank;
+}
+
+static int selected_rows_satisfy_ksy_precondition_nmod(
+    fq_mvpoly_t ***full_matrix,
+    const slong *row_indices,
+    slong size,
+    slong total_cols,
+    slong ksy_constant_col,
+    const fq_nmod_t *param_vals,
+    const fq_nmod_ctx_t ctx)
+{
+    slong *reduced_cols;
+    slong reduced_rank;
+
+    if (ksy_constant_col < 0 || size <= 0 || total_cols <= 0) {
+        return 1;
+    }
+    if (ksy_constant_col >= total_cols) {
+        return 0;
+    }
+    if (size == 1) {
+        return 1;
+    }
+
+    reduced_cols = (slong *) flint_malloc((size_t) (total_cols - 1) * sizeof(slong));
+    for (slong j = 0, out = 0; j < total_cols; j++) {
+        if (j == ksy_constant_col) {
+            continue;
+        }
+        reduced_cols[out++] = j;
+    }
+
+    reduced_rank = evaluate_selected_rectangular_submatrix_rank_nmod(full_matrix,
+                                                                     row_indices,
+                                                                     size,
+                                                                     reduced_cols,
+                                                                     total_cols - 1,
+                                                                     param_vals,
+                                                                     ctx);
+    flint_free(reduced_cols);
+    return reduced_rank == size - 1;
 }
 
 static int selected_rows_satisfy_ksy_precondition(
@@ -1068,6 +1442,118 @@ static int unified_try_add_row_to_basis(unified_row_basis_tracker_t *tracker,
     return 1;
 }
 
+typedef struct {
+    mp_limb_t *reduced_rows;
+    slong *pivot_cols;
+    slong *selected_indices;
+    mp_limb_t *work_row;
+    slong current_rank;
+    slong max_size;
+    slong ncols;
+    nmod_t mod;
+    int initialized;
+} nmod_row_basis_tracker_t;
+
+static void nmod_row_basis_tracker_init(nmod_row_basis_tracker_t *tracker,
+                                        slong max_size,
+                                        slong ncols,
+                                        const nmod_t *mod)
+{
+    tracker->max_size = max_size;
+    tracker->ncols = ncols;
+    tracker->current_rank = 0;
+    tracker->initialized = 1;
+    tracker->mod = *mod;
+    tracker->reduced_rows = (mp_limb_t *) flint_calloc((size_t) max_size * ncols, sizeof(mp_limb_t));
+    tracker->pivot_cols = (slong *) flint_malloc((size_t) max_size * sizeof(slong));
+    tracker->selected_indices = (slong *) flint_malloc((size_t) max_size * sizeof(slong));
+    tracker->work_row = (mp_limb_t *) flint_malloc((size_t) ncols * sizeof(mp_limb_t));
+
+    for (slong i = 0; i < max_size; i++) {
+        tracker->pivot_cols[i] = -1;
+        tracker->selected_indices[i] = -1;
+    }
+}
+
+static void nmod_row_basis_tracker_clear(nmod_row_basis_tracker_t *tracker)
+{
+    if (!tracker->initialized) {
+        return;
+    }
+
+    flint_free(tracker->reduced_rows);
+    flint_free(tracker->pivot_cols);
+    flint_free(tracker->selected_indices);
+    flint_free(tracker->work_row);
+    tracker->initialized = 0;
+}
+
+static int nmod_try_add_row_to_basis(nmod_row_basis_tracker_t *tracker,
+                                     const field_elem_u *unified_mat,
+                                     slong new_row_idx)
+{
+    if (!tracker->initialized || tracker->current_rank >= tracker->max_size) {
+        return 0;
+    }
+
+    const mp_limb_t mod_n = tracker->mod.n;
+    const ulong mod_ninv = tracker->mod.ninv;
+    mp_limb_t *work_row = tracker->work_row;
+    for (slong j = 0; j < tracker->ncols; j++) {
+        work_row[j] = unified_mat[new_row_idx * tracker->ncols + j].nmod;
+    }
+
+    for (slong i = 0; i < tracker->current_rank; i++) {
+        slong pivot_col = tracker->pivot_cols[i];
+        mp_limb_t factor;
+        mp_limb_t neg_factor;
+        mp_limb_t *basis_row;
+
+        if (pivot_col < 0 || pivot_col >= tracker->ncols) {
+            continue;
+        }
+        factor = work_row[pivot_col];
+        if (factor == 0) {
+            continue;
+        }
+
+        basis_row = tracker->reduced_rows + i * tracker->ncols;
+        neg_factor = nmod_neg(factor, tracker->mod);
+        _nmod_vec_scalar_addmul_nmod(work_row + pivot_col,
+                                     basis_row + pivot_col,
+                                     tracker->ncols - pivot_col,
+                                     neg_factor,
+                                     tracker->mod);
+    }
+
+    slong first_nonzero = -1;
+    for (slong j = 0; j < tracker->ncols; j++) {
+        if (work_row[j] != 0) {
+            first_nonzero = j;
+            break;
+        }
+    }
+    if (first_nonzero < 0) {
+        return 0;
+    }
+
+    mp_limb_t pivot = work_row[first_nonzero];
+    mp_limb_t pivot_inv = n_invmod(pivot, mod_n);
+    mp_limb_t *dest = tracker->reduced_rows + tracker->current_rank * tracker->ncols;
+
+    for (slong j = 0; j < first_nonzero; j++) {
+        dest[j] = 0;
+    }
+    for (slong j = first_nonzero; j < tracker->ncols; j++) {
+        dest[j] = n_mulmod2_preinv(work_row[j], pivot_inv, mod_n, mod_ninv);
+    }
+
+    tracker->pivot_cols[tracker->current_rank] = first_nonzero;
+    tracker->selected_indices[tracker->current_rank] = new_row_idx;
+    tracker->current_rank++;
+    return 1;
+}
+
 // Helper function to compute maximum degree (not total degree) of a polynomial
 static slong compute_fq_polynomial_total_degree(fq_mvpoly_t *poly, slong npars) {
     if (poly == NULL || poly->nterms == 0) {
@@ -1097,6 +1583,41 @@ static slong compute_fq_polynomial_total_degree(fq_mvpoly_t *poly, slong npars) 
     }
     
     return max_degree;
+}
+
+static slong **build_entry_degree_cache(fq_mvpoly_t ***full_matrix,
+                                       slong nrows,
+                                       slong ncols,
+                                       slong npars)
+{
+    slong **degree_cache = (slong **) flint_malloc((size_t) nrows * sizeof(slong *));
+
+    for (slong i = 0; i < nrows; i++) {
+        degree_cache[i] = (slong *) flint_malloc((size_t) ncols * sizeof(slong));
+    }
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+#endif
+    for (slong i = 0; i < nrows; i++) {
+        for (slong j = 0; j < ncols; j++) {
+            degree_cache[i][j] = compute_fq_polynomial_total_degree(full_matrix[i][j], npars);
+        }
+    }
+
+    return degree_cache;
+}
+
+static void free_entry_degree_cache(slong **degree_cache, slong nrows)
+{
+    if (degree_cache == NULL) {
+        return;
+    }
+
+    for (slong i = 0; i < nrows; i++) {
+        flint_free(degree_cache[i]);
+    }
+    flint_free(degree_cache);
 }
 
 static void print_fq_degree_vector_with_names(const char *label,
@@ -1693,7 +2214,47 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         slong iteration = 0;
         int converged = 0;
         int ksy_condition_met = 0;
+        clock_t degree_cache_cpu_start = clock();
+        double degree_cache_wall_start = get_wall_time();
+        slong **entry_degree_cache = build_entry_degree_cache(full_matrix, nrows, ncols, npars);
+        dixon_maybe_print_step_detail_time("Step 3 degree-cache build",
+                                           degree_cache_cpu_start,
+                                           degree_cache_wall_start);
 
+        clock_t unified_mat_cpu_start = clock();
+        double unified_mat_wall_start = get_wall_time();
+
+#ifdef _OPENMP
+        #pragma omp parallel
+        {
+            fq_nmod_t val;
+            fq_nmod_init(val, use_extension_specialization ? extension_eval_ctx : ctx);
+            #pragma omp for schedule(static)
+            for (slong i = 0; i < nrows; i++) {
+                for (slong j = 0; j < ncols; j++) {
+                    slong idx = i * ncols + j;
+                    field_init_elem(&unified_mat[idx], selection_ctx.field_id, ctx_ptr);
+
+                    if (use_extension_specialization) {
+                        if (full_matrix[i][j] == NULL) {
+                            fq_nmod_zero(val, extension_eval_ctx);
+                        } else {
+                            evaluate_fq_mvpoly_at_extension_params(val, full_matrix[i][j],
+                                                                   param_vals, extension_eval_ctx);
+                        }
+                    } else {
+                        if (full_matrix[i][j] == NULL) {
+                            fq_nmod_zero(val, ctx);
+                        } else {
+                            evaluate_fq_mvpoly_at_params(val, full_matrix[i][j], param_vals);
+                        }
+                    }
+                    fq_nmod_to_field_elem(&unified_mat[idx], val, &selection_ctx);
+                }
+            }
+            fq_nmod_clear(val, use_extension_specialization ? extension_eval_ctx : ctx);
+        }
+#else
         for (slong i = 0; i < nrows; i++) {
             for (slong j = 0; j < ncols; j++) {
                 slong idx = i * ncols + j;
@@ -1723,8 +2284,14 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                 }
             }
         }
+#endif
+        dixon_maybe_print_step_detail_time("Step 3 unified matrix build",
+                                           unified_mat_cpu_start,
+                                           unified_mat_wall_start);
 
         clock_t iter_start = clock();
+        clock_t initial_row_select_cpu_start = 0;
+        double initial_row_select_wall_start = 0.0;
 
         while (iteration < MAX_ITERATIONS && !converged) {
             if (iteration > 0) {
@@ -1740,9 +2307,14 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             if (iteration == 0) {
                 slong *selected_rows = NULL;
                 slong num_selected = 0;
+                initial_row_select_cpu_start = clock();
+                initial_row_select_wall_start = get_wall_time();
 
                 find_pivot_rows_simple(&selected_rows, &num_selected,
                                       unified_mat, nrows, ncols, &selection_ctx);
+                dixon_maybe_print_step_detail_time("Step 3 initial row selection",
+                                                   initial_row_select_cpu_start,
+                                                   initial_row_select_wall_start);
 
                 current_size = num_selected;
                 row_rank_selected = num_selected;
@@ -1751,11 +2323,16 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
 
                 if (current_size > g_matrix_transpose_threshold) {
                     field_elem_u *transposed_mat = (field_elem_u*) flint_malloc(ncols * current_size * sizeof(field_elem_u));
+                    clock_t large_transpose_cpu_start = clock();
+                    double large_transpose_wall_start = get_wall_time();
 
                     for (slong i = 0; i < ncols * current_size; i++) {
                         field_init_elem(&transposed_mat[i], selection_ctx.field_id, ctx_ptr);
                     }
 
+#ifdef _OPENMP
+                    #pragma omp parallel for schedule(static)
+#endif
                     for (slong i = 0; i < current_size; i++) {
                         slong orig_row = current_row_indices[i];
                         for (slong j = 0; j < ncols; j++) {
@@ -1765,12 +2342,20 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                                           selection_ctx.field_id, ctx_ptr);
                         }
                     }
+                    dixon_maybe_print_step_detail_time("Step 3 large transpose build",
+                                                       large_transpose_cpu_start,
+                                                       large_transpose_wall_start);
 
                     slong *selected_cols = NULL;
                     slong num_selected_cols = 0;
+                    clock_t initial_col_select_cpu_start = clock();
+                    double initial_col_select_wall_start = get_wall_time();
 
                     find_pivot_rows_simple(&selected_cols, &num_selected_cols,
                                           transposed_mat, ncols, current_size, &selection_ctx);
+                    dixon_maybe_print_step_detail_time("Step 3 initial column selection",
+                                                       initial_col_select_cpu_start,
+                                                       initial_col_select_wall_start);
 
                     current_col_indices = (slong*) flint_malloc(num_selected_cols * sizeof(slong));
                     memcpy(current_col_indices, selected_cols, num_selected_cols * sizeof(slong));
@@ -1790,21 +2375,39 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                 }
             } else {
                 fq_index_degree_pair *row_degrees = (fq_index_degree_pair*) flint_malloc(nrows * sizeof(fq_index_degree_pair));
+                clock_t row_degree_cpu_start = clock();
+                double row_degree_wall_start = get_wall_time();
 
+                #ifdef _OPENMP
+                #pragma omp parallel for schedule(static)
+                #endif
                 for (slong i = 0; i < nrows; i++) {
                     row_degrees[i].index = i;
-                    row_degrees[i].degree = compute_fq_selected_cols_row_max_total_degree(
-                        full_matrix, i, current_col_indices, current_size, npars);
+                    row_degrees[i].degree = -1;
+                    for (slong j = 0; j < current_size; j++) {
+                        slong col_idx = current_col_indices[j];
+                        if (entry_degree_cache[i][col_idx] > row_degrees[i].degree) {
+                            row_degrees[i].degree = entry_degree_cache[i][col_idx];
+                        }
+                    }
                 }
+                dixon_maybe_print_step_detail_time("Step 3 row-degree scan",
+                                                   row_degree_cpu_start,
+                                                   row_degree_wall_start);
 
                 qsort(row_degrees, nrows, sizeof(fq_index_degree_pair), compare_fq_degrees);
 
                 field_elem_u *col_submat = (field_elem_u*) flint_malloc(nrows * current_size * sizeof(field_elem_u));
                 slong col_submat_cols = current_size;
+                clock_t col_submat_cpu_start = clock();
+                double col_submat_wall_start = get_wall_time();
                 for (slong i = 0; i < nrows * current_size; i++) {
                     field_init_elem(&col_submat[i], selection_ctx.field_id, ctx_ptr);
                 }
 
+#ifdef _OPENMP
+                #pragma omp parallel for schedule(static)
+#endif
                 for (slong i = 0; i < nrows; i++) {
                     for (slong j = 0; j < current_size; j++) {
                         slong src_idx = i * ncols + current_col_indices[j];
@@ -1813,45 +2416,91 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                                       selection_ctx.field_id, ctx_ptr);
                     }
                 }
+                dixon_maybe_print_step_detail_time("Step 3 column submatrix build",
+                                                   col_submat_cpu_start,
+                                                   col_submat_wall_start);
 
-                unified_row_basis_tracker_t row_tracker;
-                unified_row_basis_tracker_init(&row_tracker, current_size, current_size, &selection_ctx);
+                clock_t row_basis_cpu_start = clock();
+                double row_basis_wall_start = get_wall_time();
+                slong selected_rank = 0;
+                slong *selected_rank_indices = NULL;
 
-                for (slong i = 0; i < nrows && row_tracker.current_rank < current_size; i++) {
-                    slong row_idx = row_degrees[i].index;
-                    unified_try_add_row_to_basis(&row_tracker, col_submat, row_idx, current_size);
+                if (selection_ctx.field_id == FIELD_ID_NMOD) {
+                    nmod_row_basis_tracker_t row_tracker_nmod;
+                    nmod_row_basis_tracker_init(&row_tracker_nmod, current_size, current_size,
+                                                &selection_ctx.ctx.nmod_ctx);
+                    for (slong i = 0; i < nrows && row_tracker_nmod.current_rank < current_size; i++) {
+                        slong row_idx = row_degrees[i].index;
+                        nmod_try_add_row_to_basis(&row_tracker_nmod, col_submat, row_idx);
+                    }
+                    selected_rank = row_tracker_nmod.current_rank;
+                    selected_rank_indices = (slong*) flint_malloc(selected_rank * sizeof(slong));
+                    memcpy(selected_rank_indices, row_tracker_nmod.selected_indices,
+                           selected_rank * sizeof(slong));
+                    nmod_row_basis_tracker_clear(&row_tracker_nmod);
+                } else {
+                    unified_row_basis_tracker_t row_tracker;
+                    unified_row_basis_tracker_init(&row_tracker, current_size, current_size, &selection_ctx);
+                    for (slong i = 0; i < nrows && row_tracker.current_rank < current_size; i++) {
+                        slong row_idx = row_degrees[i].index;
+                        unified_try_add_row_to_basis(&row_tracker, col_submat, row_idx, current_size);
+                    }
+                    selected_rank = row_tracker.current_rank;
+                    selected_rank_indices = (slong*) flint_malloc(selected_rank * sizeof(slong));
+                    memcpy(selected_rank_indices, row_tracker.selected_indices,
+                           selected_rank * sizeof(slong));
+                    unified_row_basis_tracker_clear(&row_tracker);
                 }
+                dixon_maybe_print_step_detail_time("Step 3 row basis selection",
+                                                   row_basis_cpu_start,
+                                                   row_basis_wall_start);
 
                 flint_free(current_row_indices);
-                current_row_indices = (slong*) flint_malloc(row_tracker.current_rank * sizeof(slong));
-                memcpy(current_row_indices, row_tracker.selected_indices, row_tracker.current_rank * sizeof(slong));
-                row_rank_selected = row_tracker.current_rank;
-                current_size = row_tracker.current_rank;
+                current_row_indices = selected_rank_indices;
+                row_rank_selected = selected_rank;
+                current_size = selected_rank;
 
                 for (slong i = 0; i < nrows * col_submat_cols; i++) {
                     field_clear_elem(&col_submat[i], selection_ctx.field_id, ctx_ptr);
                 }
                 flint_free(col_submat);
-                unified_row_basis_tracker_clear(&row_tracker);
                 flint_free(row_degrees);
             }
 
             fq_index_degree_pair *col_degrees = (fq_index_degree_pair*) flint_malloc(ncols * sizeof(fq_index_degree_pair));
+            clock_t col_degree_cpu_start = clock();
+            double col_degree_wall_start = get_wall_time();
 
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+            #endif
             for (slong j = 0; j < ncols; j++) {
                 col_degrees[j].index = j;
-                col_degrees[j].degree = compute_fq_selected_rows_col_max_total_degree(
-                    full_matrix, current_row_indices, current_size, j, npars);
+                col_degrees[j].degree = -1;
+                for (slong i = 0; i < current_size; i++) {
+                    slong row_idx = current_row_indices[i];
+                    if (entry_degree_cache[row_idx][j] > col_degrees[j].degree) {
+                        col_degrees[j].degree = entry_degree_cache[row_idx][j];
+                    }
+                }
             }
+            dixon_maybe_print_step_detail_time("Step 3 column-degree scan",
+                                               col_degree_cpu_start,
+                                               col_degree_wall_start);
 
             qsort(col_degrees, ncols, sizeof(fq_index_degree_pair), compare_fq_degrees);
 
             field_elem_u *transposed = (field_elem_u*) flint_malloc(ncols * current_size * sizeof(field_elem_u));
             slong transposed_rows = current_size;
+            clock_t transposed_cpu_start = clock();
+            double transposed_wall_start = get_wall_time();
             for (slong i = 0; i < ncols * current_size; i++) {
                 field_init_elem(&transposed[i], selection_ctx.field_id, ctx_ptr);
             }
 
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+#endif
             for (slong i = 0; i < current_size; i++) {
                 for (slong j = 0; j < ncols; j++) {
                     slong src_idx = current_row_indices[i] * ncols + j;
@@ -1860,6 +2509,9 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
                                   selection_ctx.field_id, ctx_ptr);
                 }
             }
+            dixon_maybe_print_step_detail_time("Step 3 transposed build",
+                                               transposed_cpu_start,
+                                               transposed_wall_start);
 
             slong col_rank_selected = 0;
             slong *selected_cols = NULL;
@@ -1880,18 +2532,37 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             }
 
             if (!ksy_condition_met) {
-                unified_row_basis_tracker_t col_tracker;
-                unified_row_basis_tracker_init(&col_tracker, ncols, current_size, &selection_ctx);
-
-                for (slong j = 0; j < ncols && col_tracker.current_rank < current_size; j++) {
-                    slong col_idx = col_degrees[j].index;
-                    unified_try_add_row_to_basis(&col_tracker, transposed, col_idx, current_size);
+                clock_t col_basis_cpu_start = clock();
+                double col_basis_wall_start = get_wall_time();
+                if (selection_ctx.field_id == FIELD_ID_NMOD) {
+                    nmod_row_basis_tracker_t col_tracker_nmod;
+                    nmod_row_basis_tracker_init(&col_tracker_nmod, ncols, current_size,
+                                                &selection_ctx.ctx.nmod_ctx);
+                    for (slong j = 0; j < ncols && col_tracker_nmod.current_rank < current_size; j++) {
+                        slong col_idx = col_degrees[j].index;
+                        nmod_try_add_row_to_basis(&col_tracker_nmod, transposed, col_idx);
+                    }
+                    col_rank_selected = col_tracker_nmod.current_rank;
+                    selected_cols = (slong*) flint_malloc(col_rank_selected * sizeof(slong));
+                    memcpy(selected_cols, col_tracker_nmod.selected_indices,
+                           col_rank_selected * sizeof(slong));
+                    nmod_row_basis_tracker_clear(&col_tracker_nmod);
+                } else {
+                    unified_row_basis_tracker_t col_tracker;
+                    unified_row_basis_tracker_init(&col_tracker, ncols, current_size, &selection_ctx);
+                    for (slong j = 0; j < ncols && col_tracker.current_rank < current_size; j++) {
+                        slong col_idx = col_degrees[j].index;
+                        unified_try_add_row_to_basis(&col_tracker, transposed, col_idx, current_size);
+                    }
+                    col_rank_selected = col_tracker.current_rank;
+                    selected_cols = (slong*) flint_malloc(col_rank_selected * sizeof(slong));
+                    memcpy(selected_cols, col_tracker.selected_indices,
+                           col_rank_selected * sizeof(slong));
+                    unified_row_basis_tracker_clear(&col_tracker);
                 }
-
-                col_rank_selected = col_tracker.current_rank;
-                selected_cols = (slong*) flint_malloc(col_rank_selected * sizeof(slong));
-                memcpy(selected_cols, col_tracker.selected_indices, col_rank_selected * sizeof(slong));
-                unified_row_basis_tracker_clear(&col_tracker);
+                dixon_maybe_print_step_detail_time("Step 3 column basis selection",
+                                                   col_basis_cpu_start,
+                                                   col_basis_wall_start);
             }
 
             if (iteration == 0) {
@@ -1929,64 +2600,113 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             iteration++;
         }
 
+        free_entry_degree_cache(entry_degree_cache, nrows);
+
         clock_t iter_end = clock();
         (void) iter_start;
         (void) iter_end;
 
         slong final_rank;
-        slong verify_rank;
+        slong verify_rank = current_size;
         int final_ksy_ok = !require_ksy_precondition;
         int verify_ksy_ok = !require_ksy_precondition;
-        if (use_extension_specialization) {
+        clock_t verification_cpu_start = clock();
+        double verification_wall_start = get_wall_time();
+        if (selection_ctx.field_id == FIELD_ID_NMOD) {
+            final_rank = evaluate_selected_submatrix_rank_nmod(
+                full_matrix, current_row_indices, current_col_indices, current_size,
+                param_vals, ctx);
+
+            if (g_dixon_step3_second_verification) {
+                fq_nmod_t *verify_vals = (fq_nmod_t*) flint_malloc(npars * sizeof(fq_nmod_t));
+                init_evaluation_parameters(verify_vals, npars, ctx, selection_attempt + 1);
+                verify_rank = evaluate_selected_submatrix_rank_nmod(
+                    full_matrix, current_row_indices, current_col_indices, current_size,
+                    verify_vals, ctx);
+                if (require_ksy_precondition) {
+                    final_ksy_ok = selected_rows_satisfy_ksy_precondition_nmod(
+                        full_matrix, current_row_indices, current_size, ncols,
+                        ksy_constant_col, param_vals, ctx);
+                    verify_ksy_ok = selected_rows_satisfy_ksy_precondition_nmod(
+                        full_matrix, current_row_indices, current_size, ncols,
+                        ksy_constant_col, verify_vals, ctx);
+                }
+                clear_evaluation_parameters(verify_vals, npars, ctx);
+            } else if (require_ksy_precondition) {
+                final_ksy_ok = selected_rows_satisfy_ksy_precondition_nmod(
+                    full_matrix, current_row_indices, current_size, ncols,
+                    ksy_constant_col, param_vals, ctx);
+                verify_ksy_ok = final_ksy_ok;
+            }
+        } else if (use_extension_specialization) {
             final_rank = evaluate_selected_submatrix_rank_extension(
                 full_matrix, current_row_indices, current_col_indices, current_size,
                 param_vals, extension_eval_ctx);
 
-            fq_nmod_t *verify_vals = (fq_nmod_t*) flint_malloc(npars * sizeof(fq_nmod_t));
-            init_extension_evaluation_parameters(verify_vals, npars,
-                                                 extension_eval_ctx,
-                                                 selection_attempt + 1);
-            verify_rank = evaluate_selected_submatrix_rank_extension(
-                full_matrix, current_row_indices, current_col_indices, current_size,
-                verify_vals, extension_eval_ctx);
-            if (require_ksy_precondition) {
+            if (g_dixon_step3_second_verification) {
+                fq_nmod_t *verify_vals = (fq_nmod_t*) flint_malloc(npars * sizeof(fq_nmod_t));
+                init_extension_evaluation_parameters(verify_vals, npars,
+                                                     extension_eval_ctx,
+                                                     selection_attempt + 1);
+                verify_rank = evaluate_selected_submatrix_rank_extension(
+                    full_matrix, current_row_indices, current_col_indices, current_size,
+                    verify_vals, extension_eval_ctx);
+                if (require_ksy_precondition) {
+                    final_ksy_ok =
+                        selected_rows_satisfy_ksy_precondition_extension(
+                            full_matrix, current_row_indices, current_size, ncols,
+                            ksy_constant_col, param_vals, extension_eval_ctx);
+                    verify_ksy_ok =
+                        selected_rows_satisfy_ksy_precondition_extension(
+                            full_matrix, current_row_indices, current_size, ncols,
+                            ksy_constant_col, verify_vals, extension_eval_ctx);
+                }
+                clear_evaluation_parameters(verify_vals, npars, extension_eval_ctx);
+            } else if (require_ksy_precondition) {
                 final_ksy_ok =
                     selected_rows_satisfy_ksy_precondition_extension(
                         full_matrix, current_row_indices, current_size, ncols,
                         ksy_constant_col, param_vals, extension_eval_ctx);
-                verify_ksy_ok =
-                    selected_rows_satisfy_ksy_precondition_extension(
-                        full_matrix, current_row_indices, current_size, ncols,
-                        ksy_constant_col, verify_vals, extension_eval_ctx);
+                verify_ksy_ok = final_ksy_ok;
             }
-            clear_evaluation_parameters(verify_vals, npars, extension_eval_ctx);
         } else {
             final_rank = evaluate_selected_submatrix_rank(
                 full_matrix, current_row_indices, current_col_indices, current_size,
                 param_vals, ctx);
 
-            fq_nmod_t *verify_vals = (fq_nmod_t*) flint_malloc(npars * sizeof(fq_nmod_t));
-            init_evaluation_parameters(verify_vals, npars, ctx, selection_attempt + 1);
-            verify_rank = evaluate_selected_submatrix_rank(
-                full_matrix, current_row_indices, current_col_indices, current_size,
-                verify_vals, ctx);
-            if (require_ksy_precondition) {
+            if (g_dixon_step3_second_verification) {
+                fq_nmod_t *verify_vals = (fq_nmod_t*) flint_malloc(npars * sizeof(fq_nmod_t));
+                init_evaluation_parameters(verify_vals, npars, ctx, selection_attempt + 1);
+                verify_rank = evaluate_selected_submatrix_rank(
+                    full_matrix, current_row_indices, current_col_indices, current_size,
+                    verify_vals, ctx);
+                if (require_ksy_precondition) {
+                    final_ksy_ok = selected_rows_satisfy_ksy_precondition(
+                        full_matrix, current_row_indices, current_size, ncols,
+                        ksy_constant_col, param_vals, ctx);
+                    verify_ksy_ok = selected_rows_satisfy_ksy_precondition(
+                        full_matrix, current_row_indices, current_size, ncols,
+                        ksy_constant_col, verify_vals, ctx);
+                }
+                clear_evaluation_parameters(verify_vals, npars, ctx);
+            } else if (require_ksy_precondition) {
                 final_ksy_ok = selected_rows_satisfy_ksy_precondition(
                     full_matrix, current_row_indices, current_size, ncols,
                     ksy_constant_col, param_vals, ctx);
-                verify_ksy_ok = selected_rows_satisfy_ksy_precondition(
-                    full_matrix, current_row_indices, current_size, ncols,
-                    ksy_constant_col, verify_vals, ctx);
+                verify_ksy_ok = final_ksy_ok;
+                verify_rank = final_rank;
             }
-            clear_evaluation_parameters(verify_vals, npars, ctx);
         }
+        dixon_maybe_print_step_detail_time("Step 3 verification",
+                                           verification_cpu_start,
+                                           verification_wall_start);
 
         slong candidate_score = 0;
         if (final_rank == current_size) candidate_score++;
-        if (verify_rank == current_size) candidate_score++;
+        if (g_dixon_step3_second_verification && verify_rank == current_size) candidate_score++;
         if (require_ksy_precondition) {
             if (final_ksy_ok) candidate_score += 2;
-            if (verify_ksy_ok) candidate_score += 2;
+            if (g_dixon_step3_second_verification && verify_ksy_ok) candidate_score += 2;
         }
 
         if (current_size > accepted_size ||
@@ -2001,7 +2721,9 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
             accepted_score = candidate_score;
         }
 
-        if (candidate_score == (require_ksy_precondition ? 6 : 2)) {
+        if (candidate_score == (require_ksy_precondition
+                                ? (g_dixon_step3_second_verification ? 6 : 2)
+                                : (g_dixon_step3_second_verification ? 2 : 1))) {
             selection_stable = 1;
         } else {
             if (require_ksy_precondition && (!final_ksy_ok || !verify_ksy_ok)) {
@@ -2233,51 +2955,106 @@ void fill_coefficient_matrix_optimized(fq_mvpoly_t ***full_matrix,
                                       monom_t *dual_monoms, slong ndual_monoms,
                                       const fq_mvpoly_t *dixon_poly,
                                       const slong *d0, const slong *d1, 
-                                      slong nvars, slong npars) {
-    
-    // Find corresponding matrix positions for each Dixon polynomial term
+                                      slong nvars, slong npars,
+                                      hash_entry_t **x_index, slong x_hash_size,
+                                      hash_entry_t **dual_index, slong dual_hash_size) {
+    slong *term_rows;
+    slong *term_cols;
+    slong *row_term_counts;
+    slong *row_offsets;
+    slong *row_write_offsets;
+    slong *row_term_indices;
+
+    (void) x_monoms;
+    (void) nx_monoms;
+    (void) dual_monoms;
+    (void) ndual_monoms;
+
+    if (dixon_poly->nterms <= 0) {
+        return;
+    }
+
+    term_rows = (slong *) flint_malloc((size_t) dixon_poly->nterms * sizeof(slong));
+    term_cols = (slong *) flint_malloc((size_t) dixon_poly->nterms * sizeof(slong));
+    row_term_counts = (slong *) flint_calloc((size_t) FLINT_MAX(1, nx_monoms), sizeof(slong));
+    row_offsets = (slong *) flint_malloc((size_t) (FLINT_MAX(1, nx_monoms) + 1) * sizeof(slong));
+    row_write_offsets = (slong *) flint_calloc((size_t) FLINT_MAX(1, nx_monoms), sizeof(slong));
+
     for (slong t = 0; t < dixon_poly->nterms; t++) {
-        if (!dixon_poly->terms[t].var_exp) continue;
-        
-        // Check degree bounds
+        const slong *var_exp = dixon_poly->terms[t].var_exp;
+        slong row = -1;
+        slong col = -1;
+
+        term_rows[t] = -1;
+        term_cols[t] = -1;
+
+        if (!var_exp) {
+            continue;
+        }
+
         int valid = 1;
         for (slong k = 0; k < nvars; k++) {
-            if (dixon_poly->terms[t].var_exp[k] >= d0[k] || 
-                dixon_poly->terms[t].var_exp[nvars + k] >= d1[k]) {
+            if (var_exp[k] >= d0[k] || var_exp[nvars + k] >= d1[k]) {
                 valid = 0;
                 break;
             }
         }
-        if (!valid) continue;
-        
-        // Find x-monomial row index
-        slong row = -1;
-        for (slong i = 0; i < nx_monoms; i++) {
-            if (memcmp(x_monoms[i].exp, dixon_poly->terms[t].var_exp, 
-                      nvars * sizeof(slong)) == 0) {
-                row = i;
-                break;
-            }
+        if (!valid) {
+            continue;
         }
-        
-        // Find dual-monomial column index
-        slong col = -1;
-        for (slong j = 0; j < ndual_monoms; j++) {
-            if (memcmp(dual_monoms[j].exp, &dixon_poly->terms[t].var_exp[nvars], 
-                      nvars * sizeof(slong)) == 0) {
-                col = j;
-                break;
-            }
+
+        row = lookup_monom_index(x_index, x_hash_size, var_exp, nvars);
+        col = lookup_monom_index(dual_index, dual_hash_size, var_exp + nvars, nvars);
+        if (row < 0 || col < 0) {
+            continue;
         }
-        
-        // Only allocate memory for positions that are actually needed
-        if (row >= 0 && col >= 0) {
-            fq_mvpoly_t *entry = get_matrix_entry_lazy(full_matrix, row, col, 
-                                                      npars, dixon_poly->ctx);
-            fq_mvpoly_add_term_fast(entry, NULL, dixon_poly->terms[t].par_exp, 
-                                   dixon_poly->terms[t].coeff);
+
+        term_rows[t] = row;
+        term_cols[t] = col;
+        row_term_counts[row]++;
+    }
+
+    row_offsets[0] = 0;
+    for (slong row = 0; row < nx_monoms; row++) {
+        row_offsets[row + 1] = row_offsets[row] + row_term_counts[row];
+    }
+
+    row_term_indices = (slong *) flint_malloc((size_t) row_offsets[nx_monoms] * sizeof(slong));
+    for (slong t = 0; t < dixon_poly->nterms; t++) {
+        slong row = term_rows[t];
+        if (row >= 0) {
+            slong offset = row_offsets[row] + row_write_offsets[row];
+            row_term_indices[offset] = t;
+            row_write_offsets[row]++;
         }
     }
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic, 1) if(nx_monoms > 1)
+#endif
+    for (slong row = 0; row < nx_monoms; row++) {
+        for (slong idx = row_offsets[row]; idx < row_offsets[row + 1]; idx++) {
+            slong term_idx = row_term_indices[idx];
+            slong col = term_cols[term_idx];
+            fq_mvpoly_t *entry;
+
+            if (col < 0) {
+                continue;
+            }
+
+            entry = get_matrix_entry_lazy(full_matrix, row, col, npars, dixon_poly->ctx);
+            fq_mvpoly_add_term_fast(entry, NULL,
+                                    dixon_poly->terms[term_idx].par_exp,
+                                    dixon_poly->terms[term_idx].coeff);
+        }
+    }
+
+    flint_free(row_term_indices);
+    flint_free(row_write_offsets);
+    flint_free(row_offsets);
+    flint_free(row_term_counts);
+    flint_free(term_cols);
+    flint_free(term_rows);
 }
 // Optimized version of find_fq_optimal_maximal_rank_submatrix
 // ============ Extract coefficient matrix ============
@@ -2290,6 +3067,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                               char **var_names, char **par_names,
                                               const char *gen_name) {
     dixon_info_log("\nStep 2: Construct Dixon matrix\n");
+    clock_t step2_cpu_start = clock();
     double step2_wall_start = get_wall_time();
     double phase_start = step2_wall_start;
     
@@ -2330,6 +3108,10 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     monom_t *x_monoms = NULL;
     monom_t *dual_monoms = NULL;
     slong nx_monoms = 0, ndual_monoms = 0;
+    hash_entry_t **x_index = NULL;
+    hash_entry_t **dual_index = NULL;
+    slong x_hash_size = 0;
+    slong dual_hash_size = 0;
     dixon_debug_log("  Collecting monomial supports...\n");
     
     collect_unique_monomials(&x_monoms, &nx_monoms,
@@ -2337,6 +3119,8 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                         dixon_poly, d0, d1, nvars);
     dixon_debug_log("  Collected %ld row monomials and %ld dual monomials in %.3f seconds\n",
                     nx_monoms, ndual_monoms, get_wall_time() - phase_start);
+    x_index = build_monom_index(x_monoms, nx_monoms, nvars, &x_hash_size);
+    dual_index = build_monom_index(dual_monoms, ndual_monoms, nvars, &dual_hash_size);
 
     dixon_info_log("  Dixon matrix size: %ld x %ld\n", nx_monoms, ndual_monoms);
     
@@ -2346,6 +3130,8 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         dixon_maybe_print_step_time("Step 2", get_wall_time() - step2_wall_start);
         flint_free(d0);
         flint_free(d1);
+        free_monom_index(x_index, x_hash_size);
+        free_monom_index(dual_index, dual_hash_size);
         if (x_monoms) flint_free(x_monoms);
         if (dual_monoms) flint_free(dual_monoms);
         return;
@@ -2360,13 +3146,17 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     dixon_debug_log("  Filling Dixon coefficient matrix...\n");
     fill_coefficient_matrix_optimized(full_matrix, x_monoms, nx_monoms, 
                                      dual_monoms, ndual_monoms, dixon_poly, 
-                                     d0, d1, nvars, npars);
+                                     d0, d1, nvars, npars,
+                                     x_index, x_hash_size,
+                                     dual_index, dual_hash_size);
     dixon_debug_log("  Coefficient matrix filled in %.3f seconds\n",
                     get_wall_time() - phase_start);
     dixon_print_small_sparse_matrix("Dixon matrix", full_matrix, nx_monoms, ndual_monoms,
                                     x_monoms, dual_monoms, nvars,
                                     var_names, par_names, gen_name);
-    dixon_maybe_print_step_time("Step 2", get_wall_time() - step2_wall_start);
+    dixon_maybe_print_parallel_step_time("Step 2",
+                                         (double) (clock() - step2_cpu_start) / CLOCKS_PER_SEC,
+                                         get_wall_time() - step2_wall_start);
 
     clock_t step3_cpu_start = clock();
     double step3_wall_start = get_wall_time();
@@ -2379,16 +3169,24 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         dixon_debug_log("  Using scalar specialization for rank selection...\n");
         fq_nmod_mat_t eval_mat;
         fq_nmod_mat_init(eval_mat, nx_monoms, ndual_monoms, dixon_poly->ctx);
+        clock_t scalar_eval_cpu_start = clock();
+        double scalar_eval_wall_start = get_wall_time();
+#ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+#endif
         for (slong i = 0; i < nx_monoms; i++) {
             for (slong j = 0; j < ndual_monoms; j++) {
                 if (full_matrix[i][j] != NULL && full_matrix[i][j]->nterms > 0) {
-                    fq_nmod_set(fq_nmod_mat_entry(eval_mat, i, j), 
+                    fq_nmod_set(fq_nmod_mat_entry(eval_mat, i, j),
                                full_matrix[i][j]->terms[0].coeff, dixon_poly->ctx);
                 } else {
                     fq_nmod_zero(fq_nmod_mat_entry(eval_mat, i, j), dixon_poly->ctx);
                 }
             }
         }
+        dixon_maybe_print_step_detail_time("Step 3 scalar matrix build",
+                                           scalar_eval_cpu_start,
+                                           scalar_eval_wall_start);
         slong rank = fq_nmod_mat_rank(eval_mat, dixon_poly->ctx);
         slong min_size = FLINT_MIN(nx_monoms, ndual_monoms);
         slong actual_size = FLINT_MIN(rank, min_size);
@@ -2429,13 +3227,14 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     }
 
     slong submat_rank = FLINT_MIN(num_rows, num_cols);
-    
+
     if (submat_rank == 0) {
         dixon_info_log("Warning: Matrix has rank 0\n");
         *matrix_size = 0;
-        (void) step3_cpu_start;
-        dixon_maybe_print_step_time("Step 3", get_wall_time() - step3_wall_start);
-        
+        dixon_maybe_print_parallel_step_time("Step 3",
+                                             (double) (clock() - step3_cpu_start) / CLOCKS_PER_SEC,
+                                             get_wall_time() - step3_wall_start);
+
         if (full_matrix) {
             for (slong i = 0; i < nx_monoms; i++) {
                 if (full_matrix[i]) {
@@ -2450,9 +3249,11 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
             }
             flint_free(full_matrix);
         }
-        
+
         if (row_idx_array) flint_free(row_idx_array);
         if (col_idx_array) flint_free(col_idx_array);
+        free_monom_index(x_index, x_hash_size);
+        free_monom_index(dual_index, dual_hash_size);
         if (x_monoms) flint_free(x_monoms);
         if (dual_monoms) flint_free(dual_monoms);
         if (d0) flint_free(d0);
@@ -2463,8 +3264,13 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     dixon_info_log("  Submatrix size: %ld x %ld\n", submat_rank, submat_rank);
     dixon_debug_log("  Copying %ld x %ld submatrix...\n",
                     submat_rank, submat_rank);
-    
+
+    clock_t copy_cpu_start = clock();
+    double copy_wall_start = get_wall_time();
     *coeff_matrix = (fq_mvpoly_t**) flint_malloc(submat_rank * sizeof(fq_mvpoly_t*));
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static)
+#endif
     for (slong i = 0; i < submat_rank; i++) {
         (*coeff_matrix)[i] = (fq_mvpoly_t*) flint_malloc(submat_rank * sizeof(fq_mvpoly_t));
         for (slong j = 0; j < submat_rank; j++) {
@@ -2476,7 +3282,10 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
             }
         }
     }
-    
+    dixon_maybe_print_step_detail_time("Step 3 submatrix copy",
+                                       copy_cpu_start,
+                                       copy_wall_start);
+
     for (slong i = 0; i < submat_rank; i++) {
         row_indices[i] = row_idx_array[i];
         col_indices[i] = col_idx_array[i];
@@ -2487,7 +3296,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                       row_idx_array, col_idx_array,
                                       x_monoms, dual_monoms, nvars,
                                       var_names, par_names, gen_name);
-    
+
     if (full_matrix) {
         for (slong i = 0; i < nx_monoms; i++) {
             if (full_matrix[i]) {
@@ -2502,17 +3311,20 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         }
         flint_free(full_matrix);
     }
-    
+
     if (row_idx_array) flint_free(row_idx_array);
     if (col_idx_array) flint_free(col_idx_array);
+    free_monom_index(x_index, x_hash_size);
+    free_monom_index(dual_index, dual_hash_size);
     if (x_monoms) flint_free(x_monoms);
     if (dual_monoms) flint_free(dual_monoms);
     if (d0) flint_free(d0);
     if (d1) flint_free(d1);
     dixon_debug_log("  Completed in %.3f seconds\n",
                     get_wall_time() - step3_wall_start);
-    dixon_maybe_print_step_time("Step 3", get_wall_time() - step3_wall_start);
-    (void) step3_cpu_start;
+    dixon_maybe_print_parallel_step_time("Step 3",
+                                         (double) (clock() - step3_cpu_start) / CLOCKS_PER_SEC,
+                                         get_wall_time() - step3_wall_start);
 }
 
 // Compute determinant of cancellation matrix
@@ -2813,6 +3625,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         } else {
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
+
         fq_mvpoly_make_monic(result);
         print_resultant_summary(result, NULL, 0);
         // Cleanup coefficient matrix

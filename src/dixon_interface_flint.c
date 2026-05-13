@@ -110,7 +110,7 @@ void print_resultant_summary(const fq_mvpoly_t *result,
         }
     }
 
-    printf("Resultant summary: %ld terms, total degree %ld, remaining variables: ",
+    printf("  Resultant summary: %ld terms, total degree %ld, remaining variables: ",
            result->nterms, total_degree);
     if (!remaining_vars || num_remaining_vars <= 0) {
         printf("(none)\n");
@@ -2919,7 +2919,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     }
 
     if (g_dixon_verbose_level >= 1) {
-        printf("Resultant summary: %ld terms, total degree %ld, remaining variables: ",
+        printf("  Resultant summary: %ld terms, total degree %ld, remaining variables: ",
                result_mvpoly.nterms, result_total_deg);
         if (state.npars <= 0) {
             printf("(none)\n");
