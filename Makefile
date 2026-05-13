@@ -186,14 +186,6 @@ DIXON_SHARED_LIB = libdrsolve.$(SHARED_LIB_EXT)
 DIXON_TARGET = drsolve
 
 # ============================================================
-# Attack programs directory and files
-# ============================================================
-ATTACK_DIR = ../Attack
-# Find all C files recursively in Attack directory and subdirectories
-ATTACK_C_FILES := $(shell find $(ATTACK_DIR) -name "*.c" 2>/dev/null | grep -v ".ipynb_checkpoints" || echo "")
-ATTACK_EXECUTABLES := $(patsubst %.c,%,$(ATTACK_C_FILES))
-
-# ============================================================
 # Create build directory
 # ============================================================
 $(BUILD_DIR):
@@ -269,15 +261,10 @@ ifeq ($(ENABLE_ASAN),yes)
 	@echo "  AddressSanitizer: ENABLED"
 endif
 	@echo "==========================="
-ifneq ($(ATTACK_C_FILES),)
-	@echo ""
-	@echo "Now building Attack programs..."
-	@$(MAKE) attack-programs-verbose
-endif
 
 # Also build libraries with LTO for better performance
 all: default
-	@echo "Built drsolve executable, libraries, and attack programs"
+	@echo "Built drsolve executable and libraries"
 	@echo "  Link mode: $(DEFAULT_LINK_MODE)"
 ifeq ($(PML_AVAILABLE),yes)
 	@echo "  PML support: ENABLED"
@@ -431,108 +418,6 @@ uninstall:
 	@echo "=== Uninstall complete ==="
 
 # ============================================================
-# Attack programs
-# ============================================================
-
-# Attack programs compilation with verbose output (LTO with all sources)
-attack-programs-verbose: $(PML_BUILD_PREREQS)
-	@echo "Building Attack programs with LTO optimization (compiling with all sources)..."
-	@if [ -z "$(ATTACK_C_FILES)" ]; then \
-		echo "No C files found in $(ATTACK_DIR)"; \
-		echo "Checked directory: $(ATTACK_DIR)"; \
-		if [ ! -d "$(ATTACK_DIR)" ]; then \
-			echo "Directory $(ATTACK_DIR) does not exist!"; \
-		fi; \
-	else \
-		echo "Found C files in $(ATTACK_DIR):"; \
-		for cfile in $(ATTACK_C_FILES); do \
-			echo "  $$cfile"; \
-		done; \
-		echo ""; \
-		success_count=0; \
-		fail_count=0; \
-		for cfile in $(ATTACK_C_FILES); do \
-			if [ -f "$$cfile" ]; then \
-				executable="$${cfile%.c}"; \
-				echo "Compiling $$cfile -> $$executable (LTO with all sources)"; \
-				echo "Command: $(CC) $(ALL_CFLAGS) -o \"$$executable\" \"$$cfile\" $(MATH_SOURCES) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)"; \
-				if $(CC) $(ALL_CFLAGS) -o "$$executable" "$$cfile" $(MATH_SOURCES) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS) 2>&1; then \
-					echo "Successfully compiled: $$executable"; \
-					ls -la "$$executable" | sed 's/^/  /'; \
-					success_count=$$((success_count + 1)); \
-				else \
-					echo "Failed to compile $$cfile"; \
-					fail_count=$$((fail_count + 1)); \
-				fi; \
-				echo ""; \
-			else \
-				echo "File not found: $$cfile"; \
-				fail_count=$$((fail_count + 1)); \
-			fi; \
-		done; \
-		echo "Attack programs compilation summary:"; \
-		echo "  Success: $$success_count"; \
-		echo "  Failed: $$fail_count"; \
-		total_files=`echo "$(ATTACK_C_FILES)" | wc -w`; \
-		echo "  Total: $$total_files"; \
-	fi
-
-# Attack programs compilation (silent version, LTO with all sources)
-attack-programs: $(PML_BUILD_PREREQS)
-	@echo "Building Attack programs with LTO optimization..."
-	@if [ -z "$(ATTACK_C_FILES)" ]; then \
-		echo "No C files found in $(ATTACK_DIR)"; \
-	else \
-		echo "Found C files: $(ATTACK_C_FILES)"; \
-		for cfile in $(ATTACK_C_FILES); do \
-			if [ -f "$$cfile" ]; then \
-				executable="$${cfile%.c}"; \
-				echo ""; \
-				echo "Compiling $$cfile -> $$executable (LTO)"; \
-				echo "Command: $(CC) $(ALL_CFLAGS) -o \"$$executable\" \"$$cfile\" $(MATH_SOURCES) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)"; \
-				if $(CC) $(ALL_CFLAGS) -o "$$executable" "$$cfile" $(MATH_SOURCES) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS); then \
-					echo "Successfully compiled: $$executable"; \
-					ls -la "$$executable" | sed 's/^/  /'; \
-				else \
-					echo "Failed to compile $$cfile"; \
-				fi; \
-			fi; \
-		done; \
-		echo ""; \
-		echo "Attack programs compilation complete"; \
-	fi
-
-# Attack programs with static drsolve library (kept for compatibility)
-attack-static: $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
-	@echo "Building Attack programs with static drsolve library..."
-	@if [ -z "$(ATTACK_C_FILES)" ]; then \
-		echo "No C files found in $(ATTACK_DIR)"; \
-	else \
-		echo "Found C files: $(ATTACK_C_FILES)"; \
-		for cfile in $(ATTACK_C_FILES); do \
-			if [ -f "$$cfile" ]; then \
-				executable="$${cfile%.c}"; \
-				echo "Compiling $$cfile -> $$executable (static drsolve)"; \
-				$(CC) $(ALL_CFLAGS) -o "$$executable" "$$cfile" $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS) || echo "Failed to compile $$cfile"; \
-			fi; \
-		done; \
-		echo "Attack programs compilation complete (static drsolve)"; \
-	fi
-
-# Clean attack programs
-clean-attack:
-	@echo "Cleaning Attack programs..."
-	@if [ -n "$(ATTACK_EXECUTABLES)" ]; then \
-		for exe in $(ATTACK_EXECUTABLES); do \
-			if [ -f "$$exe" ]; then \
-				echo "Removing $$exe"; \
-				rm -f "$$exe"; \
-			fi; \
-		done; \
-	fi
-	@echo "Attack programs cleaned"
-
-# ============================================================
 # Object file compilation (src/*.c -> build/*.o)
 # ============================================================
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR) $(PML_BUILD_PREREQS)
@@ -542,7 +427,7 @@ $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR) $(PML_BUILD_PREREQS)
 # ============================================================
 # Clean
 # ============================================================
-clean: clean-attack
+clean:
 	rm -f $(DIXON_TARGET) $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) dixon libdixon.a libdixon.so libdixon.dylib
 	rm -f .configure_flag_test .configure_flag_test.c .configure_flag_test.o
 	rm -rf $(BUILD_DIR)
@@ -573,16 +458,6 @@ test-paths:
 	@echo "PML_SO_PATH: $(PML_SO_PATH)"
 	@echo "PML_A_PATH: $(PML_A_PATH)"
 	@echo "PML_AVAILABLE: $(PML_AVAILABLE)"
-
-# Test Attack directory detection
-test-attack:
-	@echo "Testing attack detection..."
-	@echo "ATTACK_DIR: $(ATTACK_DIR)"
-	@echo "ATTACK_C_FILES: $(ATTACK_C_FILES)"
-	@echo "ATTACK_EXECUTABLES: $(ATTACK_EXECUTABLES)"
-	@echo ""
-	@echo "Manual find test:"
-	@find $(ATTACK_DIR) -name "*.c" 2>/dev/null | grep -v ".ipynb_checkpoints" || echo "No files found or directory doesn't exist"
 
 # Show configuration
 info:
@@ -635,23 +510,6 @@ endif
 	@echo "FLINT static: $(FLINT_STATIC_LIBS)"
 	@echo "PML dynamic: $(PML_LIBS)"
 	@echo "PML static: $(PML_STATIC_LIBS)"
-	@echo ""
-	@echo "=== Attack Directory Structure ==="
-	@echo "Attack directory: $(ATTACK_DIR)"
-	@echo -n "Directory exists: "
-	@if [ -d "$(ATTACK_DIR)" ]; then \
-		echo "YES"; \
-		echo "C files found:"; \
-		if [ -n "$(ATTACK_C_FILES)" ]; then \
-			for cfile in $(ATTACK_C_FILES); do \
-				echo "  $$cfile"; \
-			done; \
-		else \
-			echo "  No C files found"; \
-		fi; \
-	else \
-		echo "NO"; \
-	fi
 	@echo "EXTERNAL_LIBS (dynamic): $(EXTERNAL_LIBS)"
 	@echo "EXTERNAL_STATIC_ALL_LIBS: $(EXTERNAL_STATIC_ALL_LIBS)"
 
@@ -736,58 +594,6 @@ debug-libs:
 	@echo "Selected PML SO path: $(PML_SO_PATH)"
 	@echo "Selected PML A path: $(PML_A_PATH)"
 
-# Debug attack directory structure
-debug-attack:
-	@echo "=== Attack Directory Debug ==="
-	@echo ""
-	@echo "=== Attack Directory Analysis ==="
-	@echo "Attack directory: $(ATTACK_DIR)"
-	@echo -n "Directory exists: "
-	@if [ -d "$(ATTACK_DIR)" ]; then \
-		echo "YES"; \
-		echo "Directory contents:"; \
-		find $(ATTACK_DIR) -type f -name "*.c" 2>/dev/null | grep -v ".ipynb_checkpoints" | sed 's/^/  /' || echo "  No C files found"; \
-		echo ""; \
-		echo "Subdirectories:"; \
-		find $(ATTACK_DIR) -type d 2>/dev/null | sed 's/^/  /' || echo "  No subdirectories"; \
-		echo ""; \
-		echo "All files (including checkpoints):"; \
-		find $(ATTACK_DIR) -type f -name "*.c" 2>/dev/null | sed 's/^/  /' || echo "  No C files found"; \
-	else \
-		echo "NO"; \
-	fi
-	@echo ""
-	@echo "=== Detected Variables ==="
-	@echo "ATTACK_C_FILES: $(ATTACK_C_FILES)"
-	@echo "ATTACK_EXECUTABLES: $(ATTACK_EXECUTABLES)"
-	@echo ""
-	@echo "=== Test Compilation Check ==="
-	@echo "Current directory drsolve library status:"
-	@if [ -f "$(DIXON_STATIC_LIB)" ]; then \
-		echo "  $(DIXON_STATIC_LIB): EXISTS"; \
-	else \
-		echo "  $(DIXON_STATIC_LIB): MISSING (run 'make static-lib' first)"; \
-	fi
-	@if [ -f "$(DIXON_SHARED_LIB)" ]; then \
-		echo "  $(DIXON_SHARED_LIB): EXISTS"; \
-	else \
-		echo "  $(DIXON_SHARED_LIB): MISSING (run 'make dynamic-lib' first)"; \
-	fi
-	@echo ""
-	@echo "=== Compiled Attack Programs Status ==="
-	@if [ -n "$(ATTACK_EXECUTABLES)" ]; then \
-		for exe in $(ATTACK_EXECUTABLES); do \
-			if [ -f "$$exe" ]; then \
-				echo "  $$exe: EXISTS"; \
-				ls -la "$$exe" | sed 's/^/    /'; \
-			else \
-				echo "  $$exe: NOT COMPILED"; \
-			fi; \
-		done; \
-	else \
-		echo "  No attack executables expected"; \
-	fi
-
 debug-structure:
 	@echo "=== Local Directory Structure Debug ==="
 	@echo ""
@@ -839,18 +645,12 @@ help:
 	@echo "  make static-all      - Build drsolve with all static libraries (fully static)"
 	@echo "  make dynamic-lib     - Build dynamic drsolve library only"
 	@echo "  make static-lib      - Build static drsolve library only"
-	@echo "  make attack-programs - Build all C programs in ../Attack directory (LTO with all sources)"
-	@echo "  make attack-programs-verbose - Build Attack programs with detailed output (LTO)"
-	@echo "  make attack-static   - Build all C programs in ../Attack directory (using static drsolve library)"
-	@echo "  make clean-attack    - Clean all compiled Attack programs"
 	@echo "  make test-paths      - Test library path detection"
-	@echo "  make test-attack     - Test Attack directory detection"
 	@echo "  make info            - Show build configuration (including install paths)"
 	@echo "  make debug-headers   - Debug header file detection"
 	@echo "  make debug-libs      - Debug external library detection"
 	@echo "  make debug-structure - Debug local directory structure"
-	@echo "  make debug-attack    - Debug Attack directory structure and C files"
-	@echo "  make clean           - Clean all build artifacts (including Attack programs)"
+	@echo "  make clean           - Clean all build artifacts"
 	@echo "  make check           - Run test suite (pass/fail summary)"
 	@echo "  make check-verbose   - Run tests with full output"
 	@echo "  make clean-build     - Clean only build directory"
@@ -876,21 +676,7 @@ help:
 	@echo "  $(SRC_DIR)/          - Source files (.c)"
 	@echo "  $(INCLUDE_DIR)/      - Header files (.h)"
 	@echo "  $(BUILD_DIR)/        - Object files (.o) [created during build]"
-	@echo "  $(ATTACK_DIR)/       - Attack programs (.c files with main())"
 	@echo "  ./               - Executables and libraries"
-	@echo ""
-	@echo "Attack programs workflow:"
-	@echo "  1. Run 'make' to build drsolve libraries AND all Attack programs automatically"
-	@echo "  2. Or run 'make attack-programs' to build only Attack programs with LTO optimization"
-	@echo "  3. Or run 'make attack-programs-verbose' for detailed compilation output"
-	@echo "  4. Or run 'make attack-static' to build with static drsolve library (legacy)"
-	@echo "  5. Each .c file in ../Attack becomes an executable with the same name"
-	@echo "  6. Use 'make debug-attack' to check compilation status"
-	@echo "  7. .ipynb_checkpoints directories are automatically excluded"
-	@echo ""
-	@echo "Attack programs compilation strategy:"
-	@echo "  default - Compile Attack programs with all drsolve sources using LTO (best performance)"
-	@echo "  attack-static - Use pre-built static drsolve library (legacy compatibility)"
 	@echo ""
 	@echo "Compilation strategy:"
 	@echo "  default - Build bundled PML first, then drsolve libraries, then compile all sources with LTO"
@@ -901,7 +687,6 @@ help:
 	@echo "Library structure:"
 	@echo "  drsolve library: $(words $(MATH_SOURCES)) math source files"
 	@echo "  Main program: drsolve.c links against drsolve library OR compiles with all sources"
-	@echo "  Attack programs: Each .c in ../Attack compiles with all drsolve sources (LTO optimization)"
 	@echo "  External deps: FLINT (required), PML determinant subset (bundled from pml_det when present)"
 	@echo ""
 	@echo "PML Detection:"
@@ -1140,8 +925,7 @@ check-verbose: $(DIXON_TARGET)
 	echo "=== All verbose tests passed ==="
 
 .PHONY: default all lto dynamic static static-all dynamic-lib static-lib \
-        attack-programs attack-programs-verbose attack-static clean-attack \
-        clean clean-build distclean test-paths test-attack info \
-        debug-headers debug-libs debug-structure debug-attack help \
+        clean clean-build distclean test-paths info \
+        debug-headers debug-libs debug-structure help \
         install install-strip install-headers uninstall \
         check check-verbose

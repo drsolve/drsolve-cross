@@ -5,7 +5,72 @@ SageMath interface for drsolve
 Usage
 -----
 
-# Basic
+Functions
+---------
+
+DixonRes(F, elim_vars, ...)
+    Compute a resultant / elimination polynomial.
+
+DixonSolve(F, ...)
+    Solve a polynomial system.
+
+DixonComplexity(F, elim_vars, ...)
+    Run complexity analysis.
+
+DixonIdeal(F, ideal_gens, elim_vars, ...)
+    Compute a resultant with ideal reduction.
+    
+set_dixon_path(path)
+    Set the default `drsolve` executable path.
+
+get_dixon_path()
+    Return the current default executable path.
+
+Common options
+--------------
+
+debug=True
+    Print wrapper-level diagnostics.
+
+live_output=True
+    Stream `drsolve` stdout/stderr directly.
+
+verbosity=0..3
+    Pass `-v` to `drsolve`. If omitted, keep the default `-v 1`.
+
+time=True
+    Pass `--time`.
+
+threads=<n>
+    Pass `--threads <n>`.
+
+method=0..5
+    Pass `--method <n>`.
+
+step1=0..4, step4=0..4
+    Pass `--step1` / `--step4`.
+
+resultant_method="dixon" | "macaulay" | "subres"
+    Select the resultant construction method.
+
+field_equation=True
+    Enable field-equation reduction.
+
+fast_ksy=True/False, fast_ksy_col=<idx>
+    Control the method-5 KSY precondition.
+
+rational_root_scan="auto" | "off" | "force"
+    Solver option for rational root scanning.
+
+rational_only=True
+    Keep only exact rational solutions; requires `field_size=0`.
+
+Examples
+--------
+
+Basic
+-----
+
 load("drsolve_sage_interface.sage")
 set_dixon_path("./drsolve")
 
@@ -16,7 +81,9 @@ sols = DixonSolve(F)
 info = DixonComplexity(F, [x, y])
 print(res, "\n", sols, "\n", info, "\n")
 
-# Iterative elimination
+Iterative elimination
+---------------------
+
 load("drsolve_sage_interface.sage")
 set_dixon_path("./drsolve")
 R.<x, y, z> = GF(17)[]
@@ -28,9 +95,6 @@ res1 = DixonRes([f1, f2], [x])
 res2 = DixonRes([res1, f3], [y])
 res3 = DixonRes([res2, f4], [z])
 print("res1 =", res1, "\nres2 =", res2, "\nres3 =", res3)
-
-Pass `debug=True` to any function to print wrapper-level diagnostics.
-Pass `live_output=True` to stream `drsolve` stdout/stderr directly.
 
 Method selection
 ----------------
@@ -86,8 +150,8 @@ set_dixon_path("./drsolve")
 R.<x, y> = QQ[]
 F = [x^2 - 1, y - x]
 
-sols_exact = DixonSolve(F, field_size=0, rational_only=True, verbosity=2)
-sols_all = DixonSolve(F, field_size=0, rational_root_scan="force", verbosity=2)
+sols_exact = DixonSolve(F, field_size="0", rational_only=True, verbosity=2)
+sols_all = DixonSolve(F, field_size="0", rational_root_scan="force", verbosity=2)
 print("exact =", sols_exact)
 print("all =", sols_all)
 
