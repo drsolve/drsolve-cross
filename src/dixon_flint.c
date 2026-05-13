@@ -73,7 +73,7 @@ static void dixon_info_log(const char *fmt, ...)
 
 void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed)
 {
-    if (g_dixon_verbose_level < 2 || !g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
         return;
     }
     dixon_info_log("%s time: %.3f seconds\n", step_label, wall_elapsed);
@@ -83,7 +83,7 @@ void dixon_maybe_print_parallel_step_time(const char *step_label,
                                           double cpu_elapsed,
                                           double wall_elapsed)
 {
-    if (g_dixon_verbose_level < 2 || !g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
         return;
     }
 
@@ -99,7 +99,7 @@ void dixon_maybe_print_step_method_time(const char *step_label,
 {
     int show_parallel_style = 0;
 
-    if (g_dixon_verbose_level < 2 || !g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
         return;
     }
 

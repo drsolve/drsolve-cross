@@ -69,7 +69,7 @@ static void print_short_usage(const char *prog_name)
     printf("  %s input_file\n", prog_name);
     printf("\n");
 
-    printf("CORE MODES:\n");
+    printf("EXAMPLES:\n");
     printf("  Elimination/resultant:\n");
     printf("    %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("  Polynomial system solving:\n");
@@ -77,7 +77,11 @@ static void print_short_usage(const char *prog_name)
     printf("  Complexity analysis:\n");
     printf("    %s -c \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
     printf("  Random input:\n");
-    printf("    %s -r \"[3]*3\" 0\n", prog_name);
+    printf("    %s -r \"[3]*3\" 257\n", prog_name);
+    printf("  Extension field:\n");
+    printf("    %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
+    printf("  Rational:\n");
+    printf("    %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" 0\n", prog_name);
     printf("  File input:\n");
     printf("    %s example.dr\n", prog_name);
     printf("\n");
@@ -3211,7 +3215,7 @@ int main(int argc, char *argv[])
                 printf("Hint: detected 2 equations with 1 elimination variable; auto-enabling --subres.\n");
             }
         } else if (!rational_mode && !large_prime_mode &&
-                   (poly_count == 3) && // || poly_count == 4
+                   (poly_count == 3 || poly_count == 4) &&
                    var_count == poly_count - 1) {
             resultant_method = RESULTANT_METHOD_DIXON_RECURSIVE;
             if (!silent_mode) {
