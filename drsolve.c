@@ -67,12 +67,11 @@ static void print_short_usage(const char *prog_name)
     printf("  %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("  %s \"polynomials\" field_size\n", prog_name);
     printf("  %s input_file\n", prog_name);
-    printf("\n");
     printf("\nOPTIONS:\n");
     printf("  -r  random polynomial generation\n");
     printf("  -s  solving mode (auto-enables when no vars given)\n");
     printf("  -c  complexity analysis mode\n");
-
+    printf("\n");
     printf("EXAMPLES:\n");
     printf("  Elimination/resultant:\n");
     printf("    %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
