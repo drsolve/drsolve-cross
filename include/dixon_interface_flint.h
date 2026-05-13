@@ -96,6 +96,7 @@ void fq_nmod_print_pretty_enhanced(const fq_nmod_t a, const fq_nmod_ctx_t ctx);
 void fq_mvpoly_print_enhanced(const fq_mvpoly_t *p, const char *name);
 void find_and_print_roots_of_univariate_resultant(const fq_mvpoly_t *result, parser_state_t *state);
 void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *result, parser_state_t *state, FILE *fp_file, int print_to_stdout);
+void print_resultant_summary(const fq_mvpoly_t *result, char **remaining_vars, slong num_remaining_vars);
 void dixon_clear_last_root_report(void);
 const char *dixon_get_last_root_report(void);
 

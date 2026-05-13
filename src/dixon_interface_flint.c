@@ -51,6 +51,94 @@ static void subres_cli_log(int level, const char *fmt, ...)
     va_end(args);
 }
 
+static void resultant_summary_collect_usage(const fq_mvpoly_t *result,
+                                            int use_par_exponents,
+                                            int *used,
+                                            slong used_len)
+{
+    slong limit = 0;
+
+    if (!result || !used || used_len <= 0) {
+        return;
+    }
+
+    limit = use_par_exponents ? result->npars : result->nvars;
+    if (limit > used_len) {
+        limit = used_len;
+    }
+
+    for (slong i = 0; i < result->nterms; i++) {
+        const slong *exp = use_par_exponents ? result->terms[i].par_exp
+                                             : result->terms[i].var_exp;
+        if (!exp) {
+            continue;
+        }
+        for (slong j = 0; j < limit; j++) {
+            if (exp[j] > 0) {
+                used[j] = 1;
+            }
+        }
+    }
+}
+
+void print_resultant_summary(const fq_mvpoly_t *result,
+                             char **remaining_vars,
+                             slong num_remaining_vars)
+{
+    slong total_degree = 0;
+    int *used = NULL;
+    int use_par_exponents = 1;
+
+    if (!result) return;
+
+    for (slong i = 0; i < result->nterms; i++) {
+        slong term_degree = 0;
+
+        if (result->terms[i].var_exp) {
+            for (slong j = 0; j < result->nvars; j++) {
+                term_degree += result->terms[i].var_exp[j];
+            }
+        }
+        if (result->terms[i].par_exp) {
+            for (slong j = 0; j < result->npars; j++) {
+                term_degree += result->terms[i].par_exp[j];
+            }
+        }
+
+        if (term_degree > total_degree) {
+            total_degree = term_degree;
+        }
+    }
+
+    printf("Resultant summary: %ld terms, total degree %ld, remaining variables: ",
+           result->nterms, total_degree);
+    if (!remaining_vars || num_remaining_vars <= 0) {
+        printf("(none)\n");
+        return;
+    }
+
+    if (result->npars <= 0 && result->nvars > 0) {
+        use_par_exponents = 0;
+    }
+
+    used = (int *) flint_calloc((size_t) num_remaining_vars, sizeof(int));
+    resultant_summary_collect_usage(result, use_par_exponents, used, num_remaining_vars);
+
+    slong printed = 0;
+    for (slong i = 0; i < num_remaining_vars; i++) {
+        if (!used[i]) {
+            continue;
+        }
+        printf("%s%s", (printed == 0) ? "" : ", ", remaining_vars[i]);
+        printed++;
+    }
+    flint_free(used);
+    if (printed == 0) {
+        printf("(none)");
+    }
+    printf("\n");
+}
+
 static double elapsed_wall_seconds(const struct timeval *start,
                                    const struct timeval *end)
 {
@@ -2830,13 +2918,16 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         subres_cli_log(1, "Subresultant: resultant computed.\n");
     }
 
-    if (subres_cli_logging_enabled(2)) {
-        if (result_mvpoly.nterms == 0) {
-            subres_cli_log(2, "  Output summary: zero polynomial.\n");
+    if (g_dixon_verbose_level >= 1) {
+        printf("Resultant summary: %ld terms, total degree %ld, remaining variables: ",
+               result_mvpoly.nterms, result_total_deg);
+        if (state.npars <= 0) {
+            printf("(none)\n");
         } else {
-            subres_cli_log(2,
-                           "  Output summary: terms=%ld, total degree in remaining vars=%ld\n",
-                           result_mvpoly.nterms, result_total_deg);
+            for (slong j = 0; j < state.npars; j++) {
+                printf("%s%s", (j == 0) ? "" : ", ", state.par_names[j]);
+            }
+            printf("\n");
         }
     }
 

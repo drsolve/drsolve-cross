@@ -2154,27 +2154,29 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     }
     
     /* Build cancellation matrix */
-    printf("\nStep 1: Build Dixon polynomial\n");
+    if (g_dixon_verbose_level >= 1) printf("\nStep 1: Build Dixon polynomial\n");
     clock_t step1_start = clock();
     fq_mvpoly_t **M_mvpoly;
-    printf("Build Cancellation Matrix\n");
+    if (g_dixon_verbose_level >= 2) printf("Build Cancellation Matrix\n");
     build_fq_cancellation_matrix_mvpoly(&M_mvpoly, polys, num_elim_vars, state.npars);
     
     /* Perform row operations */
     fq_mvpoly_t **modified_M_mvpoly;
-    printf("Perform Matrix Row Operations\n");
+    if (g_dixon_verbose_level >= 2) printf("Perform Matrix Row Operations\n");
     perform_fq_matrix_row_operations_mvpoly(&modified_M_mvpoly, &M_mvpoly, num_elim_vars, state.npars);
     
     /* Compute determinant of modified matrix */
     fq_mvpoly_t d_poly;
-    printf("Computing cancellation matrix determinant using recursive expansion...\n");
+    if (g_dixon_verbose_level >= 2) printf("Computing cancellation matrix determinant using recursive expansion...\n");
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, num_elim_vars, state.npars, DET_METHOD_RECURSIVE);
-    if (d_poly.nterms <= 100) {
+    if (g_dixon_verbose_level >= 1 && d_poly.nterms <= 100) {
         printf("Dixon polynomial: %ld terms\n", d_poly.nterms);
-    } else {
+    } else if (g_dixon_verbose_level >= 1) {
         printf("Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
-    printf("Time: %.3f seconds\n", (double)(clock() - step1_start) / CLOCKS_PER_SEC);
+    if (g_dixon_verbose_level >= 3) {
+        printf("Step 1 time: %.3f seconds\n", (double)(clock() - step1_start) / CLOCKS_PER_SEC);
+    }
     
     /* Extract coefficient matrix */
     fq_mvpoly_t **coeff_matrix = NULL;
@@ -2190,7 +2192,7 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     /* Compute determinant with ideal reduction */
     fq_mvpoly_t result_poly;
     if (matrix_size > 0) {
-        printf("\nStep 4: Compute resultant with ideal reduction\n");
+        if (g_dixon_verbose_level >= 1) printf("\nStep 4: Compute resultant with ideal reduction\n");
         
         /* Pass parameter names for proper variable mapping during reduction */
         compute_det_with_reduction_from_mvpoly(&result_poly, coeff_matrix, matrix_size, ideal, 
@@ -2211,6 +2213,7 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     fq_mvpoly_make_monic(&result_poly);
     
     /* Convert result to string */
+    print_resultant_summary(&result_poly, state.par_names, state.npars);
     find_and_print_roots_of_univariate_resultant(&result_poly, &state);
     char *result = fq_mvpoly_to_string(&result_poly, state.par_names, state.generator_name);
     
@@ -2587,9 +2590,6 @@ char* dixon_with_ideal(const char **poly_strings,
     /* Cleanup split equations */
     free_split_string_rs(ideal_equations_array, num_ideal_equations);
     
-    clock_t end_time = clock();
-    double elapsed = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-    printf("Time: %.3f seconds\n", elapsed);
     return result;
 }
 

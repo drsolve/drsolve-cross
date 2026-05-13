@@ -6,6 +6,7 @@
 #include "fq_mpoly_mat_det.h"
 extern int g_field_equation_reduction;
 extern int g_dixon_debug_mode;
+extern int g_dixon_verbose_level;
 static inline ulong reduce_exp_field_ui(ulong e, ulong q);
 static ulong field_size_q_from_fq_ctx(const fq_nmod_ctx_t ctx);
 static void fq_nmod_poly_reduce_field_equation_inplace(fq_nmod_poly_t poly, const fq_nmod_ctx_t ctx);
@@ -600,14 +601,16 @@ void compute_fq_det_poly_recursive(fq_mvpoly_t *result, fq_mvpoly_t **matrix, sl
     
     timing_info_t total_elapsed = end_timing(total_start);
     
-    printf("\n=== Polynomial Recursive Time Statistics ===\n");
-    print_timing("Compute bounds", bounds_elapsed);
-    print_timing("Convert to univariate", convert_elapsed);
-    print_timing("Recursive determinant", det_elapsed);
-    print_timing("Convert back", back_elapsed);
-    print_timing("Total poly recursive", total_elapsed);
-    printf("Final result: %ld terms\n", result->nterms);
-    printf("============================================\n");
+    if (g_dixon_verbose_level >= 3) {
+        printf("\n=== Polynomial Recursive Time Statistics ===\n");
+        print_timing("Compute bounds", bounds_elapsed);
+        print_timing("Convert to univariate", convert_elapsed);
+        print_timing("Recursive determinant", det_elapsed);
+        print_timing("Convert back", back_elapsed);
+        print_timing("Total poly recursive", total_elapsed);
+        printf("Final result: %ld terms\n", result->nterms);
+        printf("============================================\n");
+    }
 }
 
 // ============= Kronecker+HNF Implementation =============
@@ -927,12 +930,14 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     timing_info_t total_elapsed = end_timing(total_start);
     
     printf("\n=== Kronecker+HNF Time Statistics ===\n");
-    print_timing("Compute bounds", bounds_elapsed);
-    print_timing("Convert to univariate", convert_elapsed);
-    print_timing("Univariate determinant", det_elapsed);
-    print_timing("Convert back", back_elapsed);
-    print_timing("Total Kronecker", total_elapsed);
-    printf("Final result: %ld terms\n", result->nterms);
+    if (g_dixon_verbose_level >= 3) {
+        print_timing("Compute bounds", bounds_elapsed);
+        print_timing("Convert to univariate", convert_elapsed);
+        print_timing("Univariate determinant", det_elapsed);
+        print_timing("Convert back", back_elapsed);
+        print_timing("Total Kronecker", total_elapsed);
+        printf("Final result: %ld terms\n", result->nterms);
+    }
     printf("==============================================\n");
 }
 
@@ -1027,12 +1032,14 @@ void compute_fq_det_kronecker_nmod_recursive(fq_mvpoly_t *result,
     timing_info_t total_elapsed = end_timing(total_start);
     /*
     printf("\n=== Kronecker+direct nmod Time Statistics ===\n");
-    print_timing("Compute bounds", bounds_elapsed);
-    print_timing("Convert to univariate", convert_elapsed);
-    print_timing("Direct nmod recursive determinant", det_elapsed);
-    print_timing("Convert back", back_elapsed);
-    print_timing("Total Kronecker+direct nmod", total_elapsed);
-    printf("Final result: %ld terms\n", result->nterms);
+    if (g_dixon_verbose_level >= 3) {
+        print_timing("Compute bounds", bounds_elapsed);
+        print_timing("Convert to univariate", convert_elapsed);
+        print_timing("Direct nmod recursive determinant", det_elapsed);
+        print_timing("Convert back", back_elapsed);
+        print_timing("Total Kronecker+direct nmod", total_elapsed);
+        printf("Final result: %ld terms\n", result->nterms);
+    }
     printf("==============================================\n");
     */
 }

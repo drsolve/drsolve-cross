@@ -919,9 +919,6 @@ char* elimination_with_ideal(const char **poly_strings,
         
         printf("=== Dixon Computation Complete ===\n\n");
     }
-    clock_t end_time = clock();
-    double elapsed = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-    printf("Time: %.3f seconds\n", elapsed);
     return result;
 }
 

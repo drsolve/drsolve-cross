@@ -73,7 +73,7 @@ static void dixon_info_log(const char *fmt, ...)
 
 void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed)
 {
-    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 2 || !g_dixon_show_step_timing) {
         return;
     }
     dixon_info_log("%s time: %.3f seconds\n", step_label, wall_elapsed);
@@ -83,7 +83,7 @@ void dixon_maybe_print_parallel_step_time(const char *step_label,
                                           double cpu_elapsed,
                                           double wall_elapsed)
 {
-    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 2 || !g_dixon_show_step_timing) {
         return;
     }
 
@@ -99,7 +99,7 @@ void dixon_maybe_print_step_method_time(const char *step_label,
 {
     int show_parallel_style = 0;
 
-    if (g_dixon_verbose_level < 1 || !g_dixon_show_step_timing) {
+    if (g_dixon_verbose_level < 2 || !g_dixon_show_step_timing) {
         return;
     }
 
@@ -127,6 +127,11 @@ static void dixon_debug_log(const char *fmt, ...)
     va_start(args, fmt);
     vprintf(fmt, args);
     va_end(args);
+}
+
+static int dixon_show_step_details(void)
+{
+    return g_dixon_verbose_level >= 2;
 }
 
 static int dixon_should_dump_small_matrix(slong nrows, slong ncols)
@@ -2705,7 +2710,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     clock_t step1_cpu_start = clock();
     double step1_wall_start = get_wall_time();
     fq_mvpoly_t **M_mvpoly;
-    dixon_debug_log("  Build Cancellation Matrix\n");
+    if (dixon_show_step_details()) dixon_debug_log("  Build Cancellation Matrix\n");
     build_fq_cancellation_matrix_mvpoly(&M_mvpoly, polys, nvars, npars);
     dixon_print_small_named_dense_matrix("Cancellation Matrix", M_mvpoly,
                                          nvars + 1, nvars + 1,
@@ -2715,7 +2720,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     //analyze_fq_matrix_mvpoly(M_mvpoly, nvars + 1, nvars + 1, "Original Cancellation");
     
     fq_mvpoly_t **modified_M_mvpoly;
-    dixon_debug_log("  Perform Matrix Row Operations\n");
+    if (dixon_show_step_details()) dixon_debug_log("  Perform Matrix Row Operations\n");
     perform_fq_matrix_row_operations_mvpoly(&modified_M_mvpoly, &M_mvpoly, nvars, npars);
     
     fq_mvpoly_t d_poly;
@@ -2725,8 +2730,10 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
         dixon_info_log("  Step 1 method override active: %d (%s)\n",
                        dixon_global_method_step1, dixon_det_method_name(dixon_global_method_step1));
     }
-    dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
-                    dixon_det_method_name(step1_method));
+    if (dixon_show_step_details()) {
+        dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
+                        dixon_det_method_name(step1_method));
+    }
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
     if (d_poly.nterms <= 100) {
@@ -2807,6 +2814,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
+        print_resultant_summary(result, NULL, 0);
         // Cleanup coefficient matrix
         for (slong i = 0; i < matrix_size; i++) {
             for (slong j = 0; j < matrix_size; j++) {
@@ -2922,6 +2930,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
+        print_resultant_summary(result, par_names, npars);
         
         for (slong i = 0; i < matrix_size; i++) {
             for (slong j = 0; j < matrix_size; j++) {

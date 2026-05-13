@@ -3412,7 +3412,6 @@ int main(int argc, char *argv[])
         /* ---- Dixon with ideal reduction ---- */
         if (!silent_mode) {
             printf("Task: Dixon + ideal reduction  |  Eliminate: %s\n", vars_str);
-            printf("Ideal: %s\n", ideal_str);
             printf("--------------------------------\n");
         }
 
