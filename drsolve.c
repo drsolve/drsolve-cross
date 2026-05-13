@@ -68,6 +68,10 @@ static void print_short_usage(const char *prog_name)
     printf("  %s \"polynomials\" field_size\n", prog_name);
     printf("  %s input_file\n", prog_name);
     printf("\n");
+    printf("\nOPTIONS:\n");
+    printf("  -r  random polynomial generation\n");
+    printf("  -s  solving mode (auto-enables when no vars given)\n");
+    printf("  -c  complexity analysis mode\n");
 
     printf("EXAMPLES:\n");
     printf("  Elimination/resultant:\n");
@@ -89,6 +93,7 @@ static void print_short_usage(const char *prog_name)
     printf("NOTES:\n");
     printf("  - Use -v 2 or -v 3 for detailed diagnostics\n");
     printf("  - In extension fields, 't' is default field generator\n");
+    printf("  - Default output directory is ./out/\n");
     printf("\n");
     printf("Run '%s --help' or '%s -h' for full help.\n", prog_name, prog_name);
 }
