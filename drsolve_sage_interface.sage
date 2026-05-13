@@ -36,6 +36,7 @@ print("res1 =", res1, "\nres2 =", res2, "\nres3 =", res3)
 import os
 import re
 import glob
+import tempfile
 import subprocess
 from itertools import product as _iproduct
 
@@ -87,18 +88,47 @@ def _field_size_str(field_size):
     GF(2^8)       -> "2^8"
     "2^8"         -> "2^8"  (passed through)
     """
+    def _replace_symbol(expr_str, old_symbol, new_symbol):
+        if not old_symbol or old_symbol == new_symbol:
+            return expr_str
+        pattern = r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(old_symbol)
+        return re.sub(pattern, new_symbol, expr_str)
+
+    def _finite_field_to_str(field):
+        p = int(field.characteristic())
+        k = int(field.degree())
+        if k <= 1:
+            return str(p)
+
+        field_str = "%d^%d" % (p, k)
+        try:
+            modulus = field.modulus()
+            gen_name = field.variable_name()
+            modulus_var = str(modulus.parent().gen())
+            modulus_str = _replace_symbol(str(modulus), modulus_var, gen_name)
+            return "%s: %s" % (field_str, modulus_str)
+        except Exception:
+            return field_str
+
     try:
         from sage.rings.finite_rings.finite_field_base import FiniteField
         if isinstance(field_size, FiniteField):
-            p = int(field_size.characteristic())
-            k = int(field_size.degree())
-            return "%d^%d" % (p, k) if k > 1 else str(p)
+            return _finite_field_to_str(field_size)
     except ImportError:
         pass
 
     if isinstance(field_size, tuple) and len(field_size) == 2:
         p, k = int(field_size[0]), int(field_size[1])
         return "%d^%d" % (p, k) if k > 1 else str(p)
+
+    if isinstance(field_size, tuple) and len(field_size) in (3, 4):
+        p, k = int(field_size[0]), int(field_size[1])
+        gen_name = field_size[3] if len(field_size) == 4 else None
+        modulus_str = str(field_size[2])
+        if gen_name is not None:
+            gen_name = str(gen_name)
+            modulus_str = re.sub(r"\b[a-zA-Z]\b", gen_name, modulus_str, count=1)
+        return "%d^%d: %s" % (p, k, modulus_str)
 
     if isinstance(field_size, str):
         return field_size
@@ -113,6 +143,51 @@ def _poly_to_str(f):
 
 def _elim_vars_to_str(elim_vars):
     return ", ".join(str(v) for v in elim_vars)
+
+
+def _rewrite_symbol(text, old_symbol, new_symbol):
+    if text is None:
+        return None
+    if not old_symbol or old_symbol == new_symbol:
+        return text
+    pattern = r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(old_symbol)
+    return re.sub(pattern, new_symbol, str(text))
+
+
+def _normalize_extension_generator(field_size, items=None, elim_vars=None, ideal_gens=None, debug=False):
+    """
+    drsolve's CLI field parser only reliably accepts a single-character
+    extension-field generator in the `p^k: modulus` syntax. If a longer
+    symbol such as `z8` is present, rewrite it consistently across the field
+    spec and all serialized polynomial strings before invoking drsolve.
+    """
+    field_str = _field_size_str(field_size)
+    if not isinstance(field_str, str) or ":" not in field_str:
+        return field_str, items, elim_vars, ideal_gens
+
+    modulus_part = field_str.split(":", 1)[1]
+    match = re.search(r"[A-Za-z][A-Za-z0-9_]*", modulus_part)
+    if not match:
+        return field_str, items, elim_vars, ideal_gens
+
+    original = match.group(0)
+    canonical = original[0]
+    if len(original) == 1:
+        return field_str, items, elim_vars, ideal_gens
+
+    if debug:
+        print("[debug] rewriting extension-field generator %r -> %r for drsolve CLI compatibility"
+              % (original, canonical))
+
+    field_str = _rewrite_symbol(field_str, original, canonical)
+    if items is not None:
+        items = [_rewrite_symbol(_poly_to_str(item), original, canonical) for item in items]
+    if elim_vars is not None:
+        elim_vars = [_rewrite_symbol(var, original, canonical) for var in elim_vars]
+    if ideal_gens is not None:
+        ideal_gens = [_rewrite_symbol(gen, original, canonical) for gen in _coerce_str_list(ideal_gens)]
+
+    return field_str, items, elim_vars, ideal_gens
 
 
 def _infer_field_size(F, field_size):
@@ -283,6 +358,32 @@ def _check_ring_consistency(F):
             )
 
 
+def _coerce_str_list(items):
+    if items is None:
+        return []
+    if isinstance(items, str):
+        return [part.strip() for part in items.split(",") if part.strip()]
+    return [str(item) for item in items]
+
+
+def _make_temp_path(prefix, suffix):
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=suffix)
+    os.close(fd)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    return path
+
+
+def _cleanup_file(path):
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def ToDixon(F, elim_vars, field_size=257, finput="/tmp/drsolve_in.dat", debug=False):
     """
     Write a drsolve input file (resultant / complexity mode).
@@ -296,11 +397,17 @@ def ToDixon(F, elim_vars, field_size=257, finput="/tmp/drsolve_in.dat", debug=Fa
       Lines 3..n  : one polynomial per line
     """
     _check_ring_consistency(F)
+    field_str, polys, elim_serialized, _ = _normalize_extension_generator(
+        field_size,
+        items=F,
+        elim_vars=elim_vars,
+        debug=debug,
+    )
 
     with open(finput, "w") as fd:
-        fd.write(_elim_vars_to_str(elim_vars) + "\n")
-        fd.write(_field_size_str(field_size) + "\n")
-        fd.write(", ".join(_poly_to_str(f) for f in F) + "\n")
+        fd.write(_elim_vars_to_str(elim_serialized) + "\n")
+        fd.write(field_str + "\n")
+        fd.write(", ".join(polys) + "\n")
 
     if debug:
         print("[debug] wrote input file: %s" % finput)
@@ -322,10 +429,15 @@ def ToDixonSolver(F, field_size=257, finput="/tmp/drsolve_solve_in.dat", debug=F
       Lines 2..n : one polynomial per line
     """
     _check_ring_consistency(F)
+    field_str, polys, _, _ = _normalize_extension_generator(
+        field_size,
+        items=F,
+        debug=debug,
+    )
 
     with open(finput, "w") as fd:
-        fd.write(_field_size_str(field_size) + "\n")
-        fd.write(", ".join(_poly_to_str(f) for f in F) + "\n")
+        fd.write(field_str + "\n")
+        fd.write(", ".join(polys) + "\n")
 
     if debug:
         print("[debug] wrote solver input file: %s" % finput)
@@ -335,6 +447,157 @@ def ToDixonSolver(F, field_size=257, finput="/tmp/drsolve_solve_in.dat", debug=F
             print("[debug] --- end ---")
 
     return finput
+
+
+def ToDixonIdeal(
+    F,
+    ideal_gens,
+    elim_vars,
+    field_size=257,
+    finput="/tmp/drsolve_ideal_in.dat",
+    debug=False,
+):
+    """
+    Write a drsolve ideal-reduction input file.
+
+    Format:
+      Line 1     : variables to eliminate
+      Line 2     : field size
+      Lines 3..n : ideal generators and polynomials, one per line
+    """
+    _check_ring_consistency(F)
+    field_str, polys, elim_serialized, ideal_serialized = _normalize_extension_generator(
+        field_size,
+        items=F,
+        elim_vars=elim_vars,
+        ideal_gens=ideal_gens,
+        debug=debug,
+    )
+
+    with open(finput, "w") as fd:
+        fd.write(_elim_vars_to_str(elim_serialized) + "\n")
+        fd.write(field_str + "\n")
+        for gen in ideal_serialized:
+            fd.write(str(gen) + "\n")
+        for poly in polys:
+            fd.write(poly + "\n")
+
+    if debug:
+        print("[debug] wrote ideal input file: %s" % finput)
+        with open(finput) as fh:
+            print("[debug] --- input file content ---")
+            print(fh.read().rstrip())
+            print("[debug] --- end ---")
+
+    return finput
+
+
+def _append_option(cmd, flag, value):
+    if value is None:
+        return
+    cmd.extend([flag, str(value)])
+
+
+def _build_common_cli_flags(
+    debug=False,
+    verbosity=None,
+    time=False,
+    threads=None,
+    resultant_method=None,
+    method=None,
+    step1=None,
+    step4=None,
+    field_equation=False,
+    fast_ksy=None,
+    fast_ksy_col=None,
+    rational_root_scan=None,
+):
+    cmd = []
+
+    if verbosity is None and debug:
+        verbosity = 2
+    if verbosity is not None:
+        _append_option(cmd, "-v", int(verbosity))
+
+    if time:
+        cmd.append("--time")
+    if threads is not None:
+        _append_option(cmd, "--threads", int(threads))
+
+    if resultant_method is not None:
+        method_name = str(resultant_method).lower()
+        if method_name not in ("dixon", "macaulay", "subres"):
+            raise ValueError("resultant_method must be one of: dixon, macaulay, subres")
+        cmd.append("--" + method_name)
+
+    if method is not None:
+        _append_option(cmd, "--method", int(method))
+    if step1 is not None:
+        _append_option(cmd, "--step1", int(step1))
+    if step4 is not None:
+        _append_option(cmd, "--step4", int(step4))
+
+    if field_equation:
+        cmd.append("--field-equation")
+
+    if fast_ksy is True:
+        cmd.append("--fast-ksy")
+    elif fast_ksy is False:
+        cmd.append("--no-fast-ksy")
+
+    if fast_ksy_col is not None:
+        _append_option(cmd, "--fast-ksy-col", int(fast_ksy_col))
+
+    if rational_root_scan is not None:
+        mode = str(rational_root_scan).lower()
+        if mode not in ("auto", "off", "force"):
+            raise ValueError("rational_root_scan must be one of: auto, off, force")
+        cmd.extend(["--rational-root-scan", mode])
+
+    return cmd
+
+
+def _run_file_mode(
+    api_name,
+    writer,
+    parser,
+    dixon_path,
+    cmd_prefix,
+    finput,
+    foutput,
+    timeout,
+    debug,
+):
+    created_input = finput is None
+    created_output = foutput is None
+
+    if finput is None:
+        finput = _make_temp_path("drsolve_", ".in")
+    if foutput is None:
+        foutput = _make_temp_path("drsolve_", ".out")
+
+    writer(finput)
+    cmd = [dixon_path] + list(cmd_prefix) + ["-f", finput, "-o", foutput]
+    proc = _run(cmd, timeout, debug)
+
+    if proc.returncode != 0:
+        print("[%s] drsolve exited with code %d" % (api_name, proc.returncode))
+        if proc.stderr:
+            print(proc.stderr)
+        if created_input and not debug:
+            _cleanup_file(finput)
+        if created_output and not debug:
+            _cleanup_file(foutput)
+        return None
+
+    result = parser(foutput, debug)
+
+    if created_input and not debug:
+        _cleanup_file(finput)
+    if created_output and not debug:
+        _cleanup_file(foutput)
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -484,9 +747,20 @@ def DixonRes(
     elim_vars,
     field_size=None,
     dixon_path=None,
-    finput="/tmp/drsolve_in.dat",
+    finput=None,
+    foutput=None,
     debug=False,
     timeout=600,
+    verbosity=None,
+    time=False,
+    threads=None,
+    resultant_method=None,
+    method=None,
+    step1=None,
+    step4=None,
+    field_equation=False,
+    fast_ksy=None,
+    fast_ksy_col=None,
 ):
     """
     Compute the Dixon resultant of a polynomial system.
@@ -504,9 +778,20 @@ def DixonRes(
     dixon_path : path to the drsolve executable.
                  If None (default), uses the global default set by
                  set_dixon_path() (initially "./drsolve").
-    finput     : temporary input file path
+    finput     : temporary input file path; autogenerated when None
+    foutput    : output file path; autogenerated when None
     debug      : print detailed diagnostics
     timeout    : seconds before aborting
+    verbosity  : drsolve verbosity level (0..3); defaults to 2 when debug=True
+    time       : pass --time
+    threads    : pass --threads
+    resultant_method : one of "dixon", "macaulay", "subres"
+    method     : pass --method <0..5>
+    step1      : pass --step1 <0..4>
+    step4      : pass --step4 <0..4>
+    field_equation : pass --field-equation
+    fast_ksy   : True -> --fast-ksy, False -> --no-fast-ksy
+    fast_ksy_col : pass --fast-ksy-col
 
     Returns
     -------
@@ -524,41 +809,53 @@ def DixonRes(
     """
     dixon_path = _resolve_dixon_path(dixon_path)
     field_size = _infer_field_size(F, field_size)
+    cmd_prefix = _build_common_cli_flags(
+        debug=debug,
+        verbosity=verbosity,
+        time=time,
+        threads=threads,
+        resultant_method=resultant_method,
+        method=method,
+        step1=step1,
+        step4=step4,
+        field_equation=field_equation,
+        fast_ksy=fast_ksy,
+        fast_ksy_col=fast_ksy_col,
+    )
 
-    ToDixon(F, elim_vars, field_size, finput, debug=debug)
-
-    cmd  = [dixon_path, finput]
-    proc = _run(cmd, timeout, debug)
-
-    if proc.returncode != 0:
-        print("[DixonRes] drsolve exited with code %d" % proc.returncode)
-        if proc.stderr:
-            print(proc.stderr)
-        return None
-
-    foutput = _locate_output_file(finput, "_solution", debug)
-    if foutput is None:
-        print("[DixonRes] could not locate output file")
-        return None
-
-    result = _parse_resultant_file(foutput, debug)
-
-    if not debug:
-        try:
-            os.remove(foutput)
-        except OSError:
-            pass
-
-    return result
+    return _run_file_mode(
+        "DixonRes",
+        lambda path: ToDixon(F, elim_vars, field_size, path, debug=debug),
+        _parse_resultant_file,
+        dixon_path,
+        cmd_prefix,
+        finput,
+        foutput,
+        timeout,
+        debug,
+    )
 
 
 def DixonSolve(
     F,
     field_size=None,
     dixon_path=None,
-    finput="/tmp/drsolve_solve_in.dat",
+    finput=None,
+    foutput=None,
     debug=False,
     timeout=600,
+    verbosity=None,
+    time=False,
+    threads=None,
+    method=None,
+    step1=None,
+    step4=None,
+    rational_root_scan=None,
+    rational_only=False,
+    solve_verbose=False,
+    field_equation=False,
+    fast_ksy=None,
+    fast_ksy_col=None,
 ):
     """
     Solve a polynomial system with drsolve.
@@ -570,9 +867,22 @@ def DixonSolve(
     dixon_path : path to the drsolve executable.
                  If None (default), uses the global default set by
                  set_dixon_path() (initially "./drsolve").
-    finput     : temporary input file
+    finput     : temporary input file; autogenerated when None
+    foutput    : output file path; autogenerated when None
     debug      : print detailed diagnostics
     timeout    : seconds before aborting
+    verbosity  : drsolve verbosity level (0..3); defaults to 2 when debug=True
+    time       : pass --time
+    threads    : pass --threads
+    method     : pass --method <0..5>
+    step1      : pass --step1 <0..4>
+    step4      : pass --step4 <0..4>
+    rational_root_scan : one of "auto", "off", "force"
+    rational_only : use --solve-rational-only (requires field_size=0)
+    solve_verbose : pass --solve-verbose
+    field_equation : pass --field-equation
+    fast_ksy   : True -> --fast-ksy, False -> --no-fast-ksy
+    fast_ksy_col : pass --fast-ksy-col
 
     Returns
     -------
@@ -584,31 +894,37 @@ def DixonSolve(
     dixon_path = _resolve_dixon_path(dixon_path)
     field_size = _infer_field_size(F, field_size)
 
-    ToDixonSolver(F, field_size, finput, debug=debug)
+    cmd_prefix = _build_common_cli_flags(
+        debug=debug,
+        verbosity=verbosity,
+        time=time,
+        threads=threads,
+        method=method,
+        step1=step1,
+        step4=step4,
+        field_equation=field_equation,
+        fast_ksy=fast_ksy,
+        fast_ksy_col=fast_ksy_col,
+        rational_root_scan=rational_root_scan,
+    )
+    if rational_only:
+        cmd_prefix.append("--solve-rational-only")
+    elif solve_verbose:
+        cmd_prefix.append("--solve-verbose")
+    else:
+        cmd_prefix.append("--solve")
 
-    cmd  = [dixon_path, finput]
-    proc = _run(cmd, timeout, debug)
-
-    if proc.returncode != 0:
-        print("[DixonSolve] drsolve exited with code %d" % proc.returncode)
-        if proc.stderr:
-            print(proc.stderr)
-        return None
-
-    foutput   = _locate_output_file(finput, "_solution", debug)
-    if foutput is None:
-        print("[DixonSolve] could not locate output file")
-        return None
-
-    solutions = _parse_solutions_file(foutput, debug)
-
-    if not debug:
-        try:
-            os.remove(foutput)
-        except OSError:
-            pass
-
-    return solutions
+    return _run_file_mode(
+        "DixonSolve",
+        lambda path: ToDixonSolver(F, field_size, path, debug=debug),
+        _parse_solutions_file,
+        dixon_path,
+        cmd_prefix,
+        finput,
+        foutput,
+        timeout,
+        debug,
+    )
 
 
 def DixonComplexity(
@@ -617,9 +933,20 @@ def DixonComplexity(
     field_size=None,
     omega=None,
     dixon_path=None,
-    finput="/tmp/drsolve_comp_in.dat",
+    finput=None,
+    foutput=None,
     debug=False,
     timeout=120,
+    verbosity=None,
+    time=False,
+    threads=None,
+    resultant_method=None,
+    method=None,
+    step1=None,
+    step4=None,
+    field_equation=False,
+    fast_ksy=None,
+    fast_ksy_col=None,
 ):
     """
     Run drsolve complexity analysis.
@@ -633,9 +960,20 @@ def DixonComplexity(
     dixon_path : path to the drsolve executable.
                  If None (default), uses the global default set by
                  set_dixon_path() (initially "./drsolve").
-    finput     : temporary input file
+    finput     : temporary input file; autogenerated when None
+    foutput    : output file path; autogenerated when None
     debug      : print detailed diagnostics
     timeout    : seconds before aborting
+    verbosity  : drsolve verbosity level (0..3); defaults to 2 when debug=True
+    time       : pass --time
+    threads    : pass --threads
+    resultant_method : one of "dixon", "macaulay", "subres"
+    method     : pass --method <0..5>
+    step1      : pass --step1 <0..4>
+    step4      : pass --step4 <0..4>
+    field_equation : pass --field-equation
+    fast_ksy   : True -> --fast-ksy, False -> --no-fast-ksy
+    fast_ksy_col : pass --fast-ksy-col
 
     Returns
     -------
@@ -647,33 +985,34 @@ def DixonComplexity(
     if field_size == 0 or field_size is None:
         field_size = 257   # complexity mode needs a finite field
 
-    ToDixon(F, elim_vars, field_size, finput, debug=debug)
-
-    cmd = [dixon_path, "--comp"]
+    cmd_prefix = _build_common_cli_flags(
+        debug=debug,
+        verbosity=verbosity,
+        time=time,
+        threads=threads,
+        resultant_method=resultant_method,
+        method=method,
+        step1=step1,
+        step4=step4,
+        field_equation=field_equation,
+        fast_ksy=fast_ksy,
+        fast_ksy_col=fast_ksy_col,
+    )
+    cmd_prefix.append("--comp")
     if omega is not None:
-        cmd += ["--omega", str(omega)]
-    cmd.append(finput)
+        cmd_prefix.extend(["--omega", str(omega)])
 
-    proc = _run(cmd, timeout, debug)
-
-    if proc.returncode != 0:
-        print("[DixonComplexity] drsolve exited with code %d" % proc.returncode)
-        return None
-
-    foutput = _locate_output_file(finput, "_comp", debug)
-    if foutput is None:
-        print("[DixonComplexity] could not locate output file")
-        return None
-
-    result = _parse_complexity_file(foutput, debug)
-
-    if not debug:
-        try:
-            os.remove(foutput)
-        except OSError:
-            pass
-
-    return result
+    return _run_file_mode(
+        "DixonComplexity",
+        lambda path: ToDixon(F, elim_vars, field_size, path, debug=debug),
+        _parse_complexity_file,
+        dixon_path,
+        cmd_prefix,
+        finput,
+        foutput,
+        timeout,
+        debug,
+    )
 
 
 def DixonIdeal(
@@ -682,8 +1021,20 @@ def DixonIdeal(
     elim_vars,
     field_size=None,
     dixon_path=None,
+    finput=None,
+    foutput=None,
     debug=False,
     timeout=600,
+    verbosity=None,
+    time=False,
+    threads=None,
+    resultant_method=None,
+    method=None,
+    step1=None,
+    step4=None,
+    field_equation=False,
+    fast_ksy=None,
+    fast_ksy_col=None,
 ):
     """
     Dixon resultant with ideal reduction.
@@ -697,8 +1048,20 @@ def DixonIdeal(
     dixon_path : path to the drsolve executable.
                  If None (default), uses the global default set by
                  set_dixon_path() (initially "./drsolve").
+    finput     : temporary input file; autogenerated when None
+    foutput    : output file path; autogenerated when None
     debug      : print detailed diagnostics
     timeout    : seconds
+    verbosity  : drsolve verbosity level (0..3); defaults to 2 when debug=True
+    time       : pass --time
+    threads    : pass --threads
+    resultant_method : one of "dixon", "macaulay", "subres"
+    method     : pass --method <0..5>
+    step1      : pass --step1 <0..4>
+    step4      : pass --step4 <0..4>
+    field_equation : pass --field-equation
+    fast_ksy   : True -> --fast-ksy, False -> --no-fast-ksy
+    fast_ksy_col : pass --fast-ksy-col
 
     Returns
     -------
@@ -707,39 +1070,34 @@ def DixonIdeal(
     dixon_path = _resolve_dixon_path(dixon_path)
     field_size = _infer_field_size(F, field_size)
     if field_size == 0 or field_size is None:
-        field_size = 257
+        raise ValueError("DixonIdeal requires a finite field; drsolve does not support --ideal over Q.")
 
-    ideal_str = ", ".join(str(g) for g in ideal_gens)
-    polys_str = ", ".join(_poly_to_str(f) for f in F)
-    elim_str  = _elim_vars_to_str(elim_vars)
-    field_str = _field_size_str(field_size)
+    cmd_prefix = _build_common_cli_flags(
+        debug=debug,
+        verbosity=verbosity,
+        time=time,
+        threads=threads,
+        resultant_method=resultant_method,
+        method=method,
+        step1=step1,
+        step4=step4,
+        field_equation=field_equation,
+        fast_ksy=fast_ksy,
+        fast_ksy_col=fast_ksy_col,
+    )
+    cmd_prefix.append("--ideal")
 
-    if debug:
-        print("[debug] ideal_str : %s" % ideal_str)
-        print("[debug] polys_str : %s" % polys_str)
-        print("[debug] elim_str  : %s" % elim_str)
-        print("[debug] field_str : %s" % field_str)
-
-    cmd = [dixon_path, "--ideal", ideal_str, polys_str, elim_str, field_str]
-    proc = _run(cmd, timeout, debug)
-
-    if proc.returncode != 0:
-        print("[DixonIdeal] drsolve exited with code %d" % proc.returncode)
-        return None
-
-    foutput = _locate_output_file("ideal_cli_input_placeholder.dat", "_solution", debug)
-    if foutput is None:
-        print("[DixonIdeal] output file not found")
-        return None
-    result  = _parse_resultant_file(foutput, debug)
-
-    if not debug:
-        try:
-            os.remove(foutput)
-        except OSError:
-            pass
-
-    return result
+    return _run_file_mode(
+        "DixonIdeal",
+        lambda path: ToDixonIdeal(F, ideal_gens, elim_vars, field_size, path, debug=debug),
+        _parse_resultant_file,
+        dixon_path,
+        cmd_prefix,
+        finput,
+        foutput,
+        timeout,
+        debug,
+    )
 
 
 # Backward-compatible alias matching the README/API name.

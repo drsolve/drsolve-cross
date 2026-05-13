@@ -446,6 +446,33 @@ static int check_prime_power(const fmpz_t n, fmpz_t prime, ulong *power)
     return 0;
 }
 
+static int drsolve_is_ident_start_char(char c)
+{
+    return ((c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            c == '_');
+}
+
+static int drsolve_is_ident_continue_char(char c)
+{
+    return drsolve_is_ident_start_char(c) || (c >= '0' && c <= '9');
+}
+
+static char *drsolve_find_identifier_token(char *text, const char *name)
+{
+    size_t name_len = strlen(name);
+    char *p = text;
+    while ((p = strstr(p, name)) != NULL) {
+        int left_ok = (p == text) || !drsolve_is_ident_continue_char(*(p - 1));
+        int right_ok = !drsolve_is_ident_continue_char(p[name_len]);
+        if (left_ok && right_ok) {
+            return p;
+        }
+        p += 1;
+    }
+    return NULL;
+}
+
 static int parse_field_polynomial(nmod_poly_t modulus, const char *poly_str,
                                   mp_limb_t prime, const char *var_name)
 {
@@ -470,7 +497,7 @@ static int parse_field_polynomial(nmod_poly_t modulus, const char *poly_str,
 
         mp_limb_t coeff  = 1;
         ulong      degree = 0;
-        char      *var_pos = strstr(token, var_name);
+        char      *var_pos = drsolve_find_identifier_token(token, var_name);
 
         if (!var_pos) {
             if (strlen(token) > 0) coeff = strtoul(token, NULL, 10);
@@ -529,10 +556,17 @@ static int parse_field_size(const char *field_str, fmpz_t prime, ulong *power,
             *field_poly = strdup(poly_start);
             if (gen_var && *field_poly) {
                 const char *p = *field_poly;
-                while (*p && !isalpha(*p)) p++;
-                if (*p && isalpha(*p)) {
-                    char var_name[2] = { *p, '\0' };
-                    *gen_var = strdup(var_name);
+                while (*p && !drsolve_is_ident_start_char(*p)) p++;
+                if (*p && drsolve_is_ident_start_char(*p)) {
+                    const char *start = p;
+                    while (*p && drsolve_is_ident_continue_char(*p)) p++;
+                    size_t var_len = (size_t) (p - start);
+                    char *var_name = (char *) malloc(var_len + 1);
+                    if (var_name) {
+                        memcpy(var_name, start, var_len);
+                        var_name[var_len] = '\0';
+                        *gen_var = var_name;
+                    }
                 }
             }
         }
@@ -3020,10 +3054,10 @@ int main(int argc, char *argv[])
         slong num_elim_rand = comp_mode ? (npolys_rand - 1)
                                         : (solve_mode ? nvars_rand : (npolys_rand - 1));
 
-        if (!degrees_rand || npolys_rand < 2) {
+        if (!degrees_rand || npolys_rand < 1) {
             if (!silent_mode)
-                fprintf(stderr, "Error: --random requires at least 2 degrees "
-                                "(e.g. \"3,3,2\")\n");
+                fprintf(stderr, "Error: --random requires at least 1 degree "
+                                "(e.g. \"10000\" or \"3,3,2\")\n");
             free(degrees_rand);
             goto cleanup_fail;
         }
@@ -3122,6 +3156,16 @@ int main(int argc, char *argv[])
             vars_str = gen_elim;
             allvars_str = gen_allvars;
             rand_generated = 1;
+        }
+    }
+
+    if (rand_generated && !comp_mode && !solve_mode && !ideal_str &&
+        polys_str && vars_str &&
+        count_comma_separated_items(polys_str) == 1 &&
+        count_comma_separated_items(vars_str) == 0) {
+        solve_mode = 1;
+        if (!silent_mode) {
+            printf("Detected a random univariate polynomial; auto-enabling solver mode.\n");
         }
     }
 

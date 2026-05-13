@@ -322,6 +322,73 @@ static int polynomial_string_exists(char **poly_strings, slong count, const char
     return 0;
 }
 
+static char *rename_placeholder_variables(const char *input, char **var_names, slong nvars)
+{
+    if (!input) {
+        return NULL;
+    }
+    if (!var_names || nvars <= 0) {
+        return strdup(input);
+    }
+
+    size_t in_len = strlen(input);
+    size_t cap = in_len + 1;
+    for (slong i = 0; i < nvars; i++) {
+        if (var_names[i]) {
+            cap += strlen(var_names[i]) + 8;
+        }
+    }
+
+    char *out = (char *) malloc(cap);
+    if (!out) {
+        return strdup(input);
+    }
+
+    size_t oi = 0;
+    for (size_t i = 0; i < in_len; ) {
+        if (input[i] == 'x' && i + 1 < in_len && isdigit((unsigned char) input[i + 1]) &&
+            (i == 0 || !isalnum((unsigned char) input[i - 1]))) {
+            size_t j = i + 1;
+            slong idx = 0;
+            while (j < in_len && isdigit((unsigned char) input[j])) {
+                idx = idx * 10 + (input[j] - '0');
+                j++;
+            }
+            if ((j >= in_len || !isalnum((unsigned char) input[j])) &&
+                idx >= 0 && idx < nvars && var_names[idx]) {
+                size_t need = oi + strlen(var_names[idx]) + (in_len - j) + 1;
+                if (need > cap) {
+                    cap = need * 2;
+                    char *grown = (char *) realloc(out, cap);
+                    if (!grown) {
+                        free(out);
+                        return strdup(input);
+                    }
+                    out = grown;
+                }
+                memcpy(out + oi, var_names[idx], strlen(var_names[idx]));
+                oi += strlen(var_names[idx]);
+                i = j;
+                continue;
+            }
+        }
+
+        if (oi + 2 > cap) {
+            cap *= 2;
+            char *grown = (char *) realloc(out, cap);
+            if (!grown) {
+                free(out);
+                return strdup(input);
+            }
+            out = grown;
+        }
+        out[oi++] = input[i++];
+    }
+
+    out[oi] = '\0';
+    return out;
+}
+
 // Get extension field generator name (reference DIXON_INTERFACE_FLINT_H)
 char* get_generator_name_for_solver(const fq_nmod_ctx_t ctx) {
     if (fq_nmod_ctx_degree(ctx) > 1) {
@@ -924,11 +991,29 @@ char* substitute_variable_in_polynomial(const char *poly_str, const char *var_na
                                                 const fq_nmod_t value, const fq_nmod_ctx_t ctx) {
     // Use parsing mechanism from DIXON_INTERFACE_FLINT_H
     char *gen_name = get_generator_name_for_solver(ctx);
+    slong num_keep_vars = 0;
+    char **keep_vars = extract_variables_improved((char**) &poly_str, 1, &num_keep_vars, ctx);
+    slong sub_var_idx = -1;
+    slong out_nvars = 0;
+    char **out_var_names = NULL;
+
+    if (keep_vars && num_keep_vars > 0) {
+        out_var_names = (char**) malloc((size_t) num_keep_vars * sizeof(char*));
+        for (slong i = 0; i < num_keep_vars; i++) {
+            if (strcmp(keep_vars[i], var_name) == 0) {
+                sub_var_idx = i;
+                continue;
+            }
+            out_var_names[out_nvars++] = strdup(keep_vars[i]);
+        }
+    }
     
     parser_state_t state = {0};
-    state.var_names = (char**) malloc(sizeof(char*));
-    state.var_names[0] = strdup(var_name);
-    state.nvars = 1;
+    state.var_names = (char**) malloc((size_t) (num_keep_vars > 0 ? num_keep_vars : 1) * sizeof(char*));
+    for (slong i = 0; i < num_keep_vars; i++) {
+        state.var_names[i] = strdup(keep_vars[i]);
+    }
+    state.nvars = num_keep_vars;
     state.npars = 0;
     state.max_pars = 16;
     state.par_names = (char**) malloc(state.max_pars * sizeof(char*));
@@ -939,7 +1024,7 @@ char* substitute_variable_in_polynomial(const char *poly_str, const char *var_na
     
     // Parse polynomial
     fq_mvpoly_t poly;
-    fq_mvpoly_init(&poly, 1, state.max_pars, ctx);
+    fq_mvpoly_init(&poly, state.nvars, state.max_pars, ctx);
     
     state.input = poly_str;
     state.pos = 0;
@@ -950,7 +1035,7 @@ char* substitute_variable_in_polynomial(const char *poly_str, const char *var_na
     
     // Create result polynomial by substituting variable value
     fq_mvpoly_t result_poly;
-    fq_mvpoly_init(&result_poly, 0, state.npars, ctx);
+    fq_mvpoly_init(&result_poly, out_nvars, state.npars, ctx);
     
     // Substitute variable for each term
     for (slong i = 0; i < poly.nterms; i++) {
@@ -959,22 +1044,35 @@ char* substitute_variable_in_polynomial(const char *poly_str, const char *var_na
         fq_nmod_set(term_coeff, poly.terms[i].coeff, ctx);
         
         // If this term contains the variable to substitute
-        if (poly.terms[i].var_exp && poly.terms[i].var_exp[0] > 0) {
-            slong power = poly.terms[i].var_exp[0];
+        if (sub_var_idx >= 0 && poly.terms[i].var_exp && poly.terms[i].var_exp[sub_var_idx] > 0) {
+            slong power = poly.terms[i].var_exp[sub_var_idx];
             fq_nmod_t var_power;
             fq_nmod_init(var_power, ctx);
             fq_nmod_pow_ui(var_power, value, power, ctx);
             fq_nmod_mul(term_coeff, term_coeff, var_power, ctx);
             fq_nmod_clear(var_power, ctx);
         }
+
+        slong *new_var_exp = NULL;
+        if (out_nvars > 0) {
+            new_var_exp = (slong*) flint_calloc(out_nvars, sizeof(slong));
+            slong dst = 0;
+            for (slong src = 0; src < state.nvars; src++) {
+                if (src == sub_var_idx) continue;
+                new_var_exp[dst++] = poly.terms[i].var_exp ? poly.terms[i].var_exp[src] : 0;
+            }
+        }
         
-        // Add processed term to result (preserve parameter exponents)
-        fq_mvpoly_add_term(&result_poly, NULL, poly.terms[i].par_exp, term_coeff);
+        // Add processed term to result, preserving the remaining variables and parameters.
+        fq_mvpoly_add_term(&result_poly, new_var_exp, poly.terms[i].par_exp, term_coeff);
+        if (new_var_exp) flint_free(new_var_exp);
         fq_nmod_clear(term_coeff, ctx);
     }
     
     // Convert result to string
-    char *result_str = fq_mvpoly_to_string(&result_poly, state.par_names, gen_name);
+    char *raw_result_str = fq_mvpoly_to_string(&result_poly, out_var_names, gen_name);
+    char *result_str = rename_placeholder_variables(raw_result_str, out_var_names, out_nvars);
+    free(raw_result_str);
     
     // Cleanup
     fq_mvpoly_clear(&poly);
@@ -984,11 +1082,25 @@ char* substitute_variable_in_polynomial(const char *poly_str, const char *var_na
         free(state.par_names[i]);
     }
     free(state.par_names);
-    free(state.var_names[0]);
+    for (slong i = 0; i < state.nvars; i++) {
+        free(state.var_names[i]);
+    }
     free(state.var_names);
     if (state.generator_name) free(state.generator_name);
     fq_nmod_clear(state.current.value, ctx);
     if (state.current.str) free(state.current.str);
+    if (keep_vars) {
+        for (slong i = 0; i < num_keep_vars; i++) {
+            free(keep_vars[i]);
+        }
+        free(keep_vars);
+    }
+    if (out_var_names) {
+        for (slong i = 0; i < out_nvars; i++) {
+            free(out_var_names[i]);
+        }
+        free(out_var_names);
+    }
     
     return result_str;
 }

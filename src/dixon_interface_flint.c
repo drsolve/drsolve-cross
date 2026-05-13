@@ -591,7 +591,7 @@ void parse_primary(parser_state_t *state, fq_mvpoly_t *poly) {
         } else {
             slong par_idx = find_or_add_parameter(state, name);
             if (par_idx >= 0) {
-                slong *par_exp = (slong*) calloc(state->max_pars, sizeof(slong));
+                slong *par_exp = (slong*) calloc(state->npars, sizeof(slong));
                 par_exp[par_idx] = 1;
                 
                 fq_nmod_t one;
@@ -1235,8 +1235,12 @@ char* fq_mvpoly_to_string(const fq_mvpoly_t *poly, char **par_names, const char 
             for (slong j = 0; j < poly->nvars; j++) {
                 if (poly->terms[i].var_exp[j] > 0) {
                     if (term_has_content) sb_append_char(&sb, '*');
-                    sb_append_char(&sb, 'x');
-                    sb_append_long(&sb, j);
+                    if (par_names && par_names[j]) {
+                        sb_append(&sb, par_names[j]);
+                    } else {
+                        sb_append_char(&sb, 'x');
+                        sb_append_long(&sb, j);
+                    }
                     if (poly->terms[i].var_exp[j] > 1) {
                         sb_append_char(&sb, '^');
                         sb_append_long(&sb, poly->terms[i].var_exp[j]);
