@@ -287,18 +287,22 @@ def _infer_field_size(F, field_size):
 
 
 def _run(cmd, timeout, debug, live_output=False):
+    if not isinstance(cmd, (list, tuple)):
+        raise ValueError("_run: cmd must be a list, not a string (shell injection risk)")
     if debug:
         print("[debug] command: %s" % " ".join(cmd))
     try:
         if live_output:
             proc = subprocess.run(
                 cmd,
+                shell=False,
                 text=True,
                 timeout=timeout,
             )
         else:
             proc = subprocess.run(
                 cmd,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
