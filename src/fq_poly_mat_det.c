@@ -593,7 +593,7 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
     g_show_progress = (mat->r >= 20);
     
     if (_show_progress)
-        printf("Computing determinant for %ldx%ld matrix...\n", mat->r, mat->r);
+        printf("  Computing determinant for %ldx%ld matrix...\n", mat->r, mat->r);
     
     slong udet = 1;
     slong rk;

@@ -45,8 +45,7 @@ unified_mpoly_ctx_t unified_mpoly_ctx_init(slong nvars, const ordering_t ord, fi
                 mp_limb_t p = field_ctx->ctx.zech_ctx->fq_nmod_ctx->modulus->mod.n;
                 slong d = fq_zech_ctx_degree(field_ctx->ctx.zech_ctx);
                 fq_zech_mpoly_ctx_init_deg(GET_ZECH_CTX(ctx), nvars, ord, p, d);
-                printf("Using Zech logarithm representation for field of size %lu\n", 
-                       field_ctx->ctx.zech_ctx->qm1 + 1);
+                // printf("Using Zech logarithm representation for field of size %lu\n", field_ctx->ctx.zech_ctx->qm1 + 1);
             }
             break;
             

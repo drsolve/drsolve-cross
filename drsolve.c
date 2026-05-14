@@ -134,8 +134,8 @@ static void print_usage(const char *prog_name)
     
     printf("  Field-equation reduction mode (combine with any compute flag):\n");
     printf("    %s --field-equation \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
-    printf("    %s --field-eqution input_file\n", prog_name);
-    printf("    %s --field-eqution -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
+    printf("    %s --field-equation input_file\n", prog_name);
+    printf("    %s --field-equation -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
     printf("    -> After each multiplication, reduces x^q -> x for every variable\n");
 
     printf("  Random mode (combine with any compute flag):\n");
@@ -225,7 +225,7 @@ static void print_usage(const char *prog_name)
     printf("  %s -r -s \"[2]*3\" 257\n", prog_name);
     printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
     printf("  %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
-    printf("  %s --field-eqution \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
+    printf("  %s --field-equation \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
     printf("  %s -v 0 \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
     printf("  %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("  (AES polynomial for GF(2^8), 't' is the field extension generator)\n");
@@ -2434,8 +2434,7 @@ int main(int argc, char *argv[])
             rand_mode = 1;
         } else if (strcmp(argv[i], "--ideal") == 0) {  /* <<< NEW >>> */
             ideal_mode = 1;
-        } else if (strcmp(argv[i], "--field-equation") == 0 ||
-                   strcmp(argv[i], "--field-eqution")  == 0) {
+        } else if (strcmp(argv[i], "--field-equation") == 0) {
             field_eq_mode = 1;
         } else if (strcmp(argv[i], "--time") == 0) {
             time_mode = 1;
