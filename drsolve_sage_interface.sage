@@ -121,7 +121,7 @@ set_dixon_path("./drsolve")
 
 R.<x0, x1, x2> = GF(257)[]
 F = [x0^2 + x1^2 + x2^2 - 10, x2^3 - x0*x1 - 3]
-I = ["x1^3=2*x0+1", "x2^3=x0*x1+3"]
+I = [[x1^3, 2*x0 + 1], [x2^3, x0*x1 + 3]]
 
 res = DixonIdeal(F, I, [x2], verbosity=2, time=True)
 print(res)
@@ -260,15 +260,69 @@ def _field_size_str(field_size):
     return str(int(field_size))
 
 
+def _relation_pair(item):
+    if isinstance(item, (list, tuple)) and len(item) == 2:
+        return item[0], item[1]
+
+    lhs = getattr(item, "lhs", None)
+    rhs = getattr(item, "rhs", None)
+    if callable(lhs) and callable(rhs):
+        try:
+            return lhs(), rhs()
+        except TypeError:
+            pass
+
+    return None
+
+
+def _iter_polynomial_parts(item):
+    if isinstance(item, str):
+        return
+
+    pair = _relation_pair(item)
+    if pair is not None:
+        lhs, rhs = pair
+        for part in (lhs, rhs):
+            if not isinstance(part, str):
+                yield part
+        return
+
+    yield item
+
+
 def _poly_to_str(f):
-    """Sage polynomial or plain string -> string drsolve can parse."""
+    """Sage polynomial, equation-like pair, or plain string -> drsolve string."""
+    if isinstance(f, str):
+        return f.strip()
+
+    pair = _relation_pair(f)
+    if pair is not None:
+        lhs, rhs = pair
+        return str(lhs - rhs)
+
     return str(f)
+
+
+def _ideal_gen_to_str(gen):
+    """Normalize an ideal generator to the `lhs = rhs` form drsolve expects."""
+    if isinstance(gen, str):
+        text = gen.strip()
+        if "=" in text:
+            return text
+        return "%s = 0" % text
+
+    pair = _relation_pair(gen)
+    if pair is not None:
+        lhs, rhs = pair
+        return "%s = %s" % (lhs, rhs)
+
+    return "%s = 0" % gen
 
 
 def _elim_vars_to_str(elim_vars):
     return ", ".join(str(v) for v in elim_vars)
 
-def _infer_field_size(F, field_size):
+def _infer_field_size(F, field_size, extra_items=None):
     """
     If field_size is None or 0 and F contains at least one Sage polynomial,
     extract the base ring from it and use that.  Otherwise return field_size
@@ -276,10 +330,10 @@ def _infer_field_size(F, field_size):
     """
     if field_size is not None and field_size != 0:
         return field_size
-    for f in F:
-        if not isinstance(f, str):
+    for item in list(F) + list(extra_items or []):
+        for part in _iter_polynomial_parts(item):
             try:
-                return f.base_ring()
+                return part.base_ring()
             except AttributeError:
                 pass
     # Fallback: 0 means rational / Q mode
@@ -428,25 +482,24 @@ def _locate_output_file(finput, tag, debug):
 # File writers  (now accept mixed Sage-polynomial / string lists)
 # ---------------------------------------------------------------------------
 
-def _check_ring_consistency(F):
+def _check_ring_consistency(F, extra_items=None):
     """
     Verify that all *Sage polynomial* elements in F share the same parent.
     Plain strings are skipped.  Raises AssertionError on mismatch.
     """
     ring = None
-    for f in F:
-        if isinstance(f, str):
-            continue
-        try:
-            r = f.parent()
-        except AttributeError:
-            continue
-        if ring is None:
-            ring = r
-        else:
-            assert r == ring, (
-                "Polynomial ring mismatch: %s vs %s" % (ring, r)
-            )
+    for item in list(F) + list(extra_items or []):
+        for part in _iter_polynomial_parts(item):
+            try:
+                r = part.parent()
+            except AttributeError:
+                continue
+            if ring is None:
+                ring = r
+            else:
+                assert r == ring, (
+                    "Polynomial ring mismatch: %s vs %s" % (ring, r)
+                )
 
 
 def _coerce_str_list(items):
@@ -545,13 +598,13 @@ def ToDixonIdeal(
       Line 2     : field size
       Lines 3..n : ideal generators and polynomials, one per line
     """
-    _check_ring_consistency(F)
+    _check_ring_consistency(F, extra_items=ideal_gens)
 
     with open(finput, "w") as fd:
         fd.write(_elim_vars_to_str(elim_vars) + "\n")
         fd.write(_field_size_str(field_size) + "\n")
-        for gen in _coerce_str_list(ideal_gens):
-            fd.write(str(gen) + "\n")
+        for gen in ideal_gens or []:
+            fd.write(_ideal_gen_to_str(gen) + "\n")
         for poly in F:
             fd.write(_poly_to_str(poly) + "\n")
 
@@ -1120,7 +1173,11 @@ def DixonIdeal(
     Parameters
     ----------
     F          : list of Sage polynomials and/or plain strings
-    ideal_gens : list of strings like "a^3=2*b+1", or Sage expressions
+    ideal_gens : list whose elements may be:
+                 - strings like "a^3=2*b+1"
+                 - Sage polynomials / expressions, interpreted as `gen = 0`
+                 - pairs like [lhs, rhs] or (lhs, rhs)
+                 - Sage equality/relational objects when available
     elim_vars  : variables to eliminate
     field_size : prime or prime power; inferred from F if None
     dixon_path : path to the drsolve executable.
@@ -1147,7 +1204,7 @@ def DixonIdeal(
     str resultant string, or None on failure
     """
     dixon_path = _resolve_dixon_path(dixon_path)
-    field_size = _infer_field_size(F, field_size)
+    field_size = _infer_field_size(F, field_size, extra_items=ideal_gens)
     if field_size == 0 or field_size is None:
         raise ValueError("DixonIdeal requires a finite field; drsolve does not support --ideal over Q.")
 
