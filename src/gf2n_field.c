@@ -481,10 +481,10 @@ void init_gf232(void) {
     if (!gf232_mul) {
         if (has_pclmulqdq()) {
             gf232_mul = gf232_mul_pclmul;
-            printf("Using PCLMULQDQ for GF(2^32) multiplication\n");
+            //printf("Using PCLMULQDQ for GF(2^32) multiplication\n");
         } else {
             gf232_mul = gf232_mul_software;
-            printf("Using software implementation for GF(2^32) multiplication\n");
+            //printf("Using software implementation for GF(2^32) multiplication\n");
         }
     }
 }
@@ -682,10 +682,10 @@ void init_gf264(void) {
     if (!gf264_mul) {
         if (has_pclmulqdq()) {
             gf264_mul = gf264_mul_pclmul;
-            printf("Using PCLMULQDQ for GF(2^64) multiplication\n");
+            //printf("Using PCLMULQDQ for GF(2^64) multiplication\n");
         } else {
             gf264_mul = gf264_mul_software;
-            printf("Using software implementation for GF(2^64) multiplication\n");
+            //printf("Using software implementation for GF(2^64) multiplication\n");
         }
     }
 }
@@ -912,10 +912,10 @@ void init_gf2128(void) {
     if (!gf2128_mul) {
         if (has_pclmulqdq()) {
             gf2128_mul = gf2128_mul_clmul;
-            printf("Using PCLMULQDQ for GF(2^128) multiplication\n");
+            //printf("Using PCLMULQDQ for GF(2^128) multiplication\n");
         } else {
             gf2128_mul = gf2128_mul_software;
-            printf("Using software implementation for GF(2^128) multiplication\n");
+            //printf("Using software implementation for GF(2^128) multiplication\n");
         }
     }
 }
