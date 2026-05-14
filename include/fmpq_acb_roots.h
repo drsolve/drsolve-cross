@@ -11,8 +11,9 @@
 #include <flint/acb.h>
 #include <flint/acb_poly.h>
 
-#define FMPQ_ROOT_SEARCH_MAX_DEGREE 1000
-#define FMPQ_ROOT_SEARCH_MAX_CANDIDATES 1000000
+#define FMPQ_ROOT_SEARCH_MAX_DEGREE 100
+#define FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES 5000
+#define FMPQ_ROOT_SEARCH_HARD_MAX_CANDIDATES 10000
 
 typedef struct {
     fmpq_t *roots;

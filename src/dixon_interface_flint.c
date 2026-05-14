@@ -15,8 +15,6 @@
 
 static int g_suppress_univariate_root_reporting = 0;
 static int g_suppress_rational_root_reporting = 0;
-static const slong QQ_ROOT_SEARCH_MAX_DEGREE = 1000;
-static const slong QQ_ROOT_SEARCH_MAX_CANDIDATES = 1000000;
 static char *g_last_root_report = NULL;
 
 static int qq_root_debug_enabled(void)
@@ -2110,6 +2108,32 @@ static void qq_select_reconstruction_primes(ulong *primes, slong *num_primes_out
     *num_primes_out = num_primes;
 }
 
+static void qq_free_reconstruction_prime_buffer(ulong **primes) {
+    if (primes && *primes) {
+        free(*primes);
+        *primes = NULL;
+    }
+}
+
+static int qq_prepare_reconstruction_primes(ulong **primes_out,
+                                            slong *num_primes_out,
+                                            slong prime_budget) {
+    ulong *primes;
+
+    if (!primes_out || !num_primes_out || prime_budget <= 0) {
+        return 0;
+    }
+
+    primes = (ulong *) malloc((size_t) prime_budget * sizeof(ulong));
+    if (!primes) {
+        return 0;
+    }
+
+    qq_select_reconstruction_primes(primes, num_primes_out, prime_budget);
+    *primes_out = primes;
+    return 1;
+}
+
 static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_recon_t *acc, FILE *fp_file);
 
 static void save_result_to_file_internal(const char *filename,
@@ -2140,11 +2164,14 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
                                                           qq_poly_recon_t *best_recon_out,
                                                           int *have_best_recon_out,
                                                           const char *output_filename) {
-    const slong max_primes = 8;
+    const slong initial_prime_budget = 8;
+    const slong max_prime_budget = 64;
     const slong min_primes_before_stopping = 4;
     const slong stable_rounds_before_stopping = 3;
-    ulong primes[max_primes];
+    ulong *primes = NULL;
     slong num_primes = 0;
+    slong prime_budget = initial_prime_budget;
+    slong processed_primes = 0;
     slong num_remaining;
     char **remaining_vars;
     qq_poly_recon_t recon;
@@ -2153,8 +2180,6 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     int have_best_recon = 0;
     int stable_count = 0;
     clock_t start_time = clock();
-
-    qq_select_reconstruction_primes(primes, &num_primes, max_primes);
 
     remaining_vars = compute_remaining_vars_from_input(poly_string, vars_string, &num_remaining);
     qq_poly_recon_init(&recon, remaining_vars, num_remaining);
@@ -2165,90 +2190,126 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
 
     printf("Reconstructing over Q from modular Dixon resultants...\n");
 
+    if (!qq_prepare_reconstruction_primes(&primes, &num_primes, prime_budget)) {
+        fprintf(stderr, "Failed to allocate reconstruction prime buffer.\n");
+        qq_poly_recon_clear(&recon);
+        qq_poly_recon_clear(&best_recon);
+        return NULL;
+    }
+
     g_suppress_univariate_root_reporting = 1;
-    for (slong i = 0; i < num_primes; i++) {
-        fq_nmod_ctx_t ctx;
-        fmpz_t p;
-        char *mod_result;
-        fq_mvpoly_t mod_poly;
-        char *candidate_result = NULL;
-        int saved_stdout = -1;
-        int devnull = -1;
+    for (;;) {
+        int stop_reconstruction = 0;
 
-        fmpz_init(p);
-        fmpz_set_ui(p, primes[i]);
-        fq_nmod_ctx_init(ctx, p, 1, "t");
+        for (slong i = processed_primes; i < num_primes; i++) {
+            fq_nmod_ctx_t ctx;
+            fmpz_t p;
+            char *mod_result;
+            fq_mvpoly_t mod_poly;
+            char *candidate_result = NULL;
+            int saved_stdout = -1;
+            int devnull = -1;
 
-        printf("Prime %ld/%ld: ", i + 1, num_primes);
-        printf("Computing Dixon resultant modulo %lu...\n", primes[i]);
+            fmpz_init(p);
+            fmpz_set_ui(p, primes[i]);
+            fq_nmod_ctx_init(ctx, p, 1, "t");
 
-        fflush(stdout);
-        saved_stdout = dup(STDOUT_FILENO);
-        devnull = open("/dev/null", O_WRONLY);
-        if (saved_stdout != -1 && devnull != -1) {
-            dup2(devnull, STDOUT_FILENO);
-        }
+            printf("Prime %ld/%ld: ", i + 1, num_primes);
+            printf("Computing Dixon resultant modulo %lu...\n", primes[i]);
 
-        mod_result = qq_compute_modular_resultant_for_reconstruction(poly_string, vars_string, ctx);
-
-        fflush(stdout);
-        if (saved_stdout != -1) {
-            dup2(saved_stdout, STDOUT_FILENO);
-            close(saved_stdout);
-        }
-        if (devnull != -1) {
-            close(devnull);
-        }
-
-        if (!mod_result) {
-            printf("Skipping p = %lu: modular resultant computation failed.\n", primes[i]);
-            fq_nmod_ctx_clear(ctx);
-            fmpz_clear(p);
-            continue;
-        }
-
-        if (!parse_result_string_fixed_params(mod_result, recon.par_names, recon.npars, ctx, &mod_poly)) {
-            printf("Skipping p = %lu: failed to parse modular resultant.\n", primes[i]);
-            free(mod_result);
-            fq_nmod_ctx_clear(ctx);
-            fmpz_clear(p);
-            continue;
-        }
-
-        qq_poly_recon_absorb_modular_result(&recon, &mod_poly, ctx);
-        if (qq_poly_recon_to_string(&candidate_result, &recon)) {
-            qq_poly_recon_copy(&best_recon, &recon);
-            have_best_recon = 1;
-            if (best_result && strcmp(best_result, candidate_result) == 0) {
-                stable_count++;
-                //printf("Reconstruction unchanged after p = %lu.\n", primes[i]);
-            } else {
-                stable_count = 0;
-                free(best_result);
-                best_result = strdup(candidate_result);
-                printf("Reconstruction updated after p = %lu.\n", primes[i]);
+            fflush(stdout);
+            saved_stdout = dup(STDOUT_FILENO);
+            devnull = open("/dev/null", O_WRONLY);
+            if (saved_stdout != -1 && devnull != -1) {
+                dup2(devnull, STDOUT_FILENO);
             }
-            free(candidate_result);
-            if (i + 1 >= min_primes_before_stopping &&
-                stable_count >= stable_rounds_before_stopping) {
-                printf("Reconstruction stabilized after %ld prime(s).\n", i + 1);
-                fq_mvpoly_clear(&mod_poly);
+
+            mod_result = qq_compute_modular_resultant_for_reconstruction(poly_string, vars_string, ctx);
+
+            fflush(stdout);
+            if (saved_stdout != -1) {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
+            if (devnull != -1) {
+                close(devnull);
+            }
+
+            if (!mod_result) {
+                printf("Skipping p = %lu: modular resultant computation failed.\n", primes[i]);
+                fq_nmod_ctx_clear(ctx);
+                fmpz_clear(p);
+                continue;
+            }
+
+            if (!parse_result_string_fixed_params(mod_result, recon.par_names, recon.npars, ctx, &mod_poly)) {
+                printf("Skipping p = %lu: failed to parse modular resultant.\n", primes[i]);
                 free(mod_result);
                 fq_nmod_ctx_clear(ctx);
                 fmpz_clear(p);
+                continue;
+            }
+
+            qq_poly_recon_absorb_modular_result(&recon, &mod_poly, ctx);
+            if (qq_poly_recon_to_string(&candidate_result, &recon)) {
+                qq_poly_recon_copy(&best_recon, &recon);
+                have_best_recon = 1;
+                if (best_result && strcmp(best_result, candidate_result) == 0) {
+                    stable_count++;
+                } else {
+                    stable_count = 0;
+                    free(best_result);
+                    best_result = strdup(candidate_result);
+                    printf("Reconstruction updated after p = %lu.\n", primes[i]);
+                }
+                free(candidate_result);
+                if (i + 1 >= min_primes_before_stopping &&
+                    stable_count >= stable_rounds_before_stopping) {
+                    printf("Reconstruction stabilized after %ld prime(s).\n", i + 1);
+                    stop_reconstruction = 1;
+                }
+            }
+
+            fq_mvpoly_clear(&mod_poly);
+            free(mod_result);
+            fq_nmod_ctx_clear(ctx);
+            fmpz_clear(p);
+
+            if (stop_reconstruction) {
                 break;
             }
         }
 
-        fq_mvpoly_clear(&mod_poly);
-        free(mod_result);
-        fq_nmod_ctx_clear(ctx);
-        fmpz_clear(p);
+        processed_primes = num_primes;
+
+        if (stop_reconstruction) {
+            break;
+        }
+
+        if (prime_budget >= max_prime_budget) {
+            break;
+        }
+
+        qq_free_reconstruction_prime_buffer(&primes);
+        prime_budget = FLINT_MIN(2 * prime_budget, max_prime_budget);
+        printf("Reconstruction still ambiguous after %ld prime(s); extending to %ld primes.\n",
+               processed_primes, prime_budget);
+        if (!qq_prepare_reconstruction_primes(&primes, &num_primes, prime_budget)) {
+            fprintf(stderr, "Failed to extend reconstruction prime buffer.\n");
+            break;
+        }
     }
     g_suppress_univariate_root_reporting = 0;
+    qq_free_reconstruction_prime_buffer(&primes);
 
     if (!best_result) {
-        best_result = strdup("0");
+        printf("Failed to reconstruct a rational resultant from modular images.\n");
+        qq_poly_recon_clear(&recon);
+        qq_poly_recon_clear(&best_recon);
+        if (have_best_recon_out) {
+            *have_best_recon_out = 0;
+        }
+        return NULL;
     }
 
     printf("Final reconstruction over Q completed.\n");
@@ -2507,7 +2568,9 @@ char* dixon_str_rational_with_file(const char *poly_string,
     best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
                                                               &best_recon, &have_best_recon, output_filename);
     
-    qq_poly_recon_clear(&best_recon);
+    if (have_best_recon) {
+        qq_poly_recon_clear(&best_recon);
+    }
     return best_result;
 }
 
@@ -2543,7 +2606,9 @@ char* dixon_str_large_prime(const char *poly_string,
     }
 
     free(best_result);
-    qq_poly_recon_clear(&best_recon);
+    if (have_best_recon) {
+        qq_poly_recon_clear(&best_recon);
+    }
     return mod_result;
 }
 

@@ -18,6 +18,14 @@ static int rational_solver_exact_only_enabled = 0;
 #define RATIONAL_NUMERIC_NEWTON_MAX_ITER 60
 static const slong rational_candidate_print_limit = 10;
 
+static int rational_solver_info_enabled(void) {
+    return g_dixon_verbose_level >= 1;
+}
+
+static int rational_solver_detail_enabled(void) {
+    return g_dixon_verbose_level >= 2;
+}
+
 typedef struct {
     const char *cursor;
     rational_variable_info_t *vars;
@@ -1759,7 +1767,9 @@ void print_rational_solutions(const rational_solutions_t *sols) {
         sols->num_real_solution_sets == 0) {
         if (sols->real_root_summary) {
             printf("No exact rational solution sets were assembled.\n");
-            printf("%s\n", sols->real_root_summary);
+            if (rational_solver_detail_enabled()) {
+                printf("%s\n", sols->real_root_summary);
+            }
         } else {
             printf("No solutions over the rational numbers.\n");
         }
@@ -1842,7 +1852,7 @@ void print_rational_solutions(const rational_solutions_t *sols) {
         }
     }
 
-    if (sols->real_root_summary) {
+    if (sols->real_root_summary && rational_solver_detail_enabled()) {
         printf("%s\n", sols->real_root_summary);
     }
 }

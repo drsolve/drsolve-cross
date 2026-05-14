@@ -9,11 +9,14 @@
 extern int g_dixon_verbose_level;
 extern rational_root_scan_mode_t g_rational_root_scan_mode;
 
-static const slong FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD = 50000;
-
 static int root_trace_enabled(void)
 {
     return g_dixon_verbose_level >= 3;
+}
+
+static int root_info_enabled(void)
+{
+    return g_dixon_verbose_level >= 1;
 }
 
 static void root_trace_log(const char *fmt, ...)
@@ -138,7 +141,9 @@ slong fmpq_poly_roots(fmpq_roots_t *roots, const fmpq_poly_t poly, int with_mult
         slong candidate_count = 2 * fmpz_poly_length(num_divs) * fmpz_poly_length(den_divs);
         root_trace_log("[root-debug:v3] Rational-root test: degree=%ld, numerator divisors=%ld, denominator divisors=%ld, candidates=%ld.\n",
                        degree, fmpz_poly_length(num_divs), fmpz_poly_length(den_divs), candidate_count);
-        if (candidate_count > FMPQ_ROOT_SEARCH_MAX_CANDIDATES) {
+        if (candidate_count > FMPQ_ROOT_SEARCH_HARD_MAX_CANDIDATES) {
+            root_trace_log("[root-debug:v3] Skipping rational-root scan: %ld candidates exceed hard cap %ld.\n",
+                           candidate_count, (slong) FMPQ_ROOT_SEARCH_HARD_MAX_CANDIDATES);
             fmpq_clear(candidate);
             fmpq_clear(value);
             goto cleanup;
@@ -150,17 +155,21 @@ slong fmpq_poly_roots(fmpq_roots_t *roots, const fmpq_poly_t poly, int with_mult
             goto cleanup;
         }
         if (g_rational_root_scan_mode == RATIONAL_ROOT_SCAN_AUTO &&
-            candidate_count > FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD) {
-            root_trace_log("[root-debug:v3] Skipping exhaustive rational-root scan: %ld candidates exceed threshold %ld.\n",
-                           candidate_count, FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD);
+            candidate_count > FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES) {
+            if (root_info_enabled()) {
+                printf("Skipping rational-root scan: %ld candidate(s) exceed auto threshold %ld.\n",
+                       candidate_count, (slong) FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES);
+            }
+            root_trace_log("[root-debug:v3] Skipping exhaustive rational-root scan: %ld candidates exceed auto threshold %ld.\n",
+                           candidate_count, (slong) FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES);
             fmpq_clear(candidate);
             fmpq_clear(value);
             goto cleanup;
         }
         if (g_rational_root_scan_mode == RATIONAL_ROOT_SCAN_FORCE &&
-            candidate_count > FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD) {
-            root_trace_log("[root-debug:v3] Forcing exhaustive rational-root scan despite %ld candidates (threshold %ld).\n",
-                           candidate_count, FMPQ_ROOT_SEARCH_BRUTE_FORCE_THRESHOLD);
+            candidate_count > FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES) {
+            root_trace_log("[root-debug:v3] Forcing exhaustive rational-root scan despite %ld candidates (auto threshold %ld).\n",
+                           candidate_count, (slong) FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES);
         }
          
         for (slong i = 0; i < fmpz_poly_length(num_divs); i++) {

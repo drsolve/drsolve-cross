@@ -179,7 +179,9 @@ static void print_usage(const char *prog_name)
     printf("    %s --no-rational-root-scan <args>\n", prog_name);
     printf("    %s --force-rational-root-scan <args>\n", prog_name);
     printf("    -> controls the exhaustive Rational Root Theorem scan used before approximate real-root finding\n");
-    printf("    -> default `auto` skips only pathological candidate explosions; `off` disables that exact scan; `force` always runs it\n");
+    printf("    -> default `auto` skips the scan when candidate count exceeds %d; `off` disables it; `force` runs it up to the hard cap %d\n",
+           FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES,
+           FMPQ_ROOT_SEARCH_HARD_MAX_CANDIDATES);
 
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
