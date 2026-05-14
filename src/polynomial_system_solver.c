@@ -1079,6 +1079,150 @@ char* eliminate_variable_dixon_with_selection(char **poly_strings, slong num_pol
 
 // ============= SOLUTION VERIFICATION =============
 
+static void add_verification_parameter_name(parser_state_t *state, const char *name)
+{
+    for (slong i = 0; i < state->nvars; i++) {
+        if (strcmp(state->var_names[i], name) == 0) {
+            return;
+        }
+    }
+
+    for (slong i = 0; i < state->npars; i++) {
+        if (strcmp(state->par_names[i], name) == 0) {
+            return;
+        }
+    }
+
+    if (state->npars >= state->max_pars) {
+        state->max_pars *= 2;
+        state->par_names = (char**) realloc(state->par_names,
+                                            state->max_pars * sizeof(char*));
+    }
+
+    state->par_names[state->npars++] = strdup(name);
+}
+
+static void scan_identifiers_for_verification_parameters(parser_state_t *state,
+                                                         const char *input)
+{
+    if (!state || !input) {
+        return;
+    }
+
+    state->input = input;
+    state->pos = 0;
+    state->len = strlen(input);
+
+    if (state->current.str) {
+        free(state->current.str);
+        state->current.str = NULL;
+    }
+
+    next_token(state);
+    while (state->current.type != TOK_EOF) {
+        if (state->current.type == TOK_VARIABLE && state->current.str) {
+            add_verification_parameter_name(state, state->current.str);
+        }
+        next_token(state);
+    }
+}
+
+static int evaluate_original_polynomial_at_solution(fq_nmod_t result,
+                                                    const char *poly_str,
+                                                    variable_info_t *sorted_vars,
+                                                    slong num_vars,
+                                                    fq_nmod_t **solution_values,
+                                                    const fq_nmod_ctx_t ctx)
+{
+    parser_state_t state = {0};
+    state.var_names = (char**) malloc((size_t) (num_vars > 0 ? num_vars : 1) * sizeof(char*));
+    for (slong i = 0; i < num_vars; i++) {
+        state.var_names[i] = strdup(sorted_vars[i].name);
+    }
+    state.nvars = num_vars;
+    state.npars = 0;
+    state.max_pars = 16;
+    state.par_names = (char**) malloc(state.max_pars * sizeof(char*));
+    state.ctx = ctx;
+    state.current.str = NULL;
+    fq_nmod_init(state.current.value, ctx);
+    state.generator_name = get_generator_name(ctx);
+
+    scan_identifiers_for_verification_parameters(&state, poly_str);
+
+    fq_mvpoly_t poly;
+    fq_mvpoly_init(&poly, state.nvars, state.npars, ctx);
+
+    state.input = poly_str;
+    state.pos = 0;
+    state.len = strlen(poly_str);
+    if (state.current.str) {
+        free(state.current.str);
+        state.current.str = NULL;
+    }
+    next_token(&state);
+    parse_expression(&state, &poly);
+
+    fq_nmod_zero(result, ctx);
+
+    for (slong term_idx = 0; term_idx < poly.nterms; term_idx++) {
+        fq_nmod_t term_value;
+        fq_nmod_init(term_value, ctx);
+        fq_nmod_set(term_value, poly.terms[term_idx].coeff, ctx);
+
+        for (slong var_idx = 0; var_idx < poly.nvars; var_idx++) {
+            slong exp = (poly.terms[term_idx].var_exp) ? poly.terms[term_idx].var_exp[var_idx] : 0;
+            if (exp > 0) {
+                fq_nmod_t value_pow;
+                fq_nmod_init(value_pow, ctx);
+                fq_nmod_pow_ui(value_pow, solution_values[var_idx][0], exp, ctx);
+                fq_nmod_mul(term_value, term_value, value_pow, ctx);
+                fq_nmod_clear(value_pow, ctx);
+            }
+        }
+
+        if (poly.npars > 0 && poly.terms[term_idx].par_exp) {
+            for (slong par_idx = 0; par_idx < poly.npars; par_idx++) {
+                if (poly.terms[term_idx].par_exp[par_idx] != 0) {
+                    solver_trace_stdout("    Verification FAILED: unsupported parameterized term in %s\n",
+                                        poly_str);
+                    fq_nmod_clear(term_value, ctx);
+                    fq_mvpoly_clear(&poly);
+                    for (slong i = 0; i < state.npars; i++) {
+                        free(state.par_names[i]);
+                    }
+                    free(state.par_names);
+                    for (slong i = 0; i < state.nvars; i++) {
+                        free(state.var_names[i]);
+                    }
+                    free(state.var_names);
+                    if (state.generator_name) free(state.generator_name);
+                    fq_nmod_clear(state.current.value, ctx);
+                    if (state.current.str) free(state.current.str);
+                    return 0;
+                }
+            }
+        }
+
+        fq_nmod_add(result, result, term_value, ctx);
+        fq_nmod_clear(term_value, ctx);
+    }
+
+    fq_mvpoly_clear(&poly);
+    for (slong i = 0; i < state.npars; i++) {
+        free(state.par_names[i]);
+    }
+    free(state.par_names);
+    for (slong i = 0; i < state.nvars; i++) {
+        free(state.var_names[i]);
+    }
+    free(state.var_names);
+    if (state.generator_name) free(state.generator_name);
+    fq_nmod_clear(state.current.value, ctx);
+    if (state.current.str) free(state.current.str);
+    return 1;
+}
+
 // Verify a single solution by substituting into original equations
 int verify_solution_set(char **original_polys, slong num_polys,
                        variable_info_t *sorted_vars, slong num_vars,
@@ -1096,77 +1240,22 @@ int verify_solution_set(char **original_polys, slong num_polys,
     
     // Substitute all variables into each original equation
     for (slong poly_idx = 0; poly_idx < num_polys; poly_idx++) {
-        char *current_poly = strdup(original_polys[poly_idx]);
-        
-        // Substitute each variable in turn
-        for (slong var_idx = 0; var_idx < num_vars; var_idx++) {
-            char *next_poly = substitute_variable_in_polynomial(current_poly,
-                                                               sorted_vars[var_idx].name,
-                                                               solution_values[var_idx][0],
-                                                               ctx);
-            free(current_poly);
-            current_poly = next_poly;
-        }
-        
-        // Check if the result is zero (or close to zero)
-        // Parse the result to check if it's zero
-        char *gen_name = get_generator_name(ctx);
-        parser_state_t state = {0};
-        state.var_names = NULL;
-        state.nvars = 0;
-        state.npars = 0;
-        state.max_pars = 16;
-        state.par_names = (char**) malloc(state.max_pars * sizeof(char*));
-        state.ctx = ctx;
-        state.current.str = NULL;
-        fq_nmod_init(state.current.value, ctx);
-        state.generator_name = strdup(gen_name);
-        
-        fq_mvpoly_t result_poly;
-        fq_mvpoly_init(&result_poly, 0, state.max_pars, ctx);
-        
-        state.input = current_poly;
-        state.pos = 0;
-        state.len = strlen(current_poly);
-        next_token(&state);
-        
-        parse_expression(&state, &result_poly);
-        
-        // Check if polynomial is zero
-        int is_zero = (result_poly.nterms == 0);
-        if (!is_zero && result_poly.nterms == 1) {
-            // Check if the single term is zero coefficient
-            is_zero = fq_nmod_is_zero(result_poly.terms[0].coeff, ctx);
-        }
-        
+        fq_nmod_t result_value;
+        fq_nmod_init(result_value, ctx);
+        int ok = evaluate_original_polynomial_at_solution(result_value,
+                                                          original_polys[poly_idx],
+                                                          sorted_vars,
+                                                          num_vars,
+                                                          solution_values,
+                                                          ctx);
+        int is_zero = ok && fq_nmod_is_zero(result_value, ctx);
+
         if (!is_zero) {
-            solver_trace_stdout("    Verification FAILED for equation %ld: %s != 0\n", poly_idx + 1, current_poly);
-            
-            // Cleanup
-            fq_mvpoly_clear(&result_poly);
-            for (slong i = 0; i < state.npars; i++) {
-                free(state.par_names[i]);
-            }
-            free(state.par_names);
-            if (state.generator_name) free(state.generator_name);
-            fq_nmod_clear(state.current.value, ctx);
-            if (state.current.str) free(state.current.str);
-            free(gen_name);
-            free(current_poly);
+            solver_trace_stdout("    Verification FAILED for equation %ld\n", poly_idx + 1);
+            fq_nmod_clear(result_value, ctx);
             return 0;
         }
-        
-        // Cleanup
-        fq_mvpoly_clear(&result_poly);
-        for (slong i = 0; i < state.npars; i++) {
-            free(state.par_names[i]);
-        }
-        free(state.par_names);
-        if (state.generator_name) free(state.generator_name);
-        fq_nmod_clear(state.current.value, ctx);
-        if (state.current.str) free(state.current.str);
-        free(gen_name);
-        free(current_poly);
+        fq_nmod_clear(result_value, ctx);
     }
     
     solver_trace_stdout("    Verification PASSED\n");
