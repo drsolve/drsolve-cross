@@ -67,7 +67,7 @@ static void print_short_usage(const char *prog_name)
     printf("  %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("  %s \"polynomials\" field_size\n", prog_name);
     printf("  %s input_file -o output_file\n", prog_name);
-    printf("\nFILE FORMAT:\n");
+    printf("FILE FORMAT:\n");
     printf("  Dixon resultant elimination:\n");
     printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
     printf("    Line 2 : field size (prime or p^k, 0 means rational)\n");
@@ -75,11 +75,11 @@ static void print_short_usage(const char *prog_name)
     printf("  Solver mode:\n");
     printf("    Line 1 : field size (prime or p^k, 0 means rational)\n");
     printf("    Line 2+: polynomials (comma-separated, may span multiple lines)\n");
-    printf("\nOPTIONS:\n");
+    printf("OPTIONS:\n");
     printf("  -r \"[d1,d2,...,dn]\" random polynomial generation\n");
     printf("  -s  solving mode (auto-enables when no vars given)\n");
     printf("  -c  complexity analysis mode\n");
-    printf("\nEXAMPLES:\n");
+    printf("EXAMPLES:\n");
     printf("  Dixon resultant elimination:\n");
     printf("    %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
@@ -95,7 +95,7 @@ static void print_short_usage(const char *prog_name)
     printf("  File input:\n");
     printf("    %s example.dr\n", prog_name);
     printf("    %s example_solve.dr -o solution.dr\n", prog_name);
-    printf("\nOTHER OPTIONS:\n");
+    printf("OTHER OPTIONS:\n");
     printf("  --method <n>      Determinant method selection (0:Recursive, 1:HNF, 2:Interpolation, 3:Sparse, 4:Bareiss, 5:Fdixon)\n");
     printf("  --step1, --step4  Override method <n> for specific algorithm steps\n");
     printf("  --dixon           Use Dixon resultant (default)\n");
@@ -110,20 +110,11 @@ static void print_short_usage(const char *prog_name)
 static void print_usage(const char *prog_name)
 {
     printf("USAGE:\n");
-    printf("  Basic Dixon:\n");
+    printf("  Elimination / resultant mode:\n");
     printf("    %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -o output.dr \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    -> Default output file: %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
-    
-    printf("FILE FORMAT (auto-detected for input_file):\n");
-    printf("  Solver mode (line 1 starts with a digit):\n");
-    printf("    Line 1 : field size\n");
-    printf("    Line 2+: polynomials (one per line or comma-separated)\n");
-    printf("  Elimination / complexity / ideal mode (otherwise):\n");
-    printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
-    printf("    Line 2 : field size (prime or p^k; generator defaults to 't')\n");
-    printf("    Line 3+: polynomials (comma-separated, may span multiple lines)\n");
-    printf("    -> If line 1 lists n vars for n equations, compatibility mode uses the first n-1 variables\n");
+    printf("\n");
 
     printf("  Polynomial system solver:\n");
     printf("    %s \"polynomials\" field_size\n", prog_name);
@@ -135,7 +126,31 @@ static void print_usage(const char *prog_name)
     printf("    -> `-s` / `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
     printf("    -> `-v 2` matches the old debug / verbose solver output\n");
     printf("    -> `-v 3` also dumps small Step 1/2/3 matrices (<= 10 x 10)\n");
+    printf("\n");
 
+    printf("  File input:\n");
+    printf("    %s input_file\n", prog_name);
+    printf("    %s -f input_file\n", prog_name);
+    printf("    %s -s input_file\n", prog_name);
+    printf("    %s -s -f input_file -o output.dr\n", prog_name);
+    printf("    -> Without flags, auto-detects solver mode when line 1 starts with a digit; otherwise uses elimination mode\n");
+    printf("    -> If elimination vars count equals equation count n, auto-adjusts to eliminate the first n-1 variables\n");
+    printf("    -> Input file may be given directly or with `-f`; output file must be given with `-o` when overriding the default\n");
+    printf("    -> Default file-mode outputs are input_file_solution.dr or input_file_comp.dr\n");
+    printf("\n");
+
+    printf("FILE FORMAT (auto-detected for input_file):\n");
+    printf("  Solver mode (line 1 starts with a digit):\n");
+    printf("    Line 1 : field size\n");
+    printf("    Line 2+: polynomials (one per line or comma-separated)\n");
+    printf("  Elimination / complexity / ideal mode (otherwise):\n");
+    printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
+    printf("    Line 2 : field size (prime or p^k; generator defaults to 't')\n");
+    printf("    Line 3+: polynomials (comma-separated, may span multiple lines)\n");
+    printf("    -> If line 1 lists n vars for n equations, compatibility mode uses the first n-1 variables\n");
+    printf("\n");
+
+    printf("MODES:\n");
     printf("  Complexity analysis:\n");
     printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -c    \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
@@ -145,18 +160,21 @@ static void print_usage(const char *prog_name)
     printf("    Add --omega <value> (or -w <value>) to set omega (default: %.4g)\n",
            DIXON_OMEGA);
     printf("    Add --time to print per-step timing; use -v 2 for the old debug-level diagnostics\n");
+    printf("\n");
 
     printf("  Dixon with ideal reduction:\n");
     printf("    %s --ideal \"ideal_generators\" \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --ideal -f input.dr\n", prog_name);
     printf("    -> ideal_generators: comma-separated relations with '=' (e.g. \"a2^3=2*a1+1, a3^3=a1*a2+3\")\n");
     printf("    -> In file mode, lines after the first two lines containing '=' are ideal generators; others are polynomials\n");
-    
+    printf("\n");
+
     printf("  Field-equation reduction mode (combine with any compute flag):\n");
     printf("    %s --field-equation \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --field-equation input_file\n", prog_name);
     printf("    %s --field-equation -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
     printf("    -> After each multiplication, reduces x^q -> x for every variable\n");
+    printf("\n");
 
     printf("  Random mode (combine with any compute flag):\n");
     printf("    %s --random \"[d1,d2,...,dn]\" field_size\n", prog_name);
@@ -168,17 +186,9 @@ static void print_usage(const char *prog_name)
     printf("    -> Add --density <ratio> with 0 <= ratio <= 1 to choose the fraction of all monomials used (default: 1)\n");
     printf("    -> Add --seed <num> to generate the same random system reproducibly across runs\n");
     printf("    -> Mixed degree specs such as \"[2]*5+[3]*6\" are supported\n");
+    printf("\n");
 
-    printf("  File input:\n");
-    printf("    %s input_file\n", prog_name);
-    printf("    %s -f input_file\n", prog_name);
-    printf("    %s -s input_file\n", prog_name);
-    printf("    %s -s -f input_file -o output.dr\n", prog_name);
-    printf("    -> Without flags, auto-detects solver mode when line 1 starts with a digit; otherwise uses elimination mode\n");
-    printf("    -> If elimination vars count equals equation count n, auto-adjusts to eliminate the first n-1 variables\n");
-    printf("    -> Input file may be given directly or with `-f`; output file must be given with `-o` when overriding the default\n");
-    printf("    -> Default file-mode outputs are input_file_solution.dr or input_file_comp.dr\n");
-
+    printf("OPTIONS:\n");
     printf("  Verbosity:\n");
     printf("    %s -v 0 <args>\n", prog_name);
     printf("    %s -v 1 <args>\n", prog_name);
@@ -189,12 +199,15 @@ static void print_usage(const char *prog_name)
     printf("    -> `-v 2` matches the old `--debug` output and also enables per-step timing\n");
     printf("    -> `-v 2` also prints detailed profiling for recursive Dixon construction (block counts, tuple counts, per-phase timings)\n");
     printf("    -> `-v 3` additionally prints the cancellation matrix, Dixon matrix, maximal-rank submatrix when each is <= 10 x 10, plus recursive fast-Dixon trace lines\n");
+    printf("\n");
 
     printf("  Diagnostics:\n");
     printf("    %s --time <args>\n", prog_name);
     printf("    %s -v 2 <args>\n", prog_name);
     printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
     printf("    -> `--silent`, `--debug`, `--solve-verbose` and `--solve` remain accepted for compatibility\n");
+    printf("\n");
+
     printf("  Root search controls:\n");
     printf("    %s --rational-root-scan <auto|off|force> <args>\n", prog_name);
     printf("    %s --no-rational-root-scan <args>\n", prog_name);
@@ -203,6 +216,7 @@ static void print_usage(const char *prog_name)
     printf("    -> default `auto` skips the scan when candidate count exceeds %d; `off` disables it; `force` runs it up to the hard cap %d\n",
            FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES,
            FMPQ_ROOT_SEARCH_HARD_MAX_CANDIDATES);
+    printf("\n");
 
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
@@ -213,16 +227,20 @@ static void print_usage(const char *prog_name)
     printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
     printf("    -> --step3-verify-second enables the second Step 3 verification pass; default is off\n");
     printf("    -> --no-step3-verify-second disables the second Step 3 verification pass\n");
+    printf("\n");
+
     printf("  Resultant construction:\n");
     printf("    %s --dixon <args>\n", prog_name);
     printf("    %s --macaulay <args>\n", prog_name);
     printf("    %s --subres <args>\n", prog_name);
     printf("    -> --dixon / --macaulay / --subres are direct method selectors\n");
     printf("    -> --subres is for exactly 2 polynomials and 1 elimination variable\n");
+    printf("\n");
 
-    printf("  Process count:\n");
+    printf("  Parallelism:\n");
     printf("    %s --threads <num> <args>\n", prog_name);
     printf("    -> Set number of threads for parallel computation\n");
+    printf("\n");
 
     printf("EXAMPLES:\n");
     printf("  %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
