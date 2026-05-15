@@ -47,7 +47,7 @@ We also provide a Windows GUI at [drsolve-win](https://github.com/drsolve/drsolv
 ---
 
 ## Usage
-### BASE USAGE
+### BASIC USAGE
 
 #### Elimination / resultant mode
 ```bash
@@ -207,9 +207,6 @@ Example:
 ```
 - Available methods: `0.Recursive`, `1.Kronecker+HNF`, `2.Interpolation`, `3.Sparse interpolation`, `4.Bareiss`, `5.Recursive Dixon construction`
 - `--method` sets both Step 1 and Step 4 for backward compatibility
-- `--fast-ksy` enables a KSY precondition check for fast Dixon Step 3
-- `--fast-ksy-col <idx>` selects the constant column for the KSY check
-- `--step3-verify-second` enables the second Step 3 verification pass
 
 #### Resultant construction
 ```bash
@@ -228,8 +225,6 @@ Example:
 ./drsolve -v 3 <arguments>
 ```
 `-v 0` prints nothing but still writes the output file. `-v 1` is the default. `-v 2` restores the debug-level console output and timing. `-v 3` additionally dumps small intermediate matrices.
-
-For `--comp`: `-v 0` prints only the final overall complexity, `-v 1` prints the per-step / per-method summary, `-v 2` adds formulas and parameter values, and `-v 3` adds extra detail.
 
 Example:
 ```bash
