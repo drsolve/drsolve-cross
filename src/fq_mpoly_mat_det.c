@@ -929,16 +929,18 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     
     timing_info_t total_elapsed = end_timing(total_start);
     
-    printf("\n=== Kronecker+HNF Time Statistics ===\n");
+    
     if (g_dixon_verbose_level >= 3) {
+        printf("\n=== Kronecker+HNF Time Statistics ===\n");
         print_timing("Compute bounds", bounds_elapsed);
         print_timing("Convert to univariate", convert_elapsed);
         print_timing("Univariate determinant", det_elapsed);
         print_timing("Convert back", back_elapsed);
         print_timing("Total Kronecker", total_elapsed);
         printf("Final result: %ld terms\n", result->nterms);
+        printf("==============================================\n");
     }
-    printf("==============================================\n");
+    
 }
 
 // ============= Prime Field Conversion Functions Implementation =============

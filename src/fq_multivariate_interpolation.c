@@ -761,7 +761,7 @@ void fq_tensor_interpolation_recursive_optimized(fq_mvpoly_t *result,
         if (current_dim == 0 && total_dims > 1) {
             top_level_progress += grid_sizes[0];
             if (top_level_progress % 100 == 0 || top_level_progress == top_level_total) {
-                printf("\r  Interpolation progress: %ld/%ld", 
+                FQ_INTERP_PRINT("\r  Interpolation progress: %ld/%ld", 
                        top_level_progress, top_level_total);
                 fflush(stdout);
             }
@@ -1048,7 +1048,7 @@ void fq_tensor_interpolation_all_vars_optimized(fq_mvpoly_t *result,
     fq_tensor_interpolation_recursive_optimized(result, total_dims - 1, grids, grid_sizes,
                                                values, &value_offset, total_dims, ctx);
     
-    printf("\n");
+    FQ_INTERP_PRINT("\n");
     
     if (result->nvars != nvars || result->npars != npars) {
         FQ_INTERP_PRINT("Fixing result structure: %ld->%ld vars, %ld->%ld pars\n",
@@ -1430,7 +1430,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
     #endif
     
     if (total_points > 100000) {
-        printf("Warning: Very large interpolation problem (%ld points)\n", total_points);
+        FQ_INTERP_PRINT("  Warning: Very large interpolation problem (%ld points)\n", total_points);
     }
     
     // Allocate values array
@@ -1520,7 +1520,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
                 if (omp_get_thread_num() == 0 && (point % 100 == 0)) {
                     // Use atomic read to get a better estimate
                     slong completed = point;  // This is just an approximation
-                    printf("\r  Progress: %ld/%ld", completed, total_points);
+                    FQ_INTERP_PRINT("\r  Progress: %ld/%ld", completed, total_points);
                     fflush(stdout);
                 }
             }
@@ -1661,7 +1661,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
             
             // Progress report
             if (point % 1 == 0 || point == total_points - 1) {
-                printf("\r  Progress: %ld/%ld", 
+                FQ_INTERP_PRINT("\r  Progress: %ld/%ld", 
                        point + 1, total_points);
                 fflush(stdout);
             }
@@ -1680,7 +1680,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
         printf("\n");
     }
     */
-    printf("\n");
+    FQ_INTERP_PRINT("\n");
     
     FQ_INTERP_PRINT("Starting tensor interpolation...\n");
     

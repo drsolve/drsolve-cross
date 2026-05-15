@@ -607,7 +607,7 @@ static const char *fast_dixon_det_method_name(det_method_t method)
         case DET_METHOD_RECURSIVE:
             return "recursive expansion";
         case DET_METHOD_KRONECKER:
-            return "Kronecker+HNF";
+            return "HNF";
         case DET_METHOD_INTERPOLATION:
             return "interpolation";
         case DET_METHOD_HUANG:
@@ -1898,10 +1898,8 @@ static det_method_t choose_fast_dixon_det_method(slong matrix_size, slong npars)
 
     if (dixon_global_method_step4 != -1) {
         coeff_method = dixon_global_method_step4;
-        fast_dixon_info_log("  Step 4 method override active: %d (%s)\n",
-                            dixon_global_method_step4,
-                            fast_dixon_det_method_name(dixon_global_method_step4));
     }
+    fast_dixon_info_log("  Determinant method: %s\n", fast_dixon_det_method_name(coeff_method));
 
     return coeff_method;
 }

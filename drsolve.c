@@ -66,35 +66,45 @@ static void print_short_usage(const char *prog_name)
     printf("USAGE:\n");
     printf("  %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("  %s \"polynomials\" field_size\n", prog_name);
-    printf("  %s input_file\n", prog_name);
+    printf("  %s input_file -o output_file\n", prog_name);
+    printf("\nFILE FORMAT:\n");
+    printf("  Dixon resultant elimination:\n");
+    printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
+    printf("    Line 2 : field size (prime or p^k, 0 means rational)\n");
+    printf("    Line 3+: polynomials (comma-separated, may span multiple lines)\n");
+    printf("  Solver mode:\n");
+    printf("    Line 1 : field size (prime or p^k, 0 means rational)\n");
+    printf("    Line 2+: polynomials (comma-separated, may span multiple lines)\n");
     printf("\nOPTIONS:\n");
-    printf("  -r  random polynomial generation\n");
+    printf("  -r \"[d1,d2,...,dn]\" random polynomial generation\n");
     printf("  -s  solving mode (auto-enables when no vars given)\n");
     printf("  -c  complexity analysis mode\n");
-    printf("\n");
-    printf("EXAMPLES:\n");
-    printf("  Elimination/resultant:\n");
+    printf("\nEXAMPLES:\n");
+    printf("  Dixon resultant elimination:\n");
     printf("    %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
     printf("  Polynomial system solving:\n");
-    printf("    %s \"x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1\" 257\n", prog_name);
+    printf("    %s \"x^3+y^2+z-8, x+y+z-6, x*y*z-6\" 0\n", prog_name);
+    printf("    %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
+    printf("  Random input solving:\n");
+    printf("    %s -r \"[2,3,4]\" 2^8\n", prog_name);
+    printf("    %s -r -s \"[3]*4\" 257 --seed 1234\n", prog_name);
     printf("  Complexity analysis:\n");
     printf("    %s -c \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
-    printf("  Random input solving (three cubic polynomials):\n");
-    printf("    %s -r -s \"[3]*3\" 257\n", prog_name);
-    printf("  Extension field:\n");
-    printf("    %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
-    printf("  Rational:\n");
-    printf("    %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" 0\n", prog_name);
+    printf("    %s -c -r \"[10]*10\" 257\n", prog_name);
     printf("  File input:\n");
     printf("    %s example.dr\n", prog_name);
-    printf("\n");
-
-    printf("NOTES:\n");
-    printf("  - Use -v 2 or -v 3 for detailed diagnostics\n");
-    printf("  - In extension fields, 't' is default field generator\n");
-    printf("  - Default output directory is ./out/\n");
-    printf("\n");
-    printf("Run '%s --help' or '%s -h' for full help.\n", prog_name, prog_name);
+    printf("    %s example_solve.dr -o solution.dr\n", prog_name);
+    printf("\nOTHER OPTIONS:\n");
+    printf("  --method <n>      Determinant method selection (0:Recursive, 1:HNF, 2:Interpolation, 3:Sparse, 4:Bareiss, 5:Fdixon)\n");
+    printf("  --step1, --step4  Override method <n> for specific algorithm steps\n");
+    printf("  --dixon           Use Dixon resultant (default)\n");
+    printf("  --macaulay        Use Macaulay resultant\n");
+    printf("  --subres          Use Subresultant (2 polys)\n");
+    printf("  --threads <num>   Set number of threads for parallel computation\n");
+    printf("  -v <0-3>          Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
+    printf("  -h, --help        Show full detailed help information\n");
+    printf("  -V, --version     Print version and build information\n");
 }
 
 static void print_usage(const char *prog_name)
@@ -104,6 +114,16 @@ static void print_usage(const char *prog_name)
     printf("    %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -o output.dr \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    -> Default output file: %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
+    
+    printf("FILE FORMAT (auto-detected for input_file):\n");
+    printf("  Solver mode (line 1 starts with a digit):\n");
+    printf("    Line 1 : field size\n");
+    printf("    Line 2+: polynomials (one per line or comma-separated)\n");
+    printf("  Elimination / complexity / ideal mode (otherwise):\n");
+    printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
+    printf("    Line 2 : field size (prime or p^k; generator defaults to 't')\n");
+    printf("    Line 3+: polynomials (comma-separated, may span multiple lines)\n");
+    printf("    -> If line 1 lists n vars for n equations, compatibility mode uses the first n-1 variables\n");
 
     printf("  Polynomial system solver:\n");
     printf("    %s \"polynomials\" field_size\n", prog_name);
@@ -203,16 +223,6 @@ static void print_usage(const char *prog_name)
     printf("  Process count:\n");
     printf("    %s --threads <num> <args>\n", prog_name);
     printf("    -> Set number of threads for parallel computation\n");
-
-    printf("FILE FORMAT (auto-detected for input_file):\n");
-    printf("  Solver mode (line 1 starts with a digit):\n");
-    printf("    Line 1 : field size\n");
-    printf("    Line 2+: polynomials (one per line or comma-separated)\n");
-    printf("  Elimination / complexity / ideal mode (otherwise):\n");
-    printf("    Line 1 : variables TO ELIMINATE (comma-separated)\n");
-    printf("    Line 2 : field size (prime or p^k; generator defaults to 't')\n");
-    printf("    Line 3+: polynomials (comma-separated, may span multiple lines)\n");
-    printf("    -> If line 1 lists n vars for n equations, compatibility mode uses the first n-1 variables\n");
 
     printf("EXAMPLES:\n");
     printf("  %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
@@ -3357,18 +3367,10 @@ int main(int argc, char *argv[])
     if (det_method_step1 != -1) {
         dixon_global_method_step1 = (det_method_t)det_method_step1;
         dixon_global_method = dixon_global_method_step1;
-        if (!silent_mode) {
-            printf("Step 1 determinant method: %s\n",
-                   det_method_name_cli(det_method_step1));
-        }
     }
     if (det_method_step4 != -1) {
         dixon_global_method_step4 = (det_method_t)det_method_step4;
         dixon_global_method = dixon_global_method_step4;
-        if (!silent_mode) {
-            printf("Step 4 determinant method: %s\n",
-                   det_method_name_cli(det_method_step4));
-        }
     }
     if (!silent_mode && rational_root_scan_mode_explicit) {
         const char *mode_name = "auto";

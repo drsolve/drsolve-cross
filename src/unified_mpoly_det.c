@@ -1,6 +1,137 @@
 /* unified_mpoly_det.c - Implementation of unified polynomial matrix determinant computation */
 
 #include "unified_mpoly_det.h"
+#include "dixon_flint.h"
+
+static void debug_print_unified_mpoly_generic(const unified_mpoly_t poly)
+{
+    slong nvars = (poly != NULL && poly->ctx_ptr != NULL) ? poly->ctx_ptr->nvars : 0;
+    if (nvars <= 0) {
+        const char *fallback[] = {"x"};
+        unified_mpoly_print_pretty(poly, fallback);
+        return;
+    }
+
+    char **vars = (char **) malloc((size_t) nvars * sizeof(char *));
+    if (vars == NULL) {
+        printf("<debug-print allocation failed>");
+        return;
+    }
+    for (slong i = 0; i < nvars; i++) {
+        vars[i] = (char *) malloc(24);
+        if (vars[i] == NULL) {
+            for (slong j = 0; j < i; j++) free(vars[j]);
+            free(vars);
+            printf("<debug-print allocation failed>");
+            return;
+        }
+        snprintf(vars[i], 24, "x%ld", i + 1);
+    }
+
+    unified_mpoly_print_pretty(poly, (const char **) vars);
+
+    for (slong i = 0; i < nvars; i++) free(vars[i]);
+    free(vars);
+}
+
+static int debug_perm_sign(const slong *perm, slong size)
+{
+    int sign = 1;
+    for (slong i = 0; i < size; i++) {
+        for (slong j = i + 1; j < size; j++) {
+            if (perm[i] > perm[j]) sign = -sign;
+        }
+    }
+    return sign;
+}
+
+static slong debug_small_factorial(slong n)
+{
+    slong r = 1;
+    for (slong i = 2; i <= n; i++) r *= i;
+    return r;
+}
+
+static void debug_dump_leibniz_paths_dfs(unified_mpoly_t **mpoly_matrix,
+                                         slong size,
+                                         unified_mpoly_ctx_t ctx,
+                                         slong row,
+                                         slong *perm,
+                                         int *used,
+                                         slong *path_index)
+{
+    if (row == size) {
+        unified_mpoly_t prefix = unified_mpoly_init(ctx);
+        unified_mpoly_t full = unified_mpoly_init(ctx);
+        slong prefix_terms;
+        slong last_terms;
+        int sign = debug_perm_sign(perm, size);
+
+        unified_mpoly_one(prefix);
+        for (slong i = 0; i < size - 1; i++) {
+            unified_mpoly_mul(prefix, prefix, mpoly_matrix[i][perm[i]]);
+        }
+        prefix_terms = unified_mpoly_length(prefix);
+        last_terms = unified_mpoly_length(mpoly_matrix[size - 1][perm[size - 1]]);
+
+        unified_mpoly_mul(full, prefix, mpoly_matrix[size - 1][perm[size - 1]]);
+        if (sign < 0) {
+            unified_mpoly_neg(full, full);
+        }
+
+        printf("[direct-det path %ld/%ld] perm=[",
+               *path_index + 1, debug_small_factorial(size));
+        for (slong i = 0; i < size; i++) {
+            printf("%ld%s", perm[i], (i + 1 < size) ? "," : "");
+        }
+        printf("] sign=%c\n", sign > 0 ? '+' : '-');
+        printf("  final multiply operand term counts: left=%ld, right=%ld\n",
+               prefix_terms, last_terms);
+        printf("  path result before summation: terms=%ld\n",
+               unified_mpoly_length(full));
+
+        unified_mpoly_clear(prefix);
+        unified_mpoly_clear(full);
+        (*path_index)++;
+        return;
+    }
+
+    for (slong col = 0; col < size; col++) {
+        if (used[col]) continue;
+        used[col] = 1;
+        perm[row] = col;
+        debug_dump_leibniz_paths_dfs(mpoly_matrix, size, ctx, row + 1, perm, used, path_index);
+        used[col] = 0;
+    }
+}
+
+static void debug_dump_leibniz_paths(unified_mpoly_t **mpoly_matrix,
+                                     slong size,
+                                     unified_mpoly_ctx_t ctx)
+{
+    slong *perm = NULL;
+    int *used = NULL;
+    slong path_index = 0;
+
+    if (g_dixon_verbose_level < 3 || size > 5 || size <= 0) {
+        return;
+    }
+
+    perm = (slong *) calloc((size_t) size, sizeof(slong));
+    used = (int *) calloc((size_t) size, sizeof(int));
+    if (perm == NULL || used == NULL) {
+        free(perm);
+        free(used);
+        return;
+    }
+
+    printf("\n=== Direct determinant Leibniz path dump (size=%ld) ===\n", size);
+    debug_dump_leibniz_paths_dfs(mpoly_matrix, size, ctx, 0, perm, used, &path_index);
+    printf("=== End direct determinant Leibniz path dump ===\n");
+
+    free(perm);
+    free(used);
+}
 
 /* ============================================================================
    RECURSIVE DETERMINANT COMPUTATION WITH UNIFIED INTERFACE
@@ -321,11 +452,13 @@ void compute_unified_mpoly_det_recursive(unified_mpoly_t det_result,
     
     if (size <= 0) {
         unified_mpoly_one(det_result);
+        recursion_depth--;
         return;
     }
     
     if (size == 1) {
         unified_mpoly_set(det_result, mpoly_matrix[0][0]);
+        recursion_depth--;
         return;
     }
     
@@ -341,11 +474,13 @@ void compute_unified_mpoly_det_recursive(unified_mpoly_t det_result,
         
         unified_mpoly_clear(ad);
         unified_mpoly_clear(bc);
+        recursion_depth--;
         return;
     }
     
     if (size == 3) {
         compute_det_3x3_unified(det_result, mpoly_matrix, ctx);
+        recursion_depth--;
         return;
     }
     
@@ -675,6 +810,10 @@ void compute_unified_mpoly_det_with_method(unified_mpoly_t det_result,
                                           unified_mpoly_ctx_t ctx,
                                           int use_parallel,
                                           int prefer_bareiss) {
+    if (!prefer_bareiss && g_dixon_verbose_level >= 3 && size <= 5) {
+        debug_dump_leibniz_paths(mpoly_matrix, size, ctx);
+    }
+
     if (prefer_bareiss) {
         if (!compute_unified_mpoly_det_bareiss(det_result, mpoly_matrix, size, ctx)) {
             compute_unified_mpoly_det_recursive(det_result, mpoly_matrix, size, ctx);

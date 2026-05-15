@@ -53,6 +53,7 @@ typedef struct {
     slong det_size;
     double det_size_log2;
     double det_factorial_log2;
+    long common_degree;
     slong num_all_vars;
     slong num_elim_vars;
     slong num_parameter_vars;
