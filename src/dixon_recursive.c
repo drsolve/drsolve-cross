@@ -632,6 +632,19 @@ static void fast_dixon_info_log(const char *fmt, ...)
     va_end(args);
 }
 
+static void fast_dixon_debug_log(const char *fmt, ...)
+{
+    va_list args;
+
+    if (g_dixon_verbose_level < 2) {
+        return;
+    }
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
 static slong fast_dixon_factorial(slong n)
 {
     slong value = 1;
@@ -1965,7 +1978,7 @@ static void fast_dixon_print_bottleneck_hint(const fast_dixon_level_profile_t *t
     const char *names[4];
     slong best = 0;
 
-    if (!fast_dixon_profile_enabled() || top == NULL) {
+    if (!fast_dixon_profile_heavy_enabled() || top == NULL) {
         return;
     }
 
@@ -2045,20 +2058,14 @@ static void fast_dixon_print_profile_report(const fast_dixon_matrix_t *full_matr
                                 ? (100.0 * (double) g_fast_dixon_profile.cache_hits /
                                    (double) (g_fast_dixon_profile.cache_hits + g_fast_dixon_profile.cache_misses))
                                 : 0.0);
-    } else {
-        fast_dixon_info_log("    Detailed recursive counters are disabled at -v 2 to avoid profiling overhead.\n");
-    }
-
-    fast_dixon_info_log("    Top-level phase times:\n");
-    fast_dixon_info_log("      split coefficients      : %.3f s\n", top->split_time);
-    fast_dixon_info_log("      build S_i blocks        : %.3f s\n", top->s_build_time);
-    fast_dixon_info_log("      build F_j blocks        : %.3f s (child lower-level builds %.3f s)\n",
-                        top->f_build_time, top->f_child_build_time);
-    fast_dixon_info_log("      multiply S_i * F_j      : %.3f s\n", top->mul_time);
-    fast_dixon_info_log("      recurrence accumulation : %.3f s\n", top->recurrence_time);
-    fast_dixon_info_log("      final block assembly    : %.3f s\n", top->assemble_time);
-
-    if (fast_dixon_profile_heavy_enabled()) {
+        fast_dixon_info_log("    Top-level phase times:\n");
+        fast_dixon_info_log("      split coefficients      : %.3f s\n", top->split_time);
+        fast_dixon_info_log("      build S_i blocks        : %.3f s\n", top->s_build_time);
+        fast_dixon_info_log("      build F_j blocks        : %.3f s (child lower-level builds %.3f s)\n",
+                            top->f_build_time, top->f_child_build_time);
+        fast_dixon_info_log("      multiply S_i * F_j      : %.3f s\n", top->mul_time);
+        fast_dixon_info_log("      recurrence accumulation : %.3f s\n", top->recurrence_time);
+        fast_dixon_info_log("      final block assembly    : %.3f s\n", top->assemble_time);
         fast_dixon_info_log("    Per-level inclusive summary:\n");
         fast_dixon_info_log("      (lower-level phase totals are aggregated over many recursive calls and may overlap with child-build time; do not sum them directly)\n");
         for (slong pos = 0; pos < FAST_DIXON_MAX_LEVELS; pos++) {
@@ -2098,6 +2105,8 @@ static void fast_dixon_print_profile_report(const fast_dixon_matrix_t *full_matr
                                 level->cache_hits,
                                 level->cache_misses);
         }
+    } else {
+        fast_dixon_debug_log("    Detailed recursive profile is available at -v 3.\n");
     }
 
     fast_dixon_print_bottleneck_hint(top);
@@ -2134,6 +2143,7 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
                             full_matrix->rows, full_matrix->cols);
     }
 
+    fast_dixon_debug_log("  Scan matrix support and trim zero rows/columns...\n");
     support_scan_start = get_wall_time();
     trimmed_rows = (slong *) flint_malloc((size_t) full_matrix->rows * sizeof(slong));
     trimmed_cols = (slong *) flint_malloc((size_t) full_matrix->cols * sizeof(slong));
@@ -2176,6 +2186,7 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
     }
 
     trim_grid_start = get_wall_time();
+    fast_dixon_debug_log("  Build trimmed support grid...\n");
     trimmed_grid = (fq_mvpoly_t ***) flint_malloc((size_t) trimmed_nrows * sizeof(fq_mvpoly_t **));
     for (slong i = 0; i < trimmed_nrows; i++) {
         trimmed_grid[i] = (fq_mvpoly_t **) flint_malloc((size_t) trimmed_ncols * sizeof(fq_mvpoly_t *));
@@ -2194,7 +2205,9 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
     fast_dixon_info_log("\nStep 3: Extract maximal-rank submatrix\n");
     step3_wall_start = get_wall_time();
     rank_select_start = get_wall_time();
+    fast_dixon_debug_log("  Select maximal-rank submatrix from trimmed support...\n");
     if (npars == 0) {
+        fast_dixon_debug_log("  Using scalar specialization for rank selection...\n");
         fq_nmod_mat_t eval_mat;
         fq_nmod_mat_init(eval_mat, trimmed_nrows, trimmed_ncols, full_matrix->ctx);
 
@@ -2227,6 +2240,7 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
         num_rows = submat_rank;
         num_cols = submat_rank;
     } else {
+        fast_dixon_debug_log("  Using polynomial specialization heuristics for rank selection...\n");
         find_fq_optimal_maximal_rank_submatrix(trimmed_grid,
                                                trimmed_nrows,
                                                trimmed_ncols,
@@ -2257,6 +2271,7 @@ static void fast_dixon_extract_square_submatrix(fq_mvpoly_t ***coeff_matrix_out,
     }
 
     copy_start = get_wall_time();
+    fast_dixon_debug_log("  Copy selected submatrix into dense coefficient matrix...\n");
     *coeff_matrix_out = (fq_mvpoly_t **) flint_malloc((size_t) submat_rank * sizeof(fq_mvpoly_t *));
     for (slong i = 0; i < submat_rank; i++) {
         (*coeff_matrix_out)[i] = (fq_mvpoly_t *) flint_malloc((size_t) submat_rank * sizeof(fq_mvpoly_t));
@@ -2366,6 +2381,10 @@ static void fq_dixon_fast_resultant_common(fq_mvpoly_t *result, fq_mvpoly_t *pol
         clock_t step2_cpu_start = clock();
         double step2_wall_start = get_wall_time();
 
+        fast_dixon_debug_log("  Split polynomial coefficients into recursive block data...\n");
+        fast_dixon_debug_log("  Build Sylvester-style S_i blocks and recursive F_j blocks...\n");
+        fast_dixon_debug_log("  Multiply S_i * F_j blocks and accumulate the block recurrence...\n");
+        fast_dixon_debug_log("  Assemble final recursive Dixon matrix...\n");
         fast_dixon_build_matrix(&full_matrix, poly_ptrs, degrees, nvars, 0, npars, polys[0].ctx);
 
         fast_dixon_print_small_matrix(&full_matrix, "Dixon");
@@ -2387,6 +2406,8 @@ static void fq_dixon_fast_resultant_common(fq_mvpoly_t *result, fq_mvpoly_t *pol
 
         fast_dixon_info_log("\nStep 4: Compute resultant\n");
         res_deg_bound = compute_fq_dixon_resultant_degree_bound(polys, nvars + 1, nvars, npars);
+        fast_dixon_debug_log("  Degree bound: %ld\n", res_deg_bound);
+        fast_dixon_debug_log("  Compute determinant from the recursive coefficient matrix...\n");
         coeff_method = choose_fast_dixon_det_method(matrix_size, npars);
         step4_cpu_start = clock();
         step4_wall_start = get_wall_time();

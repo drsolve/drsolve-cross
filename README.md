@@ -51,12 +51,11 @@ We also provide a Windows GUI at [drsolve-win](https://github.com/drsolve/drsolv
 ### Dixon Resultant (Basic)
 ```bash
 ./drsolve "polynomials" "eliminate_vars" field_size
-./drsolve -o output.dr "polynomials" "eliminate_vars" field_size
 ```
 Examples:
 ```bash
 ./drsolve "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
-./drsolve -o output.dr "x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z" "x,y" 0
+./drsolve "x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z" "x,y" 0
 ```
 
 ---
@@ -64,13 +63,38 @@ Examples:
 ### Polynomial System Solver (n equations in n variables)
 ```bash
 ./drsolve "polynomials" field_size
-./drsolve -s "polynomials" field_size
 ```
-`-s` is the short form of solver mode. `--solve` still works for compatibility, and is optional when only `"polynomials" field_size` are provided.
 Example:
 ```bash
-./drsolve -s "x^2 + y^2 + z^2 - 6, x + y + z - 4, x*y*z - x - 1" 257
+./drsolve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257
+./drsolve "x^3+y^2+z-8, x+y+z-6, x*y*z-6" 0
 ```
+---
+
+### Complexity Analysis
+Estimates the difficulty of a Dixon resultant computation without performing it.
+Reports equation count, variable count, degree sequence, Dixon matrix size
+(via Hessenberg recurrence), Bezout degree bound, and complexity in bits.
+
+```bash
+./drsolve -c     "polynomials" "eliminate_vars" field_size
+./drsolve --comp -f example.dr -o report.dr
+```
+
+Examples:
+```bash
+./drsolve --c    "x^3+y^3+z^3, x^2*y+y^2*z+z^2*x, x+y+z-1" "x,y" 257
+```
+
+## Default Output
+
+| Mode | Command-line input | File input `example.dr` |
+|---|---|---|
+| Dixon / Solver | `out/solution_YYYYMMDD_HHMMSS.dr` | `out/example_solution.dr` |
+| Complexity | `out/comp_YYYYMMDD_HHMMSS.dr` | `out/example_comp.dr` |
+
+Each output file contains field information, input polynomials, computation time,
+and the resultant, solutions, or complexity report.
 
 ## File Input Format
 
@@ -132,36 +156,6 @@ For `--comp`: `-v 0` prints only the final overall complexity, `-v 1` prints the
 Example:
 ```bash
 ./drsolve -v 2 -f in.dr -o out.dr
-```
----
-
-### Complexity Analysis
-Estimates the difficulty of a Dixon resultant computation **without** performing it.
-Reports equation count, variable count, degree sequence, Dixon matrix size
-(via Hessenberg recurrence), Bezout degree bound, and complexity in bits.
-
-```bash
-./drsolve --comp "polynomials" "eliminate_vars" field_size
-./drsolve -c     "polynomials" "eliminate_vars" field_size
-./drsolve --comp -f example.dr -o report.dr
-```
-
-Examples:
-```bash
-./drsolve --comp "x^3+y^3+z^3, x^2*y+y^2*z+z^2*x, x+y+z-1" "x,y" 257
-```
-
-**Custom omega** — set the matrix-multiplication exponent used in the complexity formula
-(default: 2.3):
-```bash
-./drsolve --comp --omega 2.373 "polynomials" "eliminate_vars" field_size
-./drsolve -c -w 2.0            "polynomials" "eliminate_vars" field_size
-```
-
-File input uses the same elimination-file format shown above:
-```bash
-./drsolve --comp example.dr           # default output: out/example_comp.dr
-./drsolve --comp -f example.dr -o report.dr
 ```
 
 ---
@@ -270,16 +264,6 @@ Generate random polynomial systems with specified degrees for testing and benchm
 - For a fuller Sage reference with examples and options, see `index.txt` or the top docstring in `drsolve_sage_interface.sage`.
 
 ---
-
-## Output
-
-| Mode | Command-line input | File input `example.dr` |
-|---|---|---|
-| Dixon / Solver | `out/solution_YYYYMMDD_HHMMSS.dr` | `out/example_solution.dr` |
-| Complexity | `out/comp_YYYYMMDD_HHMMSS.dr` | `out/example_comp.dr` |
-
-Each output file contains field information, input polynomials, computation time,
-and the resultant, solutions, or complexity report.
 
 ### Complexity report contents
 - Equation count, variable list, elimination variable list, remaining variables
