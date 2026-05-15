@@ -194,8 +194,8 @@ After each multiplication, reduces `x^q -> x` for every variable.
 
 Example:
 ```bash
-./drsolve --field-equation "x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1" "x0,x1" 2
-./drsolve --field-equation -r "[3]*5" 2
+./drsolve --field-equation "x0 + x0*x2, 1 + x1, x1 + x0*x1" "x0,x1" 2
+./drsolve --field-equation -r "[3]*5" 3 --density 0.5
 ```
 
 ### OPTIONS
