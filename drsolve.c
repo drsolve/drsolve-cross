@@ -86,7 +86,7 @@ static void print_short_usage(const char *prog_name)
     printf("  Polynomial system solving:\n");
     printf("    %s \"x^3+y^2+z-8, x+y+z-6, x*y*z-6\" 0\n", prog_name);
     printf("    %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
-    printf("  Random input solving:\n");
+    printf("  Random input:\n");
     printf("    %s -r \"[2,3,4]\" 2^8\n", prog_name);
     printf("    %s -r -s \"[3]*4\" 257 --seed 1234\n", prog_name);
     printf("  Complexity analysis:\n");
@@ -102,7 +102,7 @@ static void print_short_usage(const char *prog_name)
     printf("  --macaulay        Use Macaulay resultant\n");
     printf("  --subres          Use Subresultant (2 polys)\n");
     printf("  --threads <num>   Set number of threads for parallel computation\n");
-    printf("  -v <0-3>          Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
+    printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
     printf("  -h, --help        Show full detailed help information\n");
     printf("  -V, --version     Print version and build information\n");
 }
