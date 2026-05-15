@@ -73,7 +73,7 @@ Example:
 #### File input/output
 ```bash
 ./drsolve input_file
-./drsolve -f input_file -o output.dr
+./drsolve -f input_file -o output_file
 ```
 #### Dixon resultant elimination (multiline)
 ```
@@ -122,7 +122,7 @@ Run:
 ```
 The default settings use `t` as the extension field generator and FLINT's built-in field polynomial.
 ```bash
-./drsolve -s "x^2 + t*y, x*y + t^2" "2^8: t^8 + t^4 + t^3 + t + 1"
+./drsolve "x^2 + t*y, x*y + t^2" "2^8: t^8 + t^4 + t^3 + t + 1"
 ```
 - Example: AES polynomial for `GF(2^8)`
 - In `Q` and prime fields, `t` is treated as an ordinary variable; only extension fields reserve it as the generator
