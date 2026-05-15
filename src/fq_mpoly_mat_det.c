@@ -941,109 +941,6 @@ void compute_fq_det_kronecker(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong s
     printf("==============================================\n");
 }
 
-void compute_fq_det_kronecker_nmod_recursive(fq_mvpoly_t *result,
-                                             fq_mvpoly_t **matrix,
-                                             slong size) {
-    if (size <= 0) {
-        fq_mvpoly_init(result, matrix[0][0].nvars, matrix[0][0].npars, matrix[0][0].ctx);
-        return;
-    }
-
-    timing_info_t total_start = start_timing();
-
-    const fq_nmod_ctx_struct *ctx = matrix[0][0].ctx;
-    slong nvars = matrix[0][0].nvars;
-    slong npars = matrix[0][0].npars;
-    slong total_vars = nvars + npars;
-    ulong prime = fq_nmod_ctx_prime(ctx);
-
-    DET_PRINT("Computing %ldx%ld determinant via Kronecker + direct nmod recursive det\n",
-              size, size);
-
-    if (!is_prime_field(ctx)) {
-        if (g_dixon_debug_mode) {
-            printf("  Method 4 prime-field nmod path unavailable over extension fields; falling back to fq_nmod polynomial recursive determinant.\n");
-        }
-        compute_fq_det_poly_recursive(result, matrix, size);
-        return;
-    }
-
-    if (total_vars <= 0) {
-        compute_fq_det_recursive(result, matrix, size);
-        return;
-    }
-
-    timing_info_t bounds_start = start_timing();
-    slong *var_bounds = (slong*) malloc(total_vars * sizeof(slong));
-    compute_kronecker_bounds(var_bounds, matrix, size, nvars, npars);
-    timing_info_t bounds_elapsed = end_timing(bounds_start);
-    kronecker_print_slong_array("var_bounds", var_bounds, total_vars);
-
-    slong *substitution_powers = (slong*) malloc(total_vars * sizeof(slong));
-    substitution_powers[0] = 1;
-    for (slong v = 1; v < total_vars; v++) {
-        substitution_powers[v] = substitution_powers[v-1] * var_bounds[v-1];
-    }
-    kronecker_print_slong_array("substitution_powers", substitution_powers, total_vars);
-
-    timing_info_t convert_start = start_timing();
-    nmod_poly_t **uni_mat = (nmod_poly_t**) malloc((size_t) size * sizeof(nmod_poly_t*));
-
-    for (slong i = 0; i < size; i++) {
-        uni_mat[i] = (nmod_poly_t*) malloc((size_t) size * sizeof(nmod_poly_t));
-        for (slong j = 0; j < size; j++) {
-            nmod_poly_init(uni_mat[i][j], prime);
-            mvpoly_to_univariate_kronecker_nmod(uni_mat[i][j],
-                                                &matrix[i][j],
-                                                substitution_powers,
-                                                prime);
-        }
-    }
-    timing_info_t convert_elapsed = end_timing(convert_start);
-    DET_PRINT("[Kronecker] Maximum univariate degree after substitution: %ld\n",
-           kronecker_max_univariate_degree_nmod_poly_array(uni_mat, size, size));
-
-    timing_info_t det_start = start_timing();
-    nmod_poly_t det_poly_nmod;
-    fq_nmod_poly_t det_poly_fq;
-    nmod_poly_init(det_poly_nmod, prime);
-    fq_nmod_poly_init(det_poly_fq, ctx);
-    compute_det_nmod_poly_recursive_helper(det_poly_nmod, uni_mat, size);
-    nmod_poly_to_fq_nmod_poly_prime_field(det_poly_fq, det_poly_nmod, ctx);
-    timing_info_t det_elapsed = end_timing(det_start);
-
-    timing_info_t back_start = start_timing();
-    univariate_to_mvpoly_kronecker(result, det_poly_fq, substitution_powers,
-                                  var_bounds, nvars, npars, ctx);
-    timing_info_t back_elapsed = end_timing(back_start);
-
-    free(var_bounds);
-    free(substitution_powers);
-    fq_nmod_poly_clear(det_poly_fq, ctx);
-    nmod_poly_clear(det_poly_nmod);
-    for (slong i = 0; i < size; i++) {
-        for (slong j = 0; j < size; j++) {
-            nmod_poly_clear(uni_mat[i][j]);
-        }
-        free(uni_mat[i]);
-    }
-    free(uni_mat);
-
-    timing_info_t total_elapsed = end_timing(total_start);
-    /*
-    printf("\n=== Kronecker+direct nmod Time Statistics ===\n");
-    if (g_dixon_verbose_level >= 3) {
-        print_timing("Compute bounds", bounds_elapsed);
-        print_timing("Convert to univariate", convert_elapsed);
-        print_timing("Direct nmod recursive determinant", det_elapsed);
-        print_timing("Convert back", back_elapsed);
-        print_timing("Total Kronecker+direct nmod", total_elapsed);
-        printf("Final result: %ld terms\n", result->nterms);
-    }
-    printf("==============================================\n");
-    */
-}
-
 // ============= Prime Field Conversion Functions Implementation =============
 
 void fq_mvpoly_to_nmod_mpoly(nmod_mpoly_t mpoly, const fq_mvpoly_t *poly, 
@@ -2214,7 +2111,10 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
 }
 
 /* Main function extracted from the #else branch */
-void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
+static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
+                                                  fq_mvpoly_t **matrix,
+                                                  slong size,
+                                                  int prefer_bareiss) {
     if (size <= 0) {
         fq_mvpoly_init(result, matrix[0][0].nvars, matrix[0][0].npars, matrix[0][0].ctx);
         return;
@@ -2228,8 +2128,10 @@ void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix,
     const fq_nmod_ctx_struct *ctx = matrix[0][0].ctx;
     slong max_threads = omp_get_max_threads();
     
-    DET_PRINT("Computing %ldx%ld determinant (OpenMP: %ld threads available)\n", 
-              size, size, max_threads);
+    DET_PRINT("Computing %ldx%ld determinant%s (OpenMP: %ld threads available)\n",
+              size, size,
+              prefer_bareiss ? " via Bareiss" : "",
+              max_threads);
 
     fq_mvpoly_init(result, nvars, npars, ctx);
 
@@ -2390,7 +2292,8 @@ void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix,
 
     timing_info_t det_start = start_timing();
     int use_parallel = (size >= PARALLEL_THRESHOLD && max_threads > 1);
-    compute_unified_mpoly_det(det_unified, unified_matrix, size, unified_ctx, use_parallel);
+    compute_unified_mpoly_det_with_method(det_unified, unified_matrix, size, unified_ctx,
+                                          use_parallel, prefer_bareiss);
     timing_info_t det_elapsed = end_timing(det_start);
     //print_timing("Determinant computation (unified)", det_elapsed);
 
@@ -2591,6 +2494,14 @@ void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix,
     
     timing_info_t total_elapsed = end_timing(total_start);
     (void) total_elapsed;
+}
+
+void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
+    compute_fq_det_unified_interface_impl(result, matrix, size, 0);
+}
+
+void compute_fq_det_bareiss(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
+    compute_fq_det_unified_interface_impl(result, matrix, size, 1);
 }
 // ============= Main Interface with Algorithm Selection Implementation =============
 

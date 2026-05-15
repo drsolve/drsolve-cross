@@ -613,7 +613,7 @@ static const char *fast_dixon_det_method_name(det_method_t method)
         case DET_METHOD_HUANG:
             return "sparse interpolation";
         case DET_METHOD_KRONECKER_NMOD:
-            return "Kronecker+direct nmod";
+            return "Bareiss";
         default:
             return "default";
     }

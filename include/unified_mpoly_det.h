@@ -27,6 +27,11 @@ void compute_unified_mpoly_det_recursive(unified_mpoly_t det_result,
                                         slong size, 
                                         unified_mpoly_ctx_t ctx);
 
+int compute_unified_mpoly_det_bareiss(unified_mpoly_t det_result,
+                                     unified_mpoly_t **mpoly_matrix,
+                                     slong size,
+                                     unified_mpoly_ctx_t ctx);
+
 void compute_unified_mpoly_det_parallel(unified_mpoly_t det_result, 
                                        unified_mpoly_t **mpoly_matrix, 
                                        slong size, 
@@ -39,6 +44,13 @@ void compute_unified_mpoly_det(unified_mpoly_t det_result,
                               slong size,
                               unified_mpoly_ctx_t ctx,
                               int use_parallel);
+
+void compute_unified_mpoly_det_with_method(unified_mpoly_t det_result,
+                                          unified_mpoly_t **mpoly_matrix,
+                                          slong size,
+                                          unified_mpoly_ctx_t ctx,
+                                          int use_parallel,
+                                          int prefer_bareiss);
 
 /* Matrix helper functions */
 unified_mpoly_t** unified_mpoly_mat_init(slong rows, slong cols, unified_mpoly_ctx_t ctx);

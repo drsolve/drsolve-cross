@@ -37,7 +37,7 @@ static const char *dixon_det_method_name(det_method_t method)
         case DET_METHOD_HUANG:
             return "sparse interpolation";
         case DET_METHOD_KRONECKER_NMOD:
-            return "Kronecker+direct nmod";
+            return "Bareiss";
         default:
             return "default";
     }
@@ -1136,8 +1136,8 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
 
             compute_fq_det_huang_interpolation(result, coeff_matrix, size);
         } else if (method == DET_METHOD_KRONECKER_NMOD) {
-            dixon_debug_log("  Method: Kronecker+direct nmod\n");
-            compute_fq_det_kronecker_nmod_recursive(result, coeff_matrix, size);
+            dixon_debug_log("  Method: Bareiss\n");
+            compute_fq_det_bareiss(result, coeff_matrix, size);
         } else {
             fq_mvpoly_init(result, 0, npars, ctx);
             
@@ -1218,9 +1218,8 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
                 break;
 
             case DET_METHOD_KRONECKER_NMOD:
-                dixon_debug_log("  Method: Kronecker+direct nmod\n");
-
-                compute_fq_det_kronecker_nmod_recursive(result, coeff_matrix, size);
+                dixon_debug_log("  Method: Bareiss\n");
+                compute_fq_det_bareiss(result, coeff_matrix, size);
                 break;
 
             case DET_METHOD_HUANG:
@@ -3341,7 +3340,7 @@ void compute_fq_cancel_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **modified_M_
             compute_fq_det_kronecker(result, modified_M_mvpoly, nvars + 1);
             break;
         case DET_METHOD_KRONECKER_NMOD:
-            compute_fq_det_kronecker_nmod_recursive(result, modified_M_mvpoly, nvars + 1);
+            compute_fq_det_bareiss(result, modified_M_mvpoly, nvars + 1);
             break;
         case DET_METHOD_HUANG:
             compute_fq_det_huang_interpolation(result, modified_M_mvpoly, nvars + 1);

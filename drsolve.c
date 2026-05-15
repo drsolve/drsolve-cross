@@ -146,6 +146,7 @@ static void print_usage(const char *prog_name)
     printf("    %s -r --comp  \"[d]*n\"        field_size\n", prog_name);
     printf("    -> Add -n <num_vars> to set the total variable count (must satisfy num_vars >= #equations-1)\n");
     printf("    -> Add --density <ratio> with 0 <= ratio <= 1 to choose the fraction of all monomials used (default: 1)\n");
+    printf("    -> Add --seed <num> to generate the same random system reproducibly across runs\n");
     printf("    -> Mixed degree specs such as \"[2]*5+[3]*6\" are supported\n");
 
     printf("  File input:\n");
@@ -186,7 +187,7 @@ static void print_usage(const char *prog_name)
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
-    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation; 4.Kronecker+direct nmod; 5.Recursive Dixon construction\n");
+    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
     printf("    -> --fast-ksy enables a KSY precondition check for method 5 submatrix extraction; --no-fast-ksy disables it\n");
     printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
@@ -221,6 +222,7 @@ static void print_usage(const char *prog_name)
     printf("  %s --random \"[3,3,2]\" 257\n", prog_name);
     printf("  %s -r \"[3]*3\" 0\n", prog_name);
     printf("  %s -r -n 4 --density 0.5 \"[3]*3\" 257\n", prog_name);
+    printf("  %s -r --seed 12345 \"[3]*3\" 257\n", prog_name);
     printf("  %s -r \"[2]*4+[3]*2\" 257\n", prog_name);
     printf("  %s -r -s \"[2]*3\" 257\n", prog_name);
     printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
@@ -351,7 +353,7 @@ static const char *det_method_name_cli(int method)
         case 1: return "Kronecker+HNF";
         case 2: return "Interpolation";
         case 3: return "sparse interpolation";
-        case 4: return "Kronecker+direct nmod";
+        case 4: return "Bareiss";
         case 5: return "Recursive Dixon construction";
         default: return "Default";
     }
@@ -762,6 +764,19 @@ static int parse_positive_slong_option(const char *value, slong *out)
     return 1;
 }
 
+static int parse_seed_option(const char *value, ulong *out)
+{
+    char *endptr = NULL;
+    unsigned long long parsed;
+
+    if (!value || !out) return 0;
+    parsed = strtoull(value, &endptr, 10);
+    if (!endptr || *endptr != '\0') return 0;
+
+    *out = (ulong) parsed;
+    return 1;
+}
+
 static int parse_density_option(const char *value, double *density_out)
 {
     char *endptr = NULL;
@@ -1111,20 +1126,28 @@ static int append_signed_monomial_text(char **buffer,
 
 static char *build_random_system_spec(const char *deg_spec,
                                       slong nvars,
-                                      double density_ratio)
+                                      double density_ratio,
+                                      int seed_given,
+                                      ulong seed)
 {
     size_t spec_len;
     char *spec;
 
     if (!deg_spec) return strdup("random system");
 
-    spec_len = strlen(deg_spec) + 128;
+    spec_len = strlen(deg_spec) + 160;
     spec = (char *) malloc(spec_len);
     if (!spec) return NULL;
 
-    snprintf(spec, spec_len,
-             "random system spec: degrees=%s, variables=%ld, density=%.6g",
-             deg_spec, nvars, density_ratio);
+    if (seed_given) {
+        snprintf(spec, spec_len,
+                 "random system spec: degrees=%s, variables=%ld, density=%.6g, seed=%lu",
+                 deg_spec, nvars, density_ratio, seed);
+    } else {
+        snprintf(spec, spec_len,
+                 "random system spec: degrees=%s, variables=%ld, density=%.6g",
+                 deg_spec, nvars, density_ratio);
+    }
     return spec;
 }
 
@@ -1133,6 +1156,8 @@ static int generate_random_poly_strings(
         slong nvars,
         slong num_elim_vars,
         double density_ratio,
+        int seed_given,
+        ulong seed,
         const fq_nmod_ctx_t ctx,
         int silent_mode,
         char **polys_str_out,
@@ -1168,8 +1193,12 @@ static int generate_random_poly_strings(
 
     flint_rand_init(rstate);
     rand_initialized = 1;
-    flint_rand_set_seed(rstate, (ulong) time(NULL),
-                        (ulong) time(NULL) ^ (ulong) clock());
+    if (seed_given) {
+        flint_rand_set_seed(rstate, seed, seed + 1);
+    } else {
+        flint_rand_set_seed(rstate, (ulong) time(NULL),
+                            (ulong) time(NULL) ^ (ulong) clock());
+    }
 
     if (!silent_mode) printf("Generating random polynomial system...\n");
 
@@ -1220,6 +1249,9 @@ static int generate_random_poly_strings(
         printf("]\n");
         printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
                density_ratio * 100.0);
+        if (seed_given) {
+            printf("Seed: %lu\n", seed);
+        }
         if (num_elim_vars > 0) {
             printf("Eliminate: %s\n", elim_vars);
         }
@@ -2190,6 +2222,8 @@ static int generate_random_poly_strings_rational(
         slong nvars,
         slong num_elim_vars,
         double density_ratio,
+        int seed_given,
+        ulong seed,
         int silent_mode,
         char **polys_str_out,
         char **elim_vars_str_out,
@@ -2211,7 +2245,7 @@ static int generate_random_poly_strings_rational(
         return 0;
     }
 
-    srand((unsigned) (time(NULL) ^ clock()));
+    srand((unsigned) (seed_given ? seed : (ulong) (time(NULL) ^ clock())));
 
     if (!silent_mode) printf("Generating random polynomial system over Q...\n");
 
@@ -2340,6 +2374,9 @@ static int generate_random_poly_strings_rational(
         printf("]\n");
         printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
                density_ratio * 100.0);
+        if (seed_given) {
+            printf("Seed: %lu\n", seed);
+        }
         if (num_elim_vars > 0) {
             printf("Eliminate: %s\n", elim_vars);
         }
@@ -2413,6 +2450,8 @@ int main(int argc, char *argv[])
     int random_nvars_given = 0;
     double random_density = 1.0;
     int random_density_given = 0;
+    ulong random_seed = 0;
+    int random_seed_given = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -2608,6 +2647,17 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--density") == 0) {
             fprintf(stderr, "Error: --density requires a numeric argument between 0 and 1.\n");
             return 1;
+        } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+            if (!parse_seed_option(argv[i + 1], &random_seed)) {
+                fprintf(stderr, "Error: invalid seed '%s'; expected a non-negative integer.\n",
+                        argv[i + 1]);
+                return 1;
+            }
+            random_seed_given = 1;
+            i++;
+        } else if (strcmp(argv[i], "--seed") == 0) {
+            fprintf(stderr, "Error: --seed requires a non-negative integer argument.\n");
+            return 1;
         } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
             cli_input_filename = argv[i + 1];
             i++;
@@ -2629,8 +2679,8 @@ int main(int argc, char *argv[])
     int solve_verbose_mode = (verbose_level >= 2);
     int debug_mode = (verbose_level >= 2);
 
-    if (!rand_mode && (random_nvars_given || random_density_given)) {
-        fprintf(stderr, "Error: -n/--nvars and --density may only be used together with --random.\n");
+    if (!rand_mode && (random_nvars_given || random_density_given || random_seed_given)) {
+        fprintf(stderr, "Error: -n/--nvars, --density, and --seed may only be used together with --random.\n");
         return 1;
     }
 
@@ -3097,7 +3147,8 @@ int main(int argc, char *argv[])
         if (comp_mode) {
             char *gen_elim = NULL, *gen_allvars = NULL, *gen_remaining = NULL;
 
-            rand_comp_spec = build_random_system_spec(deg_str, nvars_rand, random_density);
+            rand_comp_spec = build_random_system_spec(deg_str, nvars_rand, random_density,
+                                                      random_seed_given, random_seed);
             if (!rand_comp_spec ||
                 !build_random_system_strings(nvars_rand, num_elim_rand,
                                              &gen_elim, &gen_allvars, &gen_remaining)) {
@@ -3123,6 +3174,9 @@ int main(int argc, char *argv[])
                 printf("]\n");
                 printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
                        random_density * 100.0);
+                if (random_seed_given) {
+                    printf("Seed: %lu\n", random_seed);
+                }
                 if (strlen(gen_elim) > 0) {
                     printf("Eliminate: %s\n", gen_elim);
                 }
@@ -3149,6 +3203,7 @@ int main(int argc, char *argv[])
                                    degrees_rand, npolys_rand,
                                    nvars_rand, num_elim_rand,
                                    random_density,
+                                   random_seed_given, random_seed,
                                    silent_mode,
                                    &gen_polys, &gen_elim, &gen_allvars);
             } else {
@@ -3156,6 +3211,7 @@ int main(int argc, char *argv[])
                                    degrees_rand, npolys_rand,
                                    nvars_rand, num_elim_rand,
                                    random_density,
+                                   random_seed_given, random_seed,
                                    ctx,
                                    silent_mode,
                                    &gen_polys, &gen_elim, &gen_allvars);

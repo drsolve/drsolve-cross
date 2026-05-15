@@ -9,6 +9,7 @@ temp/
 doc/
 paper/
 scripts/
+attack/
 __pycache__/
 
 # Jupyter Notebook checkpoints

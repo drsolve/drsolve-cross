@@ -1174,10 +1174,10 @@ def DixonIdeal(
     ----------
     F          : list of Sage polynomials and/or plain strings
     ideal_gens : list whose elements may be:
-                 - strings like "a^3=2*b+1"
-                 - Sage polynomials / expressions, interpreted as `gen = 0`
-                 - pairs like [lhs, rhs] or (lhs, rhs)
+                 - pairs like [lhs, rhs] or (lhs, rhs), preferred
                  - Sage equality/relational objects when available
+                 - Sage polynomials / expressions, interpreted as `gen = 0`
+                 - strings like "a^3=2*b+1" for backward compatibility
     elim_vars  : variables to eliminate
     field_size : prime or prime power; inferred from F if None
     dixon_path : path to the drsolve executable.

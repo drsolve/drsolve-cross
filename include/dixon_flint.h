@@ -51,7 +51,7 @@ typedef enum {
     DET_METHOD_KRONECKER = 1,     // Kronecker+HNF method
     DET_METHOD_INTERPOLATION = 2, // Interpolation method
     DET_METHOD_HUANG = 3,         // sparse interpolation method
-    DET_METHOD_KRONECKER_NMOD = 4 // Kronecker then direct recursive nmod determinant
+    DET_METHOD_KRONECKER_NMOD = 4 // Bareiss fraction-free elimination on multivariate polynomials
 } det_method_t;
 
 typedef enum {
