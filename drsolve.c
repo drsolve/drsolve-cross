@@ -104,7 +104,7 @@ static void print_short_usage(const char *prog_name)
     printf("  --macaulay        Use Macaulay resultant\n");
     printf("  --subres          Use Subresultant (2 polys)\n");
     printf("  --field-equation  After each multiplication, reduces x^q -> x for every variable");
-    printf("  --ideal <args>    After each multiplication, reduces using the given substitution);
+    printf("  --ideal <args>    After each multiplication, reduces using the given substitution");
     printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
     printf("  -h, --help        Show full detailed help information\n");
     printf("  -V, --version     Print version and build information\n");
