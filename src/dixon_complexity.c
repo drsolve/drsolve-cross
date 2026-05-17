@@ -1074,7 +1074,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     report->step1_direct_mpoly_log2 =
         log2_factorial_slong(num_polys) + report->step1_direct_mpoly_mul_proxy_log2;
     report->step1_direct_mpoly_split_log2 =
-        (2.0 * (double) num_polys) + report->step1_direct_mpoly_mul_proxy_log2;
+        ((num_polys > 0) ? (log2((double) num_polys) + (double) num_polys) : 0.0) +
+        report->step1_direct_mpoly_mul_proxy_log2;
 
     {
         long max_degree = 0;
@@ -1400,7 +1401,7 @@ static double select_step1_best_method(const dixon_complexity_report_t *report,
     }
     if (report->step1_direct_mpoly_split_log2 < best) {
         best = report->step1_direct_mpoly_split_log2;
-        method = "direct multivariate (split-Laplace surrogate)";
+        method = "direct multivariate (cached Laplace surrogate)";
     }
     if (report->step1_ordinary_interp_log2 < best) {
         best = report->step1_ordinary_interp_log2;
@@ -1541,13 +1542,13 @@ static void dixon_complexity_write_report_body(
                 report->step1_direct_factorial_log2,
                 report->step1_direct_mpoly_mul_proxy_log2);
     }
-    fprintf(fp, "Step 1 direct multivariate split-Laplace surrogate (2^(2n), log2): %.6f\n",
+    fprintf(fp, "Step 1 direct multivariate cached Laplace surrogate (n*2^n, log2): %.6f\n",
             report->step1_direct_mpoly_split_log2);
     if (verbose_level >= 2) {
-        fprintf(fp, "  Formula: 2n + log2(M_mpoly), using 2^(2n) in place of n!\n");
-        fprintf(fp, "  Values : n=%ld, log2(2^(2n))=%.6f, log2(M^2 * binom(v+d,d))=%.6f\n",
+        fprintf(fp, "  Formula: log2(n) + n + log2(M_mpoly), using n*2^n in place of n!\n");
+        fprintf(fp, "  Values : n=%ld, log2(n*2^n)=%.6f, log2(M^2 * binom(v+d,d))=%.6f\n",
                 num_polys,
-                2.0 * (double) num_polys,
+                ((num_polys > 0) ? (log2((double) num_polys) + (double) num_polys) : 0.0),
                 report->step1_direct_mpoly_mul_proxy_log2);
     }
     fprintf(fp, "Step 1 direct univariate after Kronecker (Leibniz/FFT, log2): %.6f\n",
@@ -1774,7 +1775,7 @@ static void dixon_complexity_write_report_body(
         fprintf(fp, "    log2(M^2)=%.6f\n", 2.0 * report->det_size_log2);
         fprintf(fp, "    log2(binom(v+d,d))<=%.6f\n",
                 log2_dense_monomial_count_upper(report->common_degree, num_all_vars));
-        fprintf(fp, "  Split-Laplace surrogate: replace n! by 2^(2n), giving log2 estimate %.6f\n",
+        fprintf(fp, "  Cached Laplace surrogate: replace n! by n*2^n, giving log2 estimate %.6f\n",
                 report->step1_direct_mpoly_split_log2);
 
         fprintf(fp, "Step 1 direct multivariate expansion backend note:\n");

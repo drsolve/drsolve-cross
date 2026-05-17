@@ -87,8 +87,8 @@ static void print_short_usage(const char *prog_name)
     printf("    %s \"x^3+y^2+z-8, x+y+z-6, x*y*z-6\" 0\n", prog_name);
     printf("    %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("  Random input:\n");
-    printf("    %s -r \"[2,3,4]\" 2^8\n", prog_name);
-    printf("    %s -r -s \"[3]*4\" 257 --seed 1234\n", prog_name);
+    printf("    %s -r \"[3]*4\" 257\n", prog_name);
+    printf("    %s -r -s \"[2,3,4]\" 2^8 --seed 1234\n", prog_name);
     printf("  Complexity analysis:\n");
     printf("    %s -c \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
     printf("    %s -c -r \"[10]*10\" 257\n", prog_name);
