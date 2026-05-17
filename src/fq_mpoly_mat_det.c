@@ -2116,7 +2116,7 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
 static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
                                                   fq_mvpoly_t **matrix,
                                                   slong size,
-                                                  int prefer_bareiss) {
+                                                  int method) {
     if (size <= 0) {
         fq_mvpoly_init(result, matrix[0][0].nvars, matrix[0][0].npars, matrix[0][0].ctx);
         return;
@@ -2132,7 +2132,8 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
     
     DET_PRINT("Computing %ldx%ld determinant%s (OpenMP: %ld threads available)\n",
               size, size,
-              prefer_bareiss ? " via Bareiss" : "",
+              (method == DET_METHOD_KRONECKER_NMOD) ? " via Bareiss" :
+              (method == DET_METHOD_BALANCED_SPLIT) ? " via experimental balanced split" : "",
               max_threads);
 
     fq_mvpoly_init(result, nvars, npars, ctx);
@@ -2295,7 +2296,7 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
     timing_info_t det_start = start_timing();
     int use_parallel = (size >= PARALLEL_THRESHOLD && max_threads > 1);
     compute_unified_mpoly_det_with_method(det_unified, unified_matrix, size, unified_ctx,
-                                          use_parallel, prefer_bareiss);
+                                          use_parallel, method);
     timing_info_t det_elapsed = end_timing(det_start);
     //print_timing("Determinant computation (unified)", det_elapsed);
 
@@ -2503,7 +2504,11 @@ void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix,
 }
 
 void compute_fq_det_bareiss(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
-    compute_fq_det_unified_interface_impl(result, matrix, size, 1);
+    compute_fq_det_unified_interface_impl(result, matrix, size, 4);
+}
+
+void compute_fq_det_balanced_split_experimental(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size) {
+    compute_fq_det_unified_interface_impl(result, matrix, size, 6);
 }
 // ============= Main Interface with Algorithm Selection Implementation =============
 

@@ -51,7 +51,8 @@ typedef enum {
     DET_METHOD_KRONECKER = 1,     // Kronecker+HNF method
     DET_METHOD_INTERPOLATION = 2, // Interpolation method
     DET_METHOD_HUANG = 3,         // sparse interpolation method
-    DET_METHOD_KRONECKER_NMOD = 4 // Bareiss fraction-free elimination on multivariate polynomials
+    DET_METHOD_KRONECKER_NMOD = 4, // Bareiss fraction-free elimination on multivariate polynomials
+    DET_METHOD_BALANCED_SPLIT = 6  // Experimental top-level balanced split Laplace expansion
 } det_method_t;
 
 typedef enum {
@@ -80,6 +81,7 @@ extern int g_matrix_transpose_threshold;
 extern int g_dixon_fast_use_ksy_precondition;
 extern slong g_dixon_fast_ksy_constant_col;
 extern int g_dixon_step3_second_verification;
+extern slong g_dixon_det_cache_limit;
 
 int dixon_method_uses_parallel_timing(det_method_t method);
 int dixon_get_effective_interpolation_threads(void);

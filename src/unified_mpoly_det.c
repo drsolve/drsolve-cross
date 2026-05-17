@@ -3,6 +3,29 @@
 #include "unified_mpoly_det.h"
 #include "dixon_flint.h"
 
+typedef struct {
+    ulong mask;
+    unified_mpoly_t value;
+} det_minor_cache_entry_t;
+
+typedef struct {
+    det_minor_cache_entry_t *entries;
+    slong *buckets;
+    slong *next;
+    slong count;
+    slong capacity;
+    slong bucket_count;
+    slong hits;
+    slong misses;
+    int enabled;
+    unified_mpoly_ctx_t ctx;
+    slong max_possible_entries;
+} det_minor_cache_t;
+
+static void compute_det_3x3_unified(unified_mpoly_t det,
+                                   unified_mpoly_t **m,
+                                   unified_mpoly_ctx_t ctx);
+
 static void debug_print_unified_mpoly_generic(const unified_mpoly_t poly)
 {
     slong nvars = (poly != NULL && poly->ctx_ptr != NULL) ? poly->ctx_ptr->nvars : 0;
@@ -131,6 +154,383 @@ static void debug_dump_leibniz_paths(unified_mpoly_t **mpoly_matrix,
 
     free(perm);
     free(used);
+}
+
+static slong debug_binomial_slong(slong n, slong k)
+{
+    if (k < 0 || k > n) return 0;
+    if (k == 0 || k == n) return 1;
+    if (k > n - k) k = n - k;
+    slong r = 1;
+    for (slong i = 1; i <= k; i++) {
+        r = (r * (n - k + i)) / i;
+    }
+    return r;
+}
+
+static void debug_print_balanced_split_summary(slong size)
+{
+    slong left = size / 2;
+    slong subsets = debug_binomial_slong(size, left);
+    if (g_dixon_verbose_level >= 2) {
+        printf("  experimental balanced split: top-level left-size=%ld, right-size=%ld, column-subsets=%ld\n",
+               left, size - left, subsets);
+    }
+}
+
+static int debug_subset_sign_from_cols(const int *cols, slong left_size)
+{
+    slong sum = 0;
+    for (slong i = 0; i < left_size; i++) sum += cols[i];
+    return (sum & 1) ? -1 : 1;
+}
+
+static void build_complement_cols(const int *cols,
+                                  slong left_size,
+                                  slong size,
+                                  int *right_cols)
+{
+    slong p = 0;
+    slong q = 0;
+    for (slong c = 0; c < size; c++) {
+        if (p < left_size && cols[p] == c) {
+            p++;
+        } else {
+            right_cols[q++] = (int) c;
+        }
+    }
+}
+
+static void fill_submatrix_from_rows_cols(unified_mpoly_t **dst,
+                                          unified_mpoly_t **src,
+                                          slong row_start,
+                                          slong row_count,
+                                          const int *cols,
+                                          slong col_count)
+{
+    for (slong i = 0; i < row_count; i++) {
+        for (slong j = 0; j < col_count; j++) {
+            unified_mpoly_set(dst[i][j], src[row_start + i][cols[j]]);
+        }
+    }
+}
+
+static int next_k_subset_inplace(int *subset, slong k, slong n)
+{
+    for (slong i = k - 1; i >= 0; i--) {
+        if (subset[i] < (int) (n - k + i)) {
+            subset[i]++;
+            for (slong j = i + 1; j < k; j++) {
+                subset[j] = subset[j - 1] + 1;
+            }
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void compute_unified_mpoly_det_balanced_split_top_level(unified_mpoly_t det_result,
+                                                               unified_mpoly_t **mpoly_matrix,
+                                                               slong size,
+                                                               unified_mpoly_ctx_t ctx)
+{
+    slong left_size = size / 2;
+    slong right_size = size - left_size;
+    unified_mpoly_t accum = unified_mpoly_init(ctx);
+    unified_mpoly_t term = unified_mpoly_init(ctx);
+    unified_mpoly_t left_det = unified_mpoly_init(ctx);
+    unified_mpoly_t right_det = unified_mpoly_init(ctx);
+    unified_mpoly_t temp = unified_mpoly_init(ctx);
+    unified_mpoly_t **left_mat = NULL;
+    unified_mpoly_t **right_mat = NULL;
+    int *left_cols = NULL;
+    int *right_cols = NULL;
+
+    unified_mpoly_zero(accum);
+
+    if (size <= 1) {
+        compute_unified_mpoly_det_recursive(det_result, mpoly_matrix, size, ctx);
+        unified_mpoly_clear(accum);
+        unified_mpoly_clear(term);
+        unified_mpoly_clear(left_det);
+        unified_mpoly_clear(right_det);
+        unified_mpoly_clear(temp);
+        return;
+    }
+
+    left_mat = unified_mpoly_mat_init(left_size, left_size, ctx);
+    right_mat = unified_mpoly_mat_init(right_size, right_size, ctx);
+    left_cols = (int *) malloc((size_t) left_size * sizeof(int));
+    right_cols = (int *) malloc((size_t) right_size * sizeof(int));
+    if (left_mat == NULL || right_mat == NULL || left_cols == NULL || right_cols == NULL) {
+        if (g_dixon_verbose_level >= 1) {
+            printf("  balanced split experimental: allocation failed, falling back to recursive expansion\n");
+        }
+        if (left_mat != NULL) unified_mpoly_mat_clear(left_mat, left_size, left_size);
+        if (right_mat != NULL) unified_mpoly_mat_clear(right_mat, right_size, right_size);
+        free(left_cols);
+        free(right_cols);
+        compute_unified_mpoly_det_recursive(det_result, mpoly_matrix, size, ctx);
+        unified_mpoly_clear(accum);
+        unified_mpoly_clear(term);
+        unified_mpoly_clear(left_det);
+        unified_mpoly_clear(right_det);
+        unified_mpoly_clear(temp);
+        return;
+    }
+
+    for (slong i = 0; i < left_size; i++) left_cols[i] = (int) i;
+
+    do {
+        int sign;
+        build_complement_cols(left_cols, left_size, size, right_cols);
+        fill_submatrix_from_rows_cols(left_mat, mpoly_matrix, 0, left_size, left_cols, left_size);
+        fill_submatrix_from_rows_cols(right_mat, mpoly_matrix, left_size, right_size, right_cols, right_size);
+
+        compute_unified_mpoly_det_recursive(left_det, left_mat, left_size, ctx);
+        compute_unified_mpoly_det_recursive(right_det, right_mat, right_size, ctx);
+        unified_mpoly_mul(term, left_det, right_det);
+
+        sign = debug_subset_sign_from_cols(left_cols, left_size);
+        if (sign > 0) {
+            unified_mpoly_add(temp, accum, term);
+        } else {
+            unified_mpoly_sub(temp, accum, term);
+        }
+        unified_mpoly_set(accum, temp);
+    } while (next_k_subset_inplace(left_cols, left_size, size));
+
+    unified_mpoly_set(det_result, accum);
+
+    unified_mpoly_mat_clear(left_mat, left_size, left_size);
+    unified_mpoly_mat_clear(right_mat, right_size, right_size);
+    free(left_cols);
+    free(right_cols);
+    unified_mpoly_clear(accum);
+    unified_mpoly_clear(term);
+    unified_mpoly_clear(left_det);
+    unified_mpoly_clear(right_det);
+    unified_mpoly_clear(temp);
+}
+
+static ulong det_minor_cache_hash_mask(ulong mask)
+{
+    mask ^= mask >> 30;
+    mask *= 0xbf58476d1ce4e5b9UL;
+    mask ^= mask >> 27;
+    mask *= 0x94d049bb133111ebUL;
+    mask ^= mask >> 31;
+    return mask;
+}
+
+static slong det_minor_cache_next_pow2(slong n)
+{
+    slong p = 1;
+    while (p < n) p <<= 1;
+    return p;
+}
+
+static slong det_minor_cache_max_possible_entries(slong size)
+{
+    if (size <= 0) return 0;
+    if (size >= (slong) (8 * sizeof(ulong))) return -1;
+    return (slong) ((1UL << size) - 1UL);
+}
+
+static void det_minor_cache_init(det_minor_cache_t *cache,
+                                 unified_mpoly_ctx_t ctx,
+                                 slong capacity,
+                                 slong max_possible_entries)
+{
+    cache->entries = NULL;
+    cache->buckets = NULL;
+    cache->next = NULL;
+    cache->count = 0;
+    cache->capacity = 0;
+    cache->bucket_count = 0;
+    cache->hits = 0;
+    cache->misses = 0;
+    cache->enabled = 0;
+    cache->ctx = ctx;
+    cache->max_possible_entries = max_possible_entries;
+
+    if (capacity <= 0) return;
+
+    cache->entries = (det_minor_cache_entry_t *) calloc((size_t) capacity,
+                                                        sizeof(det_minor_cache_entry_t));
+    cache->next = (slong *) malloc((size_t) capacity * sizeof(slong));
+    cache->bucket_count = det_minor_cache_next_pow2(FLINT_MAX(16, 2 * capacity));
+    cache->buckets = (slong *) malloc((size_t) cache->bucket_count * sizeof(slong));
+    if (cache->entries == NULL || cache->next == NULL || cache->buckets == NULL) {
+        free(cache->entries);
+        free(cache->next);
+        free(cache->buckets);
+        memset(cache, 0, sizeof(*cache));
+        cache->ctx = ctx;
+        cache->max_possible_entries = max_possible_entries;
+        return;
+    }
+    for (slong i = 0; i < cache->bucket_count; i++) cache->buckets[i] = -1;
+    cache->capacity = capacity;
+    cache->enabled = 1;
+}
+
+static void det_minor_cache_clear(det_minor_cache_t *cache)
+{
+    if (cache->entries != NULL) {
+        for (slong i = 0; i < cache->count; i++) {
+            unified_mpoly_clear(cache->entries[i].value);
+        }
+        free(cache->entries);
+    }
+    free(cache->next);
+    free(cache->buckets);
+    memset(cache, 0, sizeof(*cache));
+}
+
+static int det_minor_cache_lookup(det_minor_cache_t *cache,
+                                  ulong mask,
+                                  unified_mpoly_t out)
+{
+    slong bucket;
+    slong idx;
+
+    if (cache == NULL || !cache->enabled) return 0;
+    bucket = (slong) (det_minor_cache_hash_mask(mask) & (ulong) (cache->bucket_count - 1));
+    for (idx = cache->buckets[bucket]; idx >= 0; idx = cache->next[idx]) {
+        if (cache->entries[idx].mask == mask) {
+            unified_mpoly_set(out, cache->entries[idx].value);
+            cache->hits++;
+            return 1;
+        }
+    }
+    cache->misses++;
+    return 0;
+}
+
+static void det_minor_cache_store(det_minor_cache_t *cache,
+                                  ulong mask,
+                                  const unified_mpoly_t value)
+{
+    slong bucket;
+    slong idx;
+
+    if (cache == NULL || !cache->enabled) return;
+    if (cache->count >= cache->capacity) return;
+
+    bucket = (slong) (det_minor_cache_hash_mask(mask) & (ulong) (cache->bucket_count - 1));
+    idx = cache->count++;
+    cache->entries[idx].mask = mask;
+    cache->entries[idx].value = unified_mpoly_init(cache->ctx);
+    unified_mpoly_set(cache->entries[idx].value, value);
+    cache->next[idx] = cache->buckets[bucket];
+    cache->buckets[bucket] = idx;
+}
+
+static ulong det_mask_remove_local_col(ulong mask, slong col)
+{
+    slong local_index = 0;
+    for (slong bit = 0; bit < (slong) (8 * sizeof(ulong)); bit++) {
+        if (((mask >> bit) & 1UL) == 0) continue;
+        if (local_index == col) {
+            return mask & ~(1UL << bit);
+        }
+        local_index++;
+    }
+    return mask;
+}
+
+static void compute_unified_mpoly_det_recursive_cached_internal(
+        unified_mpoly_t det_result,
+        unified_mpoly_t **mpoly_matrix,
+        slong size,
+        unified_mpoly_ctx_t ctx,
+        det_minor_cache_t *cache,
+        ulong mask)
+{
+    if (cache != NULL && det_minor_cache_lookup(cache, mask, det_result)) {
+        return;
+    }
+
+    if (size <= 0) {
+        unified_mpoly_one(det_result);
+        return;
+    }
+
+    if (size == 1) {
+        unified_mpoly_set(det_result, mpoly_matrix[0][0]);
+        if (cache != NULL) det_minor_cache_store(cache, mask, det_result);
+        return;
+    }
+
+    if (size == 2) {
+        unified_mpoly_t ad = unified_mpoly_init(ctx);
+        unified_mpoly_t bc = unified_mpoly_init(ctx);
+        unified_mpoly_mul(ad, mpoly_matrix[0][0], mpoly_matrix[1][1]);
+        unified_mpoly_mul(bc, mpoly_matrix[0][1], mpoly_matrix[1][0]);
+        unified_mpoly_sub(det_result, ad, bc);
+        unified_mpoly_clear(ad);
+        unified_mpoly_clear(bc);
+        if (cache != NULL) det_minor_cache_store(cache, mask, det_result);
+        return;
+    }
+
+    if (size == 3) {
+        compute_det_3x3_unified(det_result, mpoly_matrix, ctx);
+        if (cache != NULL) det_minor_cache_store(cache, mask, det_result);
+        return;
+    }
+
+    unified_mpoly_zero(det_result);
+
+    unified_mpoly_t temp_result = unified_mpoly_init(ctx);
+    unified_mpoly_t cofactor = unified_mpoly_init(ctx);
+    unified_mpoly_t subdet = unified_mpoly_init(ctx);
+    unified_mpoly_t **submatrix = (unified_mpoly_t**) malloc((size - 1) * sizeof(unified_mpoly_t*));
+    for (slong i = 0; i < size - 1; i++) {
+        submatrix[i] = (unified_mpoly_t*) malloc((size - 1) * sizeof(unified_mpoly_t));
+        for (slong j = 0; j < size - 1; j++) {
+            submatrix[i][j] = unified_mpoly_init(ctx);
+        }
+    }
+
+    for (slong col = 0; col < size; col++) {
+        if (unified_mpoly_is_zero(mpoly_matrix[0][col])) continue;
+
+        for (slong i = 1; i < size; i++) {
+            slong sub_j = 0;
+            for (slong j = 0; j < size; j++) {
+                if (j != col) {
+                    unified_mpoly_set(submatrix[i - 1][sub_j], mpoly_matrix[i][j]);
+                    sub_j++;
+                }
+            }
+        }
+
+        compute_unified_mpoly_det_recursive_cached_internal(
+            subdet, submatrix, size - 1, ctx, cache, det_mask_remove_local_col(mask, col));
+
+        unified_mpoly_mul(cofactor, mpoly_matrix[0][col], subdet);
+        if ((col & 1) == 0) {
+            unified_mpoly_add(temp_result, det_result, cofactor);
+        } else {
+            unified_mpoly_sub(temp_result, det_result, cofactor);
+        }
+        unified_mpoly_set(det_result, temp_result);
+    }
+
+    for (slong i = 0; i < size - 1; i++) {
+        for (slong j = 0; j < size - 1; j++) {
+            unified_mpoly_clear(submatrix[i][j]);
+        }
+        free(submatrix[i]);
+    }
+    free(submatrix);
+    unified_mpoly_clear(temp_result);
+    unified_mpoly_clear(cofactor);
+    unified_mpoly_clear(subdet);
+
+    if (cache != NULL) det_minor_cache_store(cache, mask, det_result);
 }
 
 /* ============================================================================
@@ -552,6 +952,40 @@ void compute_unified_mpoly_det_recursive(unified_mpoly_t det_result,
     recursion_depth--;
 }
 
+static void compute_unified_mpoly_det_recursive_with_optional_cache(
+        unified_mpoly_t det_result,
+        unified_mpoly_t **mpoly_matrix,
+        slong size,
+        unified_mpoly_ctx_t ctx)
+{
+    slong cache_limit = g_dixon_det_cache_limit;
+    det_minor_cache_t cache;
+    ulong full_mask;
+    slong max_possible_entries;
+
+    if (cache_limit <= 0 || size <= 3 || size >= (slong) (8 * sizeof(ulong))) {
+        compute_unified_mpoly_det_recursive(det_result, mpoly_matrix, size, ctx);
+        return;
+    }
+
+    max_possible_entries = det_minor_cache_max_possible_entries(size);
+    det_minor_cache_init(&cache, ctx, cache_limit, max_possible_entries);
+    if (!cache.enabled) {
+        compute_unified_mpoly_det_recursive(det_result, mpoly_matrix, size, ctx);
+        return;
+    }
+
+    full_mask = (1UL << size) - 1UL;
+    compute_unified_mpoly_det_recursive_cached_internal(det_result, mpoly_matrix, size, ctx,
+                                                        &cache, full_mask);
+
+    if (g_dixon_verbose_level >= 2) {
+        printf("  determinant memoization: entries=%ld/%ld, limit=%ld, hits=%ld, misses=%ld\n",
+               cache.count, cache.max_possible_entries, cache.capacity, cache.hits, cache.misses);
+    }
+    det_minor_cache_clear(&cache);
+}
+
 /* ============================================================================
    PARALLEL DETERMINANT COMPUTATION WITH NESTED PARALLELISM
    ============================================================================ */
@@ -809,15 +1243,31 @@ void compute_unified_mpoly_det_with_method(unified_mpoly_t det_result,
                                           slong size,
                                           unified_mpoly_ctx_t ctx,
                                           int use_parallel,
-                                          int prefer_bareiss) {
-    if (!prefer_bareiss && g_dixon_verbose_level >= 3 && size <= 5) {
+                                          int method) {
+    if (method != DET_METHOD_KRONECKER_NMOD &&
+        g_dixon_verbose_level >= 3 && size <= 5) {
         debug_dump_leibniz_paths(mpoly_matrix, size, ctx);
     }
 
-    if (prefer_bareiss) {
+    if (method == DET_METHOD_KRONECKER_NMOD) {
         if (!compute_unified_mpoly_det_bareiss(det_result, mpoly_matrix, size, ctx)) {
             compute_unified_mpoly_det_recursive(det_result, mpoly_matrix, size, ctx);
         }
+        return;
+    }
+
+    if (method == DET_METHOD_BALANCED_SPLIT) {
+        if (g_dixon_verbose_level >= 2) {
+            printf("  experimental determinant method: balanced split Laplace skeleton\n");
+            debug_print_balanced_split_summary(size);
+            printf("  current implementation note: one top-level balanced split; subdeterminants use the existing recursive backend\n");
+        }
+        compute_unified_mpoly_det_balanced_split_top_level(det_result, mpoly_matrix, size, ctx);
+        return;
+    }
+
+    if (method == DET_METHOD_RECURSIVE) {
+        compute_unified_mpoly_det_recursive_with_optional_cache(det_result, mpoly_matrix, size, ctx);
         return;
     }
     

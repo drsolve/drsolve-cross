@@ -1073,6 +1073,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                         report->num_all_vars);
     report->step1_direct_mpoly_log2 =
         log2_factorial_slong(num_polys) + report->step1_direct_mpoly_mul_proxy_log2;
+    report->step1_direct_mpoly_split_log2 =
+        (2.0 * (double) num_polys) + report->step1_direct_mpoly_mul_proxy_log2;
 
     {
         long max_degree = 0;
@@ -1292,6 +1294,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     report->total_direct_log2 = log2_add_exp(report->step1_direct_log2, report->step4_log2);
     report->total_direct_mpoly_log2 =
         log2_add_exp(report->step1_direct_mpoly_log2, report->step4_log2);
+    report->total_direct_mpoly_split_log2 =
+        log2_add_exp(report->step1_direct_mpoly_split_log2, report->step4_log2);
     report->total_ordinary_log2 =
         log2_add_exp(report->step1_ordinary_interp_log2, report->step4_log2);
     report->total_hnf_log2 = log2_add_exp(report->step1_hnf_log2, report->step4_log2);
@@ -1393,6 +1397,10 @@ static double select_step1_best_method(const dixon_complexity_report_t *report,
     if (report->step1_direct_mpoly_log2 < best) {
         best = report->step1_direct_mpoly_log2;
         method = "direct multivariate";
+    }
+    if (report->step1_direct_mpoly_split_log2 < best) {
+        best = report->step1_direct_mpoly_split_log2;
+        method = "direct multivariate (split-Laplace surrogate)";
     }
     if (report->step1_ordinary_interp_log2 < best) {
         best = report->step1_ordinary_interp_log2;
@@ -1526,11 +1534,20 @@ static void dixon_complexity_write_report_body(
     fprintf(fp, "Step 1 direct multivariate cofactor expansion (naive, log2): %.6f\n",
             report->step1_direct_mpoly_log2);
     if (verbose_level >= 2) {
-        fprintf(fp, "  Formula: log2(n!) + log2(M_mpoly), with M_mpoly ~= prod_j tau_j and tau_j <= binom(m + d_j, m)\n");
-        fprintf(fp, "  Values : n=%ld, m=%ld, log2(n!)=%.6f, log2(prod_j tau_j)=%.6f\n",
+        fprintf(fp, "  Formula: log2(n!) + log2(M_mpoly), with M_mpoly ~= M^2 * binom(v + d, d)\n");
+        fprintf(fp, "  Values : n=%ld, v=%ld, log2(n!)=%.6f, log2(M^2 * binom(v+d,d))=%.6f\n",
                 num_polys,
                 num_all_vars,
                 report->step1_direct_factorial_log2,
+                report->step1_direct_mpoly_mul_proxy_log2);
+    }
+    fprintf(fp, "Step 1 direct multivariate split-Laplace surrogate (2^(2n), log2): %.6f\n",
+            report->step1_direct_mpoly_split_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: 2n + log2(M_mpoly), using 2^(2n) in place of n!\n");
+        fprintf(fp, "  Values : n=%ld, log2(2^(2n))=%.6f, log2(M^2 * binom(v+d,d))=%.6f\n",
+                num_polys,
+                2.0 * (double) num_polys,
                 report->step1_direct_mpoly_mul_proxy_log2);
     }
     fprintf(fp, "Step 1 direct univariate after Kronecker (Leibniz/FFT, log2): %.6f\n",
@@ -1757,6 +1774,8 @@ static void dixon_complexity_write_report_body(
         fprintf(fp, "    log2(M^2)=%.6f\n", 2.0 * report->det_size_log2);
         fprintf(fp, "    log2(binom(v+d,d))<=%.6f\n",
                 log2_dense_monomial_count_upper(report->common_degree, num_all_vars));
+        fprintf(fp, "  Split-Laplace surrogate: replace n! by 2^(2n), giving log2 estimate %.6f\n",
+                report->step1_direct_mpoly_split_log2);
 
         fprintf(fp, "Step 1 direct multivariate expansion backend note:\n");
         fprintf(fp, "  Current --method 0 path is Laplace/cofactor expansion on multivariate entries.\n");
@@ -1824,7 +1843,7 @@ static void dixon_complexity_write_report_body(
                 "Step 1 note: standard Dixon resultant shape expects #polys = #elim + 1; current input is %ld vs %ld + 1.\n",
                 num_polys, num_elim);
     }
-    fprintf(fp, "Best Step 1/2 estimate: %s (log2: %.6f)\n",
+    fprintf(fp, "Best Step 1 estimate: %s (log2: %.6f)\n",
             report->step1_best_method ? report->step1_best_method : "unknown",
             report->step1_best_log2);
 
@@ -1927,7 +1946,7 @@ static void dixon_complexity_write_report_body(
     }
 
     fprintf(fp, "\n--- Overall ---\n");
-    fprintf(fp, "Step 1/2 best : %s (log2: %.6f)\n",
+    fprintf(fp, "Step 1 best : %s (log2: %.6f)\n",
             report->step1_best_method ? report->step1_best_method : "unknown",
             report->step1_best_log2);
     fprintf(fp, "Step 4 best : %s (log2: %.6f)\n",

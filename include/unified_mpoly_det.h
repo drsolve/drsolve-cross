@@ -50,7 +50,7 @@ void compute_unified_mpoly_det_with_method(unified_mpoly_t det_result,
                                           slong size,
                                           unified_mpoly_ctx_t ctx,
                                           int use_parallel,
-                                          int prefer_bareiss);
+                                          int method);
 
 /* Matrix helper functions */
 unified_mpoly_t** unified_mpoly_mat_init(slong rows, slong cols, unified_mpoly_ctx_t ctx);

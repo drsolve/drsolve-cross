@@ -213,6 +213,7 @@ void compute_fq_det_huang_interpolation(fq_mvpoly_t *result, fq_mvpoly_t **matri
 // Direct recursive algorithm
 void compute_fq_det_unified_interface(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
 void compute_fq_det_bareiss(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
+void compute_fq_det_balanced_split_experimental(fq_mvpoly_t *result, fq_mvpoly_t **matrix, slong size);
 
 // ============= Main Interface with Algorithm Selection =============
 

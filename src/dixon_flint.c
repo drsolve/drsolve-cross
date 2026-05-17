@@ -24,6 +24,7 @@ rational_root_scan_mode_t g_rational_root_scan_mode = RATIONAL_ROOT_SCAN_AUTO;
 int g_dixon_fast_use_ksy_precondition = 0;
 slong g_dixon_fast_ksy_constant_col = 0;
 int g_dixon_step3_second_verification = 0;
+slong g_dixon_det_cache_limit = 1024;
 
 static const char *dixon_det_method_name(det_method_t method)
 {
@@ -38,6 +39,8 @@ static const char *dixon_det_method_name(det_method_t method)
             return "sparse interpolation";
         case DET_METHOD_KRONECKER_NMOD:
             return "Bareiss";
+        case DET_METHOD_BALANCED_SPLIT:
+            return "balanced split Laplace (experimental)";
         default:
             return "default";
     }
@@ -1138,6 +1141,9 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         } else if (method == DET_METHOD_KRONECKER_NMOD) {
             dixon_debug_log("  Method: Bareiss\n");
             compute_fq_det_bareiss(result, coeff_matrix, size);
+        } else if (method == DET_METHOD_BALANCED_SPLIT) {
+            dixon_debug_log("  Method: balanced split Laplace (experimental)\n");
+            compute_fq_det_balanced_split_experimental(result, coeff_matrix, size);
         } else {
             fq_mvpoly_init(result, 0, npars, ctx);
             
@@ -1220,6 +1226,10 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
             case DET_METHOD_KRONECKER_NMOD:
                 dixon_debug_log("  Method: Bareiss\n");
                 compute_fq_det_bareiss(result, coeff_matrix, size);
+                break;
+            case DET_METHOD_BALANCED_SPLIT:
+                dixon_debug_log("  Method: balanced split Laplace (experimental)\n");
+                compute_fq_det_balanced_split_experimental(result, coeff_matrix, size);
                 break;
 
             case DET_METHOD_HUANG:
@@ -3341,6 +3351,9 @@ void compute_fq_cancel_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **modified_M_
             break;
         case DET_METHOD_KRONECKER_NMOD:
             compute_fq_det_bareiss(result, modified_M_mvpoly, nvars + 1);
+            break;
+        case DET_METHOD_BALANCED_SPLIT:
+            compute_fq_det_balanced_split_experimental(result, modified_M_mvpoly, nvars + 1);
             break;
         case DET_METHOD_HUANG:
             compute_fq_det_huang_interpolation(result, modified_M_mvpoly, nvars + 1);

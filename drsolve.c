@@ -98,10 +98,13 @@ static void print_short_usage(const char *prog_name)
     printf("OTHER OPTIONS:\n");
     printf("  --method <n>      Determinant method selection (0:Recursive, 1:HNF, 2:Interpolation, 3:Sparse, 4:Bareiss, 5:Fdixon)\n");
     printf("  --step1, --step4  Override method <n> for specific algorithm steps\n");
+    printf("  --cache <n>       Determinant memoization cache entry limit (default: 1024)\n");
+    printf("  --threads <num>   Set number of threads for parallel computation\n");
     printf("  --dixon           Use Dixon resultant (default)\n");
     printf("  --macaulay        Use Macaulay resultant\n");
     printf("  --subres          Use Subresultant (2 polys)\n");
-    printf("  --threads <num>   Set number of threads for parallel computation\n");
+    printf("  --field-equation  After each multiplication, reduces x^q -> x for every variable");
+    printf("  --ideal <args>    After each multiplication, reduces the specified ideal instead");
     printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
     printf("  -h, --help        Show full detailed help information\n");
     printf("  -V, --version     Print version and build information\n");
@@ -221,8 +224,9 @@ static void print_usage(const char *prog_name)
     printf("  Method selection:\n");
     printf("    %s --method <num> <args>\n", prog_name);
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
-    printf("    -> Available methods: 0.Recursive; 1.Kronecker+HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction\n");
+    printf("    -> Available methods: 0.Recursive; 1.HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction; 6.Balanced split Laplace (experimental)\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
+    printf("    -> --cache sets the determinant memoization cache entry cap (method 0 / unified recursive path)\n");
     printf("    -> --fast-ksy enables a KSY precondition check for method 5 submatrix extraction; --no-fast-ksy disables it\n");
     printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
     printf("    -> --step3-verify-second enables the second Step 3 verification pass; default is off\n");
@@ -378,11 +382,12 @@ static const char *det_method_name_cli(int method)
 {
     switch (method) {
         case 0: return "Recursive expansion";
-        case 1: return "Kronecker+HNF";
+        case 1: return "HNF";
         case 2: return "Interpolation";
         case 3: return "sparse interpolation";
         case 4: return "Bareiss";
         case 5: return "Recursive Dixon construction";
+        case 6: return "Balanced split Laplace (experimental)";
         default: return "Default";
     }
 }
@@ -2462,6 +2467,7 @@ int main(int argc, char *argv[])
     int    det_method_step1 = -1;  /* determinant method override for step 1 */
     int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
+    slong  det_cache_limit = 1024;
     resultant_method_t resultant_method = RESULTANT_METHOD_DIXON;
     int resultant_method_explicit = 0;
     int determinant_method_explicit = 0;
@@ -2581,7 +2587,7 @@ int main(int argc, char *argv[])
         } else if ((strcmp(argv[i], "--method") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 5) {
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 6) {
                 determinant_method_explicit = 1;
                 if (val == 5) {
                     resultant_method = RESULTANT_METHOD_DIXON_RECURSIVE;
@@ -2594,7 +2600,7 @@ int main(int argc, char *argv[])
                 }
             } else {
                 fprintf(stderr, "Warning: invalid --method value '%s', "
-                                "must be 0-5. Using default.\n", argv[i + 1]);
+                                "must be 0-6. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
         } else if (strcmp(argv[i], "--fast-ksy") == 0 ||
@@ -2620,23 +2626,23 @@ int main(int argc, char *argv[])
         } else if ((strcmp(argv[i], "--step1") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 6) {
                 det_method_step1 = (int)val;
                 determinant_method_explicit = 1;
             } else {
                 fprintf(stderr, "Warning: invalid --step1 value '%s', "
-                                "must be 0-4. Using default.\n", argv[i + 1]);
+                                "must be 0-6. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--step4") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
-            if (endptr && *endptr == '\0' && val >= 0 && val <= 4) {
+            if (endptr && *endptr == '\0' && val >= 0 && val <= 6) {
                 det_method_step4 = (int)val;
                 determinant_method_explicit = 1;
             } else {
                 fprintf(stderr, "Warning: invalid --step4 value '%s', "
-                                "must be 0-4. Using default.\n", argv[i + 1]);
+                                "must be 0-6. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
         } else if ((strcmp(argv[i], "--threads") == 0) && i + 1 < argc) {
@@ -2649,6 +2655,16 @@ int main(int argc, char *argv[])
                                 "must be positive integer. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "--cache") == 0) && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (endptr && *endptr == '\0' && val >= 0) {
+                det_cache_limit = (slong) val;
+            } else {
+                fprintf(stderr, "Warning: invalid --cache value '%s', must be a nonnegative entry limit. Using default.\n",
+                                argv[i + 1]);
+            }
+            i++;
         } else if ((strcmp(argv[i], "-n") == 0 ||
                     strcmp(argv[i], "--nvars") == 0 ||
                     strcmp(argv[i], "--num-vars") == 0) && i + 1 < argc) {
@@ -3382,6 +3398,7 @@ int main(int argc, char *argv[])
     g_dixon_fast_use_ksy_precondition = fast_ksy_precondition;
     g_dixon_fast_ksy_constant_col = fast_ksy_constant_col;
     g_dixon_step3_second_verification = step3_verify_second;
+    g_dixon_det_cache_limit = det_cache_limit;
     if (det_method_step1 != -1) {
         dixon_global_method_step1 = (det_method_t)det_method_step1;
         dixon_global_method = dixon_global_method_step1;

@@ -67,6 +67,7 @@ typedef struct {
     double step1_direct_factorial_log2;
     double step1_direct_fft_log2;
     double step1_direct_mpoly_log2;
+    double step1_direct_mpoly_split_log2;
     double step1_direct_mpoly_mul_proxy_log2;
     double step1_ordinary_interp_log2;
     double step1_ordinary_grid_points_log2;
@@ -119,6 +120,7 @@ typedef struct {
     double overall_log2;
     double total_direct_log2;
     double total_direct_mpoly_log2;
+    double total_direct_mpoly_split_log2;
     double total_ordinary_log2;
     double total_hnf_log2;
     double total_sparse_log2;
