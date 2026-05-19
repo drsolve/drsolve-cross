@@ -2163,11 +2163,14 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
                                                           const char *vars_string,
                                                           qq_poly_recon_t *best_recon_out,
                                                           int *have_best_recon_out,
-                                                          const char *output_filename) {
+                                                          const char *output_filename,
+                                                          slong max_prime_budget_override) {
     const slong initial_prime_budget = 8;
-    const slong max_prime_budget = 64;
+    const slong default_max_prime_budget = 64;
     const slong min_primes_before_stopping = 4;
     const slong stable_rounds_before_stopping = 3;
+    const slong max_prime_budget = (max_prime_budget_override > initial_prime_budget)
+        ? max_prime_budget_override : default_max_prime_budget;
     ulong *primes = NULL;
     slong num_primes = 0;
     slong prime_budget = initial_prime_budget;
@@ -2360,7 +2363,9 @@ static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
                                                const char *vars_string,
                                                qq_poly_recon_t *best_recon_out,
                                                int *have_best_recon_out) {
-    return qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string, best_recon_out, have_best_recon_out, NULL);
+    return qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
+                                                       best_recon_out, have_best_recon_out,
+                                                       NULL, 64);
 }
 
 static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_recon_t *acc, FILE *fp_file) {
@@ -2566,7 +2571,8 @@ char* dixon_str_rational_with_file(const char *poly_string,
     int have_best_recon = 0;
 
     best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
-                                                              &best_recon, &have_best_recon, output_filename);
+                                                              &best_recon, &have_best_recon,
+                                                              output_filename, 64);
     
     if (have_best_recon) {
         qq_poly_recon_clear(&best_recon);
@@ -2585,16 +2591,20 @@ char* dixon_str_large_prime(const char *poly_string,
     qq_poly_recon_t best_recon;
     char *best_result;
     char *mod_result = NULL;
-    char *prime_str;
+    char *prime_str = NULL;
     int have_best_recon = 0;
 
     g_suppress_rational_root_reporting = 1;
-    best_result = qq_reconstruct_from_modular_dixon(poly_string, vars_string,
-                                                    &best_recon, &have_best_recon);
+    best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
+                                                              &best_recon, &have_best_recon,
+                                                              NULL, 256);
     g_suppress_rational_root_reporting = 0;
 
+    if (!best_result) {
+        return NULL;
+    }
+
     prime_str = fmpz_get_str(NULL, 10, prime);
-    printf("Final reconstruction over Q completed.\n");
     printf("Reducing reconstructed resultant modulo p = %s...\n", prime_str);
     flint_free(prime_str);
 

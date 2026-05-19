@@ -15,6 +15,7 @@ typedef struct {
     slong num_equations;
     char **variable_names;
     fmpz_t **solution_values;
+    int *solution_verified;
     int is_valid;
     int has_no_solutions;
     char *error_message;

@@ -2,6 +2,12 @@
 
 #include "dixon_test.h"
 
+#include "large_prime_system_solver.h"
+
+#include <fcntl.h>
+#include <time.h>
+#include <unistd.h>
+
 // Global threshold variable (extern declaration should be in header)
 extern int g_matrix_transpose_threshold;
 
@@ -24,6 +30,534 @@ typedef struct {
 static degree_check_result_t *degree_results = NULL;
 static slong num_degree_results = 0;
 static slong degree_results_capacity = 0;
+static int g_bezout_test_quiet_mode = 0;
+
+typedef struct {
+    const char *label;
+    slong nvars;
+    slong npolys;
+    slong degrees[8];
+} solver_degree_case_t;
+
+typedef struct {
+    const char *label;
+    int rational_mode;
+    int large_prime_mode;
+    ulong prime_ui;
+    ulong power;
+    const char *field_poly;
+    const char *generator;
+    const char *prime_str;
+} solver_field_case_t;
+
+typedef struct {
+    slong passed_cases;
+    slong no_solution_cases;
+    slong failed_cases;
+} solver_correctness_stats_t;
+
+static int dtest_append_text(char **buffer, size_t *capacity, size_t *length, const char *text)
+{
+    size_t text_len;
+    char *grown;
+
+    if (!buffer || !capacity || !length || !text)
+        return 0;
+
+    text_len = strlen(text);
+    if (*buffer == NULL || *capacity == 0) {
+        *capacity = text_len + 32;
+        *buffer = (char *) malloc(*capacity);
+        if (!*buffer)
+            return 0;
+        (*buffer)[0] = '\0';
+        *length = 0;
+    }
+
+    if (*length + text_len + 1 > *capacity) {
+        while (*length + text_len + 1 > *capacity) {
+            *capacity *= 2;
+        }
+        grown = (char *) realloc(*buffer, *capacity);
+        if (!grown)
+            return 0;
+        *buffer = grown;
+    }
+
+    memcpy(*buffer + *length, text, text_len + 1);
+    *length += text_len;
+    return 1;
+}
+
+static void dtest_redirect_fd_to_devnull(int fd, int *saved_fd)
+{
+    int devnull;
+
+    if (!saved_fd)
+        return;
+
+    *saved_fd = dup(fd);
+    if (*saved_fd == -1)
+        return;
+
+    devnull = open("/dev/null", O_WRONLY);
+    if (devnull == -1) {
+        close(*saved_fd);
+        *saved_fd = -1;
+        return;
+    }
+
+    dup2(devnull, fd);
+    close(devnull);
+}
+
+static void dtest_restore_fd(int fd, int saved_fd)
+{
+    if (saved_fd == -1)
+        return;
+
+    fflush(fd == STDOUT_FILENO ? stdout : stderr);
+    dup2(saved_fd, fd);
+    close(saved_fd);
+}
+
+static void dtest_free_enumerated_monomials(monomial_t *monomials, slong count)
+{
+    if (!monomials)
+        return;
+    for (slong i = 0; i < count; i++)
+        free(monomials[i].exponents);
+    free(monomials);
+}
+
+static int dtest_build_random_system_strings(slong nvars,
+                                             slong num_elim_vars,
+                                             char **elim_vars_out,
+                                             char **all_vars_out)
+{
+    char *elim_vars = NULL;
+    char *all_vars = NULL;
+    size_t elim_cap = 0, elim_len = 0;
+    size_t all_cap = 0, all_len = 0;
+
+    if (!elim_vars_out || !all_vars_out || nvars <= 0 || num_elim_vars < 0 || num_elim_vars > nvars)
+        return 0;
+
+    for (slong i = 0; i < nvars; i++) {
+        char name[32];
+        snprintf(name, sizeof(name), "x%ld", i);
+        if (i > 0 && !dtest_append_text(&all_vars, &all_cap, &all_len, ","))
+            goto fail;
+        if (!dtest_append_text(&all_vars, &all_cap, &all_len, name))
+            goto fail;
+
+        if (i < num_elim_vars) {
+            if (i > 0 && !dtest_append_text(&elim_vars, &elim_cap, &elim_len, ","))
+                goto fail;
+            if (!dtest_append_text(&elim_vars, &elim_cap, &elim_len, name))
+                goto fail;
+        }
+    }
+
+    if (!elim_vars)
+        elim_vars = strdup("");
+    if (!all_vars)
+        all_vars = strdup("");
+    if (!elim_vars || !all_vars)
+        goto fail;
+
+    *elim_vars_out = elim_vars;
+    *all_vars_out = all_vars;
+    return 1;
+
+fail:
+    free(elim_vars);
+    free(all_vars);
+    return 0;
+}
+
+static int dtest_append_fmpz_monomial_text(char **buffer,
+                                           size_t *capacity,
+                                           size_t *length,
+                                           const fmpz_t coeff,
+                                           const slong *exp,
+                                           slong nvars,
+                                           int *first_term)
+{
+    int has_var = 0;
+    char *coeff_str = NULL;
+
+    if (!buffer || !capacity || !length || !first_term)
+        return 0;
+    if (fmpz_is_zero(coeff))
+        return 0;
+
+    for (slong j = 0; j < nvars; j++) {
+        if (exp[j] != 0) {
+            has_var = 1;
+            break;
+        }
+    }
+
+    if (!*first_term) {
+        if (!dtest_append_text(buffer, capacity, length, " + "))
+            return 0;
+    }
+
+    if (!fmpz_is_one(coeff) || !has_var) {
+        coeff_str = fmpz_get_str(NULL, 10, coeff);
+        if (!coeff_str)
+            return 0;
+        if (!dtest_append_text(buffer, capacity, length, coeff_str)) {
+            flint_free(coeff_str);
+            return 0;
+        }
+        flint_free(coeff_str);
+    }
+
+    if (has_var) {
+        int wrote_any_var = 0;
+        for (slong j = 0; j < nvars; j++) {
+            char piece[64];
+            if (exp[j] == 0)
+                continue;
+            if ((!fmpz_is_one(coeff)) || wrote_any_var) {
+                if (!dtest_append_text(buffer, capacity, length, "*"))
+                    return 0;
+            }
+            snprintf(piece, sizeof(piece), "x%ld", j);
+            if (!dtest_append_text(buffer, capacity, length, piece))
+                return 0;
+            if (exp[j] != 1) {
+                snprintf(piece, sizeof(piece), "^%ld", exp[j]);
+                if (!dtest_append_text(buffer, capacity, length, piece))
+                    return 0;
+            }
+            wrote_any_var = 1;
+        }
+    }
+
+    *first_term = 0;
+    return 1;
+}
+
+static int dtest_generate_random_large_prime_system_string(const slong *degrees,
+                                                           slong npolys,
+                                                           slong nvars,
+                                                           double density_ratio,
+                                                           ulong seed,
+                                                           const fmpz_t prime,
+                                                           char **polys_str_out)
+{
+    char *polys_str = NULL;
+    size_t polys_cap = 0;
+    size_t polys_len = 0;
+    flint_rand_t rstate;
+
+    if (!degrees || !polys_str_out || npolys <= 0 || nvars <= 0)
+        return 0;
+
+    flint_rand_init(rstate);
+    flint_rand_set_seed(rstate, seed, seed + 1);
+
+    for (slong i = 0; i < npolys; i++) {
+        monomial_t *monomials = NULL;
+        slong monomial_count = 0;
+        slong degree = degrees[i] > 0 ? degrees[i] : 1;
+        slong target_terms;
+        slong *indices = NULL;
+        slong leading_idx = -1;
+        char *poly_buf = NULL;
+        size_t poly_cap = 0;
+        size_t poly_len = 0;
+        int first_term = 1;
+        slong selected = 0;
+        fmpz_t coeff;
+
+        fmpz_init(coeff);
+        enumerate_all_monomials(&monomials, &monomial_count, nvars, degree);
+        if (!monomials || monomial_count <= 0) {
+            fmpz_clear(coeff);
+            dtest_free_enumerated_monomials(monomials, monomial_count);
+            flint_rand_clear(rstate);
+            free(polys_str);
+            return 0;
+        }
+
+        target_terms = (slong) (density_ratio * monomial_count);
+        if (target_terms < 1) target_terms = 1;
+        if (target_terms > monomial_count) target_terms = monomial_count;
+
+        indices = (slong *) malloc((size_t) monomial_count * sizeof(slong));
+        if (!indices) {
+            fmpz_clear(coeff);
+            dtest_free_enumerated_monomials(monomials, monomial_count);
+            flint_rand_clear(rstate);
+            free(polys_str);
+            return 0;
+        }
+
+        for (slong j = 0; j < monomial_count; j++) indices[j] = j;
+        for (slong j = monomial_count - 1; j > 0; j--) {
+            slong k = n_randint(rstate, j + 1);
+            slong tmp = indices[j];
+            indices[j] = indices[k];
+            indices[k] = tmp;
+        }
+
+        for (slong j = 0; j < monomial_count; j++) {
+            if (monomials[indices[j]].total_degree == degree) {
+                leading_idx = indices[j];
+                break;
+            }
+        }
+        if (leading_idx < 0) leading_idx = indices[0];
+
+        do {
+            fmpz_randm(coeff, rstate, prime);
+        } while (fmpz_is_zero(coeff));
+        if (!dtest_append_fmpz_monomial_text(&poly_buf, &poly_cap, &poly_len,
+                                             coeff, monomials[leading_idx].exponents,
+                                             nvars, &first_term)) {
+            fmpz_clear(coeff);
+            free(indices);
+            free(poly_buf);
+            dtest_free_enumerated_monomials(monomials, monomial_count);
+            flint_rand_clear(rstate);
+            free(polys_str);
+            return 0;
+        }
+        selected++;
+
+        for (slong j = 0; j < monomial_count && selected < target_terms; j++) {
+            slong idx = indices[j];
+            if (idx == leading_idx) continue;
+
+            do {
+                fmpz_randm(coeff, rstate, prime);
+            } while (fmpz_is_zero(coeff));
+            if (!dtest_append_fmpz_monomial_text(&poly_buf, &poly_cap, &poly_len,
+                                                 coeff, monomials[idx].exponents,
+                                                 nvars, &first_term)) {
+                fmpz_clear(coeff);
+                free(indices);
+                free(poly_buf);
+                dtest_free_enumerated_monomials(monomials, monomial_count);
+                flint_rand_clear(rstate);
+                free(polys_str);
+                return 0;
+            }
+            selected++;
+        }
+
+        if (i > 0 && !dtest_append_text(&polys_str, &polys_cap, &polys_len, ", ")) {
+            fmpz_clear(coeff);
+            free(indices);
+            free(poly_buf);
+            dtest_free_enumerated_monomials(monomials, monomial_count);
+            flint_rand_clear(rstate);
+            free(polys_str);
+            return 0;
+        }
+        if (!dtest_append_text(&polys_str, &polys_cap, &polys_len, poly_buf ? poly_buf : "0")) {
+            fmpz_clear(coeff);
+            free(indices);
+            free(poly_buf);
+            dtest_free_enumerated_monomials(monomials, monomial_count);
+            flint_rand_clear(rstate);
+            free(polys_str);
+            return 0;
+        }
+
+        fmpz_clear(coeff);
+        free(indices);
+        free(poly_buf);
+        dtest_free_enumerated_monomials(monomials, monomial_count);
+    }
+
+    flint_rand_clear(rstate);
+    *polys_str_out = polys_str;
+    return 1;
+}
+
+static int dtest_generate_random_system_string(const solver_field_case_t *field,
+                                               const slong *degrees,
+                                               slong npolys,
+                                               slong nvars,
+                                               double density_ratio,
+                                               ulong seed,
+                                               char **polys_str_out)
+{
+    fq_nmod_ctx_t ctx;
+    fmpz_t p;
+    char *polys_str = NULL;
+    char **poly_strs = NULL;
+    fq_mvpoly_t *polys = NULL;
+    char *gen_name = NULL;
+    size_t total_len = 4;
+    flint_rand_t rstate;
+    slong *deg_copy = NULL;
+    int ok = 0;
+    int saved_stdout = -1;
+
+    if (!field || !degrees || !polys_str_out)
+        return 0;
+
+    if (field->large_prime_mode) {
+        fmpz_init(p);
+        if (fmpz_set_str(p, field->prime_str, 10) != 0) {
+            fmpz_clear(p);
+            return 0;
+        }
+        ok = dtest_generate_random_large_prime_system_string(degrees, npolys, nvars,
+                                                             density_ratio, seed, p,
+                                                             &polys_str);
+        fmpz_clear(p);
+        if (!ok)
+            return 0;
+        *polys_str_out = polys_str;
+        return 1;
+    }
+
+    fmpz_init_set_ui(p, field->prime_ui);
+    fq_nmod_ctx_init(ctx, p, field->power, field->generator ? field->generator : "t");
+    fmpz_clear(p);
+
+    deg_copy = (slong *) malloc((size_t) npolys * sizeof(slong));
+    if (!deg_copy) {
+        fq_nmod_ctx_clear(ctx);
+        return 0;
+    }
+    for (slong i = 0; i < npolys; i++)
+        deg_copy[i] = degrees[i];
+
+    flint_rand_init(rstate);
+    flint_rand_set_seed(rstate, seed, seed + 1);
+
+    dtest_redirect_fd_to_devnull(STDOUT_FILENO, &saved_stdout);
+    generate_polynomial_system(&polys, nvars, npolys, 0,
+                               deg_copy, density_ratio, ctx, rstate);
+    dtest_restore_fd(STDOUT_FILENO, saved_stdout);
+
+    free(deg_copy);
+    deg_copy = NULL;
+    flint_rand_clear(rstate);
+
+    if (!polys) {
+        fq_nmod_ctx_clear(ctx);
+        return 0;
+    }
+
+    poly_strs = (char **) malloc((size_t) npolys * sizeof(char *));
+    if (!poly_strs) {
+        for (slong i = 0; i < npolys; i++) fq_mvpoly_clear(&polys[i]);
+        free(polys);
+        fq_nmod_ctx_clear(ctx);
+        return 0;
+    }
+
+    gen_name = get_generator_name(ctx);
+    for (slong i = 0; i < npolys; i++) {
+        char *s = fq_mvpoly_to_string(&polys[i], NULL, gen_name);
+        poly_strs[i] = (s && strlen(s) > 0) ? s : (free(s), strdup("0"));
+        if (!poly_strs[i]) {
+            for (slong j = 0; j <= i; j++) free(poly_strs[j]);
+            free(poly_strs);
+            for (slong j = 0; j < npolys; j++) fq_mvpoly_clear(&polys[j]);
+            free(polys);
+            if (gen_name) free(gen_name);
+            fq_nmod_ctx_clear(ctx);
+            return 0;
+        }
+        total_len += strlen(poly_strs[i]) + 3;
+    }
+
+    polys_str = (char *) malloc(total_len);
+    if (!polys_str) {
+        for (slong i = 0; i < npolys; i++) free(poly_strs[i]);
+        free(poly_strs);
+        for (slong i = 0; i < npolys; i++) fq_mvpoly_clear(&polys[i]);
+        free(polys);
+        if (gen_name) free(gen_name);
+        fq_nmod_ctx_clear(ctx);
+        return 0;
+    }
+    polys_str[0] = '\0';
+    for (slong i = 0; i < npolys; i++) {
+        if (i > 0) strcat(polys_str, ", ");
+        strcat(polys_str, poly_strs[i]);
+    }
+
+    for (slong i = 0; i < npolys; i++) free(poly_strs[i]);
+    free(poly_strs);
+    for (slong i = 0; i < npolys; i++) fq_mvpoly_clear(&polys[i]);
+    free(polys);
+    if (gen_name) free(gen_name);
+    fq_nmod_ctx_clear(ctx);
+
+    *polys_str_out = polys_str;
+    return 1;
+}
+
+static char *dtest_compute_subres_resultant_str(const char *polys_str,
+                                                const char *vars_str,
+                                                const fq_nmod_ctx_t ctx)
+{
+    slong num_polys = 0, num_vars = 0;
+    char **poly_array = split_string(polys_str, &num_polys);
+    char **vars_array = split_string(vars_str, &num_vars);
+    char *result = NULL;
+
+    if (num_polys == 2 && num_vars == 1) {
+        result = bivariate_resultant(poly_array[0], poly_array[1], vars_array[0], ctx);
+    }
+
+    free_split_strings(poly_array, num_polys);
+    free_split_strings(vars_array, num_vars);
+    return result;
+}
+
+static int dtest_verify_polynomial_solver_solutions(const char *polys_str,
+                                                    polynomial_solutions_t *sols)
+{
+    (void) polys_str;
+
+    if (!sols || !sols->is_valid)
+        return 0;
+    if (sols->has_no_solutions == 1)
+        return 1;
+    if (sols->has_no_solutions == -1)
+        return 0;
+
+    return sols->num_solution_sets > 0 &&
+           sols->checked_solution_sets == sols->num_solution_sets &&
+           sols->verified_solution_sets == sols->num_solution_sets;
+}
+
+static int dtest_verify_large_prime_solutions(const char *polys_str,
+                                              large_prime_solutions_t *sols)
+{
+    (void) polys_str;
+
+    if (!sols || !sols->is_valid)
+        return 0;
+    if (sols->has_no_solutions == 1)
+        return 1;
+    if (sols->has_no_solutions == -1)
+        return 0;
+
+    if (sols->num_solution_sets <= 0)
+        return 0;
+
+    if (!sols->solution_verified)
+        return 0;
+
+    for (slong set = 0; set < sols->num_solution_sets; set++) {
+        if (!sols->solution_verified[set])
+            return 0;
+    }
+    return 1;
+}
 
 // ============= DEGREE CHECKING FUNCTIONS =============
 
@@ -405,14 +939,19 @@ void generate_random_polynomial(fq_mvpoly_t *poly, slong nvars, slong npars,
     slong total_monomials;
     enumerate_all_monomials(&all_monomials, &total_monomials, total_indeterminates, max_degree);
     
-    printf("    Total possible monomials: %ld\n", total_monomials);
+    if (!g_bezout_test_quiet_mode) {
+        printf("    Total possible monomials: %ld\n", total_monomials);
+    }
     
     // Calculate target number of terms
     slong target_terms = (slong)(density_ratio * total_monomials);
     if (target_terms < 1) target_terms = 1;
     if (target_terms > total_monomials) target_terms = total_monomials;
     
-    printf("    Target terms: %ld (%.1f%% density)\n", target_terms, (double)target_terms / total_monomials * 100);
+    if (!g_bezout_test_quiet_mode) {
+        printf("    Target terms: %ld (%.1f%% density)\n", target_terms,
+               (double) target_terms / total_monomials * 100);
+    }
     
     // Shuffle the monomial array to randomize selection
     for (slong i = total_monomials - 1; i > 0; i--) {
@@ -483,8 +1022,11 @@ void generate_random_polynomial(fq_mvpoly_t *poly, slong nvars, slong npars,
     }
     free(all_monomials);
     
-    printf("    Generated polynomial with %ld terms (target: %ld, achieved density: %.1f%%)\n", 
-           poly->nterms, target_terms, (double)poly->nterms / total_monomials * 100);
+    if (!g_bezout_test_quiet_mode) {
+        printf("    Generated polynomial with %ld terms (target: %ld, achieved density: %.1f%%)\n",
+               poly->nterms, target_terms,
+               (double) poly->nterms / total_monomials * 100);
+    }
 }
 
 // Generate polynomial system with specified degrees and density
@@ -635,6 +1177,46 @@ void test_dixon_system(const char *test_name, slong nvars, slong npars,
     fq_nmod_ctx_clear(ctx);
 }
 
+static void test_dixon_system_quiet(const char *test_name, slong nvars, slong npars,
+                                    ulong p, slong field_degree, const slong *degrees,
+                                    slong npolys, double density_ratio, flint_rand_t state,
+                                    int test_case_index) {
+    fq_nmod_ctx_t ctx;
+    fmpz_t p_fmpz;
+    fq_mvpoly_t *polys;
+    fq_mvpoly_t result;
+    slong resultant_degree;
+    int algo_type;
+    int saved_verbose_level = g_dixon_verbose_level;
+    int saved_debug_mode = g_dixon_debug_mode;
+
+    fmpz_init(p_fmpz);
+    fmpz_set_ui(p_fmpz, p);
+    fq_nmod_ctx_init(ctx, p_fmpz, field_degree, "t");
+    fmpz_clear(p_fmpz);
+
+    generate_polynomial_system(&polys, nvars, npolys, npars,
+                               degrees, density_ratio, ctx, state);
+
+    g_dixon_verbose_level = 0;
+    g_dixon_debug_mode = 0;
+    fq_dixon_resultant(&result, polys, nvars, npars);
+    g_dixon_verbose_level = saved_verbose_level;
+    g_dixon_debug_mode = saved_debug_mode;
+
+    resultant_degree = fq_mvpoly_max_total_degree(&result);
+    algo_type = (g_matrix_transpose_threshold == 0) ? 0 : 1;
+    add_degree_check_result(test_name, nvars, npars, npolys, degrees,
+                            resultant_degree, algo_type, test_case_index);
+
+    fq_mvpoly_clear(&result);
+    for (slong i = 0; i < npolys; i++) {
+        fq_mvpoly_clear(&polys[i]);
+    }
+    free(polys);
+    fq_nmod_ctx_clear(ctx);
+}
+
 void test_xhash() {
     printf("=== Prime Field Polynomial System Dixon Resultant Implementation ===\n\n");    
     const char *ideal = "x7^3 = -19561*x4^3 + 2061*x4^2*x5 + 25073*x4^2*x6 + 19787*x4^2 + 779*x4*x5^2 + 31516*x4*x5*x6 - 17049*x4*x5 + 9065*x4*x6^2 - 14413*x4*x6 - 9964*x4 + 24021*x5^3 - 31858*x5^2*x6 - 20667*x5^2 - 19224*x5*x6^2 - 15430*x5*x6 + 19731*x5 + 31617*x6^3 + 6653*x6^2 - 13781*x6 - 15782,\
@@ -686,6 +1268,285 @@ void test_xhash() {
     printf("\n=== Computation Complete ===\n");
 } 
 
+int test_polynomial_solver_correctness(void)
+{
+    static const solver_degree_case_t degree_cases[] = {
+        {"[5]*2", 2, 2, {5, 5, 0, 0}},
+        {"[3]*3", 3, 3, {3, 3, 3, 0}},
+        {"[2]*4", 4, 4, {2, 2, 2, 2}},
+        {"[2,3,4]", 3, 3, {2, 3, 4, 0}}
+    };
+    static const solver_field_case_t field_cases[] = {
+        {"17", 0, 0, 17, 1, NULL, "t", NULL},
+        {"65537", 0, 0, 65537, 1, NULL, "t", NULL},
+        {"2^8", 0, 0, 2, 8, NULL, "t", NULL},
+        {"18446744073709551629", 0, 1, 0, 1, NULL, "t", "18446744073709551629"}
+    };
+    const slong repetitions = 8;
+    const double density_ratio = 1.0;
+    solver_correctness_stats_t stats[4][4];
+    slong total_cases = 0;
+    slong total_passed = 0;
+    slong total_no_solution = 0;
+    slong total_failed = 0;
+
+    memset(stats, 0, sizeof(stats));
+
+    printf("=== Polynomial Solver Correctness Test ===\n\n");
+    printf("Random systems per combination: %ld\n", repetitions);
+    printf("Degree sets: 4\n");
+    printf("Fields: 4\n");
+    printf("Total cases: %ld\n\n", (slong) (4 * 4 * repetitions));
+
+    for (slong d = 0; d < 4; d++) {
+        const solver_degree_case_t *deg_case = &degree_cases[d];
+        for (slong f = 0; f < 4; f++) {
+            const solver_field_case_t *field = &field_cases[f];
+
+            printf("[%ld/%ld] %s over %s\n",
+                   (slong) (d * 4 + f + 1), (slong) 16,
+                   deg_case->label, field->label);
+
+            for (slong rep = 0; rep < repetitions; rep++) {
+                char *polys_str = NULL;
+                ulong seed = 1000003UL + (ulong) (d * 1000 + f * 100 + rep);
+
+                printf("  Progress %ld/%ld\r", total_cases + 1, (slong) (4 * 4 * repetitions));
+                fflush(stdout);
+
+                total_cases++;
+                if (!dtest_generate_random_system_string(field,
+                                                        deg_case->degrees,
+                                                        deg_case->npolys,
+                                                        deg_case->nvars,
+                                                        density_ratio,
+                                                        seed,
+                                                        &polys_str)) {
+                    stats[d][f].failed_cases++;
+                    total_failed++;
+                    continue;
+                }
+
+                if (field->large_prime_mode) {
+                    large_prime_solutions_t *sols;
+                    fmpz_t prime;
+                    int ok;
+                    int saved_stdout = -1;
+                    int saved_stderr = -1;
+
+                    fmpz_init(prime);
+                    if (fmpz_set_str(prime, field->prime_str, 10) != 0) {
+                        fmpz_clear(prime);
+                        free(polys_str);
+                        stats[d][f].failed_cases++;
+                        total_failed++;
+                        continue;
+                    }
+
+                    large_prime_solver_set_realtime_progress(0);
+                    dtest_redirect_fd_to_devnull(STDOUT_FILENO, &saved_stdout);
+                    dtest_redirect_fd_to_devnull(STDERR_FILENO, &saved_stderr);
+                    sols = solve_large_prime_polynomial_system_string(polys_str, prime);
+                    dtest_restore_fd(STDOUT_FILENO, saved_stdout);
+                    dtest_restore_fd(STDERR_FILENO, saved_stderr);
+                    fmpz_clear(prime);
+
+                    ok = dtest_verify_large_prime_solutions(polys_str, sols);
+                    if (!sols || !sols->is_valid || sols->has_no_solutions == -1 || !ok) {
+                        stats[d][f].failed_cases++;
+                        total_failed++;
+                    } else if (sols->has_no_solutions || sols->num_solution_sets == 0) {
+                        stats[d][f].no_solution_cases++;
+                        total_no_solution++;
+                    } else {
+                        stats[d][f].passed_cases++;
+                        total_passed++;
+                    }
+
+                    if (sols) {
+                        large_prime_solutions_clear(sols);
+                        free(sols);
+                    }
+                } else {
+                    polynomial_solutions_t *sols;
+                    fq_nmod_ctx_t ctx;
+                    fmpz_t p;
+                    int ok;
+                    int saved_stdout = -1;
+                    int saved_stderr = -1;
+
+                    fmpz_init_set_ui(p, field->prime_ui);
+                    fq_nmod_ctx_init(ctx, p, field->power, field->generator ? field->generator : "t");
+                    fmpz_clear(p);
+
+                    polynomial_solver_set_realtime_progress(0);
+                    polynomial_solver_set_internal_trace(0);
+                    dtest_redirect_fd_to_devnull(STDOUT_FILENO, &saved_stdout);
+                    dtest_redirect_fd_to_devnull(STDERR_FILENO, &saved_stderr);
+                    sols = solve_polynomial_system_string(polys_str, ctx);
+                    dtest_restore_fd(STDOUT_FILENO, saved_stdout);
+                    dtest_restore_fd(STDERR_FILENO, saved_stderr);
+
+                    ok = dtest_verify_polynomial_solver_solutions(polys_str, sols);
+                    if (!sols || !sols->is_valid || sols->has_no_solutions == -1 || !ok) {
+                        stats[d][f].failed_cases++;
+                        total_failed++;
+                    } else if (sols->has_no_solutions || sols->num_solution_sets == 0) {
+                        stats[d][f].no_solution_cases++;
+                        total_no_solution++;
+                    } else {
+                        stats[d][f].passed_cases++;
+                        total_passed++;
+                    }
+
+                    if (sols) {
+                        polynomial_solutions_clear(sols);
+                        free(sols);
+                    }
+                    fq_nmod_ctx_clear(ctx);
+                }
+
+                free(polys_str);
+            }
+
+            printf("  Result: passed=%ld, failed=%ld, no-solution=%ld\n",
+                   stats[d][f].passed_cases,
+                   stats[d][f].failed_cases,
+                   stats[d][f].no_solution_cases);
+        }
+    }
+
+    printf("Summary by degree/field combination:\n");
+    for (slong d = 0; d < 4; d++) {
+        for (slong f = 0; f < 4; f++) {
+            printf("  %s over %s: passed=%ld, failed=%ld, no-solution=%ld\n",
+                   degree_cases[d].label,
+                   field_cases[f].label,
+                   stats[d][f].passed_cases,
+                   stats[d][f].failed_cases,
+                   stats[d][f].no_solution_cases);
+        }
+    }
+
+    printf("\nOverall: passed=%ld, failed=%ld, no-solution=%ld, total=%ld\n",
+           total_passed, total_failed, total_no_solution, total_cases);
+
+    return (total_failed == 0) ? 0 : 1;
+}
+
+int test_polynomial_solver_performance(void)
+{
+    static const solver_degree_case_t perf_cases[] = {
+        {"2 vars deg 8", 2, 2, {8, 8, 0, 0, 0, 0, 0, 0}},
+        {"2 vars deg 16", 2, 2, {16, 16, 0, 0, 0, 0, 0, 0}},
+        {"2 vars deg 32", 2, 2, {32, 32, 0, 0, 0, 0, 0, 0}},
+        {"2 vars deg 64", 2, 2, {64, 64, 0, 0, 0, 0, 0, 0}},
+        {"2 vars deg 128", 2, 2, {128, 128, 0, 0, 0, 0, 0, 0}},
+        {"3 vars deg 4", 3, 3, {4, 4, 4, 0, 0, 0, 0, 0}},
+        {"3 vars deg 8", 3, 3, {8, 8, 8, 0, 0, 0, 0, 0}},
+        {"3 vars deg 12", 3, 3, {12, 12, 12, 0, 0, 0, 0, 0}},
+        {"3 vars deg 16", 3, 3, {16, 16, 16, 0, 0, 0, 0, 0}},
+        {"4 vars deg 3", 4, 4, {3, 3, 3, 3, 0, 0, 0, 0}},
+        {"4 vars deg 4", 4, 4, {4, 4, 4, 4, 0, 0, 0, 0}},
+        {"4 vars deg 5", 4, 4, {5, 5, 5, 5, 0, 0, 0, 0}},
+        {"4 vars deg 6", 4, 4, {6, 6, 6, 6, 0, 0, 0, 0}},
+        {"5 vars deg 2", 5, 5, {2, 2, 2, 2, 2, 0, 0, 0}},
+        {"5 vars deg 3", 5, 5, {3, 3, 3, 3, 3, 0, 0, 0}},
+        {"5 vars deg 4", 5, 5, {4, 4, 4, 4, 4, 0, 0, 0}},
+        {"6 vars deg 2", 6, 6, {2, 2, 2, 2, 2, 2, 0, 0}},
+        {"6 vars deg 3", 6, 6, {3, 3, 3, 3, 3, 3, 0, 0}},
+        {"7 vars deg 2", 7, 7, {2, 2, 2, 2, 2, 2, 2, 0}},
+        {"8 vars deg 2", 8, 8, {2, 2, 2, 2, 2, 2, 2, 2}}
+    };
+    const solver_field_case_t field = {"65537", 0, 0, 65537, 1, NULL, "t", NULL};
+    const slong total_cases = (slong) (sizeof(perf_cases) / sizeof(perf_cases[0]));
+    double total_seconds = 0.0;
+
+    printf("=== Resultant Performance Test ===\n\n");
+    printf("Field: 65537\n");
+    printf("Total cases: %ld\n\n", total_cases);
+
+    for (slong i = 0; i < total_cases; i++) {
+        const solver_degree_case_t *test = &perf_cases[i];
+        char *polys_str = NULL;
+        char *elim_vars = NULL;
+        char *all_vars = NULL;
+        char *result = NULL;
+        fq_nmod_ctx_t ctx;
+        fmpz_t p;
+        int saved_stdout = -1;
+        int saved_stderr = -1;
+        struct timespec start;
+        struct timespec end;
+        double elapsed;
+        ulong seed = 2000003UL + (ulong) i;
+        const char *status = "failed";
+
+        printf("[%ld/%ld] %s ... ", i + 1, total_cases, test->label);
+        fflush(stdout);
+
+        if (!dtest_generate_random_system_string(&field,
+                                                test->degrees,
+                                                test->npolys,
+                                                test->nvars,
+                                                1.0,
+                                                seed,
+                                                &polys_str)) {
+            printf("generation failed\n");
+            continue;
+        }
+
+        if (!dtest_build_random_system_strings(test->nvars, test->npolys - 1,
+                                               &elim_vars, &all_vars)) {
+            free(polys_str);
+            printf("elim-vars failed\n");
+            continue;
+        }
+
+        fmpz_init_set_ui(p, field.prime_ui);
+        fq_nmod_ctx_init(ctx, p, field.power, field.generator);
+        fmpz_clear(p);
+
+        dtest_redirect_fd_to_devnull(STDOUT_FILENO, &saved_stdout);
+        dtest_redirect_fd_to_devnull(STDERR_FILENO, &saved_stderr);
+        clock_gettime(CLOCK_MONOTONIC, &start);
+        if (test->npolys == 2) {
+            result = dtest_compute_subres_resultant_str(polys_str, elim_vars, ctx);
+        } else {
+            resultant_method_t saved_method = g_resultant_method;
+            if (test->npolys == 3) {
+                g_resultant_method = RESULTANT_METHOD_DIXON_RECURSIVE;
+            } else {
+                g_resultant_method = RESULTANT_METHOD_DIXON;
+            }
+            result = dixon_str(polys_str, elim_vars, ctx);
+            g_resultant_method = saved_method;
+        }
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        dtest_restore_fd(STDOUT_FILENO, saved_stdout);
+        dtest_restore_fd(STDERR_FILENO, saved_stderr);
+
+        elapsed = (double) (end.tv_sec - start.tv_sec) +
+                  (double) (end.tv_nsec - start.tv_nsec) / 1000000000.0;
+        total_seconds += elapsed;
+
+        if (result) {
+            status = "success";
+        }
+
+        printf("%.3f s [%s]\n", elapsed, status);
+
+        free(result);
+        free(elim_vars);
+        free(all_vars);
+        fq_nmod_ctx_clear(ctx);
+        free(polys_str);
+    }
+
+    printf("\nTotal time: %.3f s\n", total_seconds);
+    return 0;
+}
+
 // Main test function with algorithm comparison
 int test_bezout_bound() {
     // Initialize random state
@@ -698,7 +1559,7 @@ int test_bezout_bound() {
     printf("=================================================\n");
     
     // Test configurations
-    const int num_reps = 20;
+    const int num_reps = 200;
     
     // Define test cases
     typedef struct {
@@ -718,6 +1579,44 @@ int test_bezout_bound() {
         {"Mixed quadratic-cubic with parameters (2,2,3,3)", 3, 2, 4, {2, 2, 3, 3}, 0.8}
     };
     int num_test_cases = 5;
+
+    {
+        int total_runs = 2 * num_reps * num_test_cases;
+        int run_index = 0;
+
+        g_bezout_test_quiet_mode = 1;
+
+        for (int algo = 0; algo <= 1; algo++) {
+            if (algo == 0) {
+                g_matrix_transpose_threshold = 0;
+                printf("\n[Algorithm 1/2] Traditional Max-Rank Submatrix Extraction\n");
+            } else {
+                g_matrix_transpose_threshold = 1000;
+                printf("\n[Algorithm 2/2] Degree-Optimal Submatrix Selection\n");
+            }
+
+            for (int rep = 0; rep < num_reps; rep++) {
+                printf("  Repetition %d/%d\n", rep + 1, num_reps);
+
+                for (int tc = 0; tc < num_test_cases; tc++) {
+                    test_case_t *test = &test_cases[tc];
+                    run_index++;
+                    printf("    Progress %d/%d: %s\n", run_index, total_runs, test->name);
+                    test_dixon_system_quiet(test->name, test->nvars, test->npars,
+                                           65537, 1, test->degrees, test->npolys,
+                                           test->density, state, tc);
+                }
+            }
+        }
+
+        g_bezout_test_quiet_mode = 0;
+        printf("\nAll test runs completed. Final summary:\n");
+        print_degree_check_summary();
+        cleanup_degree_check_results();
+        flint_rand_clear(state);
+        flint_cleanup();
+        return 0;
+    }
     
     // Run tests for both algorithms
     for (int algo = 0; algo <= 1; algo++) {
@@ -886,7 +1785,11 @@ void print_test_menu() {
     printf("\n");
     printf("  2 - Bezout Bound Verification\n");
     printf("\n");
-    printf("  3 - XHash Example System\n");
+    printf("  3 - Polynomial Solver Correctness\n");
+    printf("\n");
+    printf("  4 - Resultant Performance\n");
+    printf("\n");
+    printf("  5 - XHash Example System\n");
     printf("\n");
     printf("─────────────────────────────────────────────────────────────────────────────\n");
 }
@@ -910,13 +1813,23 @@ void test_dixon(int test_mode){
             break;
             
         case 3:
+            printf("\n>>> Running Polynomial Solver Correctness Test <<<\n");
+            test_polynomial_solver_correctness();
+            break;
+
+        case 4:
+            printf("\n>>> Running Resultant Performance Test <<<\n");
+            test_polynomial_solver_performance();
+            break;
+
+        case 5:
             printf("\n>>> Running XHash Example System <<<\n");
             test_xhash();
             break;
             
         default:
             printf("\n>>> Error: Invalid test mode %d <<<\n", test_mode);
-            printf("Valid modes: 0 (help), 1 (Test Dixon Matrix Sizes), 2 (Bezout bound), 3 (XHash)\n");
+            printf("Valid modes: 0 (help), 1 (Test Dixon Matrix Sizes), 2 (Bezout bound), 3 (Polynomial solver correctness), 4 (Resultant performance), 5 (XHash)\n");
             printf("Run with mode 0 to see detailed descriptions.\n");
             break;
     }

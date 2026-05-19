@@ -52,6 +52,34 @@ typedef struct {
     int ok;
 } lp_univar_parser_t;
 
+typedef struct {
+    fmpz_t coeff;
+    slong *exponents;
+} lp_mod_term_t;
+
+static void lp_fmpz_mod_pow_si(fmpz_t result, const fmpz_t base, long exponent, const fmpz_mod_ctx_t ctx);
+static int lp_append_buffer_text(char **buffer, size_t *capacity, size_t *length, const char *text);
+static int lp_append_buffer_char(char **buffer, size_t *capacity, size_t *length, char ch);
+
+static void lp_mod_term_clear(lp_mod_term_t *term)
+{
+    if (!term)
+        return;
+
+    fmpz_clear(term->coeff);
+    free(term->exponents);
+    term->exponents = NULL;
+}
+
+static int lp_same_exponents(const slong *a, const slong *b, slong n)
+{
+    for (slong i = 0; i < n; i++) {
+        if (a[i] != b[i])
+            return 0;
+    }
+    return 1;
+}
+
 static int large_prime_solver_realtime_progress_enabled = 0;
 
 static void lp_progress(const char *fmt, ...)
@@ -96,6 +124,7 @@ static void lp_solutions_init(large_prime_solutions_t *sols, slong num_vars, con
     sols->num_equations = 0;
     sols->variable_names = (char **) calloc((size_t) (num_vars > 0 ? num_vars : 1), sizeof(char *));
     sols->solution_values = NULL;
+    sols->solution_verified = NULL;
     sols->is_valid = 0;
     sols->has_no_solutions = 0;
     sols->error_message = NULL;
@@ -191,6 +220,345 @@ static int lp_lookup_eval_variable(lp_eval_parser_t *parser, const char *name, s
     }
     parser->ok = 0;
     return 0;
+}
+
+static slong lp_lookup_variable_index_by_name(rational_variable_info_t *vars,
+                                             slong num_vars,
+                                             const char *name,
+                                             size_t len)
+{
+    for (slong i = 0; i < num_vars; i++) {
+        if (strlen(vars[i].name) == len && strncmp(vars[i].name, name, len) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static int lp_realign_variable_indices(rational_variable_info_t *vars,
+                                       slong num_vars,
+                                       rational_variable_info_t *original_vars,
+                                       slong num_original_vars)
+{
+    for (slong i = 0; i < num_vars; i++) {
+        int found = 0;
+        for (slong j = 0; j < num_original_vars; j++) {
+            if (strcmp(vars[i].name, original_vars[j].name) == 0) {
+                vars[i].index = original_vars[j].index;
+                found = 1;
+                break;
+            }
+        }
+        if (!found)
+            return 0;
+    }
+    return 1;
+}
+
+static void lp_debug_print_var_list(const char *label,
+                                    rational_variable_info_t *vars,
+                                    slong num_vars)
+{
+    if (!large_prime_solver_realtime_progress_enabled)
+        return;
+
+    fprintf(stderr, "Progress: %s", label ? label : "vars");
+    if (!vars || num_vars <= 0) {
+        fprintf(stderr, " (none)\n");
+        return;
+    }
+
+    fprintf(stderr, " ");
+    for (slong i = 0; i < num_vars; i++) {
+        if (i > 0) fprintf(stderr, ", ");
+        fprintf(stderr, "%s[idx=%ld]", vars[i].name, vars[i].index);
+    }
+    fprintf(stderr, "\n");
+}
+
+static int lp_parse_nonnegative_integer_literal(const char **cursor, fmpz_t value)
+{
+    const char *start = *cursor;
+    char *buf;
+    size_t len;
+
+    while (**cursor && isspace((unsigned char) **cursor))
+        (*cursor)++;
+
+    if (!isdigit((unsigned char) **cursor))
+        return 0;
+
+    while (isdigit((unsigned char) **cursor))
+        (*cursor)++;
+
+    len = (size_t) (*cursor - start);
+    buf = (char *) malloc(len + 1);
+    if (!buf)
+        return 0;
+
+    memcpy(buf, start, len);
+    buf[len] = '\0';
+    if (fmpz_set_str(value, buf, 10) != 0) {
+        free(buf);
+        return 0;
+    }
+    free(buf);
+    return 1;
+}
+
+static char *lp_simplify_polynomial_mod_prime(const char *poly_str,
+                                              rational_variable_info_t *vars,
+                                              slong num_vars,
+                                              const fmpz_mod_ctx_t ctx)
+{
+    const char *ptr = poly_str;
+    lp_mod_term_t *terms = NULL;
+    slong num_terms = 0;
+    slong alloc_terms = 0;
+    char *out = NULL;
+    size_t out_cap = 0;
+    size_t out_len = 0;
+
+    while (1) {
+        fmpz_t coeff, factor, pow_result;
+        slong *exponents = NULL;
+        int sign = 1;
+        int parsed_any_factor = 0;
+        int ok = 1;
+
+        while (*ptr && isspace((unsigned char) *ptr)) ptr++;
+        if (*ptr == '\0')
+            break;
+
+        if (*ptr == '+') {
+            ptr++;
+        } else if (*ptr == '-') {
+            sign = -1;
+            ptr++;
+        }
+
+        fmpz_init(coeff);
+        fmpz_init(factor);
+        fmpz_init(pow_result);
+        fmpz_set_ui(coeff, 1);
+
+        exponents = (slong *) calloc((size_t) (num_vars > 0 ? num_vars : 1), sizeof(slong));
+        if (!exponents) {
+            ok = 0;
+        }
+
+        while (ok) {
+            long exponent = 1;
+            slong var_index = -1;
+            int is_numeric = 0;
+            int has_var = 0;
+
+            while (*ptr && isspace((unsigned char) *ptr)) ptr++;
+            if (*ptr == '*') {
+                ptr++;
+                continue;
+            }
+            if (*ptr == '\0' || *ptr == '+' || *ptr == '-')
+                break;
+
+            if (*ptr == '(') {
+                const char *inner = ptr + 1;
+                while (*inner && isspace((unsigned char) *inner)) inner++;
+                if (!isdigit((unsigned char) *inner)) {
+                    ok = 0;
+                    break;
+                }
+                if (!lp_parse_nonnegative_integer_literal(&inner, factor)) {
+                    ok = 0;
+                    break;
+                }
+                while (*inner && isspace((unsigned char) *inner)) inner++;
+                if (*inner != ')') {
+                    ok = 0;
+                    break;
+                }
+                ptr = inner + 1;
+                is_numeric = 1;
+            } else if (isdigit((unsigned char) *ptr)) {
+                if (!lp_parse_nonnegative_integer_literal(&ptr, factor)) {
+                    ok = 0;
+                    break;
+                }
+                is_numeric = 1;
+            } else if (isalpha((unsigned char) *ptr) || *ptr == '_') {
+                const char *start = ptr;
+                while (lp_is_identifier_char(*ptr)) ptr++;
+                var_index = lp_lookup_variable_index_by_name(vars, num_vars, start, (size_t) (ptr - start));
+                if (var_index < 0) {
+                    ok = 0;
+                    break;
+                }
+                has_var = 1;
+            } else {
+                ok = 0;
+                break;
+            }
+
+            while (*ptr && isspace((unsigned char) *ptr)) ptr++;
+            if (*ptr == '^') {
+                char *endptr = NULL;
+                ptr++;
+                while (*ptr && isspace((unsigned char) *ptr)) ptr++;
+                exponent = strtol(ptr, &endptr, 10);
+                if (endptr == ptr || exponent < 0) {
+                    ok = 0;
+                    break;
+                }
+                ptr = endptr;
+            }
+
+            if (is_numeric) {
+                fmpz_mod_set_fmpz(factor, factor, ctx);
+                lp_fmpz_mod_pow_si(pow_result, factor, exponent, ctx);
+                fmpz_mod_mul(coeff, coeff, pow_result, ctx);
+            } else if (has_var) {
+                exponents[var_index] += (slong) exponent;
+            }
+
+            parsed_any_factor = 1;
+        }
+
+        if (!ok || !parsed_any_factor) {
+            if (large_prime_solver_realtime_progress_enabled) {
+                fprintf(stderr, "Progress: mod-prime simplify fallback on: %s\n",
+                        poly_str ? poly_str : "<null>");
+            }
+            for (slong i = 0; i < num_terms; i++)
+                lp_mod_term_clear(&terms[i]);
+            free(terms);
+            free(out);
+            free(exponents);
+            fmpz_clear(pow_result);
+            fmpz_clear(factor);
+            fmpz_clear(coeff);
+            return strdup(poly_str);
+        }
+
+        if (sign < 0)
+            fmpz_mod_neg(coeff, coeff, ctx);
+
+        if (!fmpz_is_zero(coeff)) {
+            slong found = -1;
+
+            for (slong i = 0; i < num_terms; i++) {
+                if (lp_same_exponents(terms[i].exponents, exponents, num_vars)) {
+                    found = i;
+                    break;
+                }
+            }
+
+            if (found >= 0) {
+                fmpz_mod_add(terms[found].coeff, terms[found].coeff, coeff, ctx);
+                free(exponents);
+            } else {
+                lp_mod_term_t *new_terms;
+
+                if (num_terms >= alloc_terms) {
+                    slong new_alloc = (alloc_terms == 0) ? 8 : 2 * alloc_terms;
+                    new_terms = (lp_mod_term_t *) realloc(terms, (size_t) new_alloc * sizeof(lp_mod_term_t));
+                    if (!new_terms) {
+                        for (slong i = 0; i < num_terms; i++)
+                            lp_mod_term_clear(&terms[i]);
+                        free(terms);
+                        free(out);
+                        free(exponents);
+                        fmpz_clear(pow_result);
+                        fmpz_clear(factor);
+                        fmpz_clear(coeff);
+                        return NULL;
+                    }
+                    terms = new_terms;
+                    alloc_terms = new_alloc;
+                }
+
+                fmpz_init(terms[num_terms].coeff);
+                fmpz_set(terms[num_terms].coeff, coeff);
+                terms[num_terms].exponents = exponents;
+                num_terms++;
+            }
+        }
+
+        fmpz_clear(pow_result);
+        fmpz_clear(factor);
+        fmpz_clear(coeff);
+    }
+
+    for (slong t = 0; t < num_terms; t++) {
+        char *coeff_str;
+        int has_var = 0;
+
+        if (fmpz_is_zero(terms[t].coeff))
+            continue;
+
+        coeff_str = fmpz_get_str(NULL, 10, terms[t].coeff);
+        if (!coeff_str) {
+            for (slong i = 0; i < num_terms; i++)
+                lp_mod_term_clear(&terms[i]);
+            free(terms);
+            free(out);
+            return NULL;
+        }
+
+        if (out_len > 0 && !lp_append_buffer_text(&out, &out_cap, &out_len, " + ")) {
+            flint_free(coeff_str);
+            for (slong i = 0; i < num_terms; i++)
+                lp_mod_term_clear(&terms[i]);
+            free(terms);
+            free(out);
+            return NULL;
+        }
+
+        if (!lp_append_buffer_text(&out, &out_cap, &out_len, coeff_str)) {
+            flint_free(coeff_str);
+            for (slong i = 0; i < num_terms; i++)
+                lp_mod_term_clear(&terms[i]);
+            free(terms);
+            free(out);
+            return NULL;
+        }
+        flint_free(coeff_str);
+
+        for (slong i = 0; i < num_vars; i++) {
+            char piece[128];
+            if (terms[t].exponents[i] == 0)
+                continue;
+            has_var = 1;
+            snprintf(piece, sizeof(piece), "*%s", vars[i].name);
+            if (!lp_append_buffer_text(&out, &out_cap, &out_len, piece)) {
+                for (slong j = 0; j < num_terms; j++)
+                    lp_mod_term_clear(&terms[j]);
+                free(terms);
+                free(out);
+                return NULL;
+            }
+            if (terms[t].exponents[i] != 1) {
+                snprintf(piece, sizeof(piece), "^%ld", terms[t].exponents[i]);
+                if (!lp_append_buffer_text(&out, &out_cap, &out_len, piece)) {
+                    for (slong j = 0; j < num_terms; j++)
+                        lp_mod_term_clear(&terms[j]);
+                    free(terms);
+                    free(out);
+                    return NULL;
+                }
+            }
+        }
+
+        (void) has_var;
+    }
+
+    for (slong i = 0; i < num_terms; i++)
+        lp_mod_term_clear(&terms[i]);
+    free(terms);
+
+    if (!out || out_len == 0) {
+        free(out);
+        return strdup("0");
+    }
+    return out;
 }
 
 static void lp_eval_expression(lp_eval_parser_t *parser, fmpz_t result);
@@ -452,38 +820,84 @@ static int lp_polynomial_is_probably_zero(const char *poly_str,
     return all_zero;
 }
 
+static int lp_append_buffer_text(char **buffer, size_t *capacity, size_t *length, const char *text)
+{
+    size_t text_len;
+    char *grown;
+
+    if (!buffer || !capacity || !length || !text)
+        return 0;
+
+    text_len = strlen(text);
+    if (*buffer == NULL || *capacity == 0) {
+        *capacity = text_len + 32;
+        *buffer = (char *) malloc(*capacity);
+        if (!*buffer)
+            return 0;
+        (*buffer)[0] = '\0';
+        *length = 0;
+    }
+
+    if (*length + text_len + 1 > *capacity) {
+        while (*length + text_len + 1 > *capacity) {
+            *capacity *= 2;
+        }
+        grown = (char *) realloc(*buffer, *capacity);
+        if (!grown)
+            return 0;
+        *buffer = grown;
+    }
+
+    memcpy(*buffer + *length, text, text_len + 1);
+    *length += text_len;
+    return 1;
+}
+
+static int lp_append_buffer_char(char **buffer, size_t *capacity, size_t *length, char ch)
+{
+    char text[2];
+    text[0] = ch;
+    text[1] = '\0';
+    return lp_append_buffer_text(buffer, capacity, length, text);
+}
+
 static char *lp_substitute_variable_in_polynomial(const char *poly_str, const char *var_name, const fmpz_t value)
 {
     char *value_str = fmpz_get_str(NULL, 10, value);
-    size_t value_len = value_str ? strlen(value_str) : 1;
-    size_t estimate = strlen(poly_str) + (value_len + 2) * 8 + 32;
     size_t var_len = strlen(var_name);
-    char *result = (char *) malloc(estimate);
+    char *result = NULL;
+    size_t capacity = 0;
+    size_t length = 0;
     const char *ptr = poly_str;
 
-    if (!result) {
-        if (value_str) flint_free(value_str);
+    if (!value_str)
         return NULL;
-    }
 
-    result[0] = '\0';
     while (*ptr) {
         if (strncmp(ptr, var_name, var_len) == 0 &&
             (ptr == poly_str || !lp_is_identifier_char(*(ptr - 1))) &&
             !lp_is_identifier_char(ptr[var_len])) {
-            strcat(result, "(");
-            strcat(result, value_str ? value_str : "0");
-            strcat(result, ")");
+            if (!lp_append_buffer_char(&result, &capacity, &length, '(') ||
+                !lp_append_buffer_text(&result, &capacity, &length, value_str) ||
+                !lp_append_buffer_char(&result, &capacity, &length, ')')) {
+                free(result);
+                flint_free(value_str);
+                return NULL;
+            }
             ptr += var_len;
         } else {
-            size_t len = strlen(result);
-            result[len] = *ptr;
-            result[len + 1] = '\0';
+            if (!lp_append_buffer_char(&result, &capacity, &length, *ptr)) {
+                free(result);
+                flint_free(value_str);
+                return NULL;
+            }
             ptr++;
         }
     }
 
-    if (value_str) flint_free(value_str);
+    flint_free(value_str);
+    if (!result)
+        return strdup("");
     return result;
 }
 
@@ -529,12 +943,15 @@ static int lp_duplicate_nonzero_equations(lp_solver_state_t *state,
 static int lp_reduce_system_by_root(lp_solver_state_t *state,
                                     char **poly_strings, slong num_polys,
                                     rational_variable_info_t *vars, slong num_vars,
+                                    const rational_variable_info_t *subst_var,
                                     const fmpz_t root,
                                     fmpz_t *current_values,
                                     char ***reduced_polys_out, slong *reduced_count_out)
 {
     char **reduced = (char **) calloc((size_t) (num_polys > 0 ? num_polys : 1), sizeof(char *));
+    rational_variable_info_t *remaining_vars = NULL;
     slong reduced_count = 0;
+    slong num_remaining = 0;
 
     *reduced_polys_out = NULL;
     *reduced_count_out = 0;
@@ -542,18 +959,56 @@ static int lp_reduce_system_by_root(lp_solver_state_t *state,
     if (!reduced)
         return 0;
 
+    if (num_vars > 1) {
+        remaining_vars = (rational_variable_info_t *) malloc((size_t) (num_vars - 1) * sizeof(rational_variable_info_t));
+        if (!remaining_vars) {
+            free(reduced);
+            return 0;
+        }
+
+        for (slong i = 0; i < num_vars; i++) {
+            if (&vars[i] == subst_var)
+                continue;
+            remaining_vars[num_remaining++] = vars[i];
+        }
+    }
+
     for (slong i = 0; i < num_polys; i++) {
-        char *substituted = lp_substitute_variable_in_polynomial(poly_strings[i], vars[0].name, root);
+        char *substituted = lp_substitute_variable_in_polynomial(poly_strings[i], subst_var->name, root);
+        char *simplified = NULL;
         int zero_status;
 
         if (!substituted) {
+            free(remaining_vars);
             lp_free_string_array(reduced, reduced_count);
             return 0;
         }
 
-        zero_status = lp_polynomial_is_probably_zero(substituted, state, vars + 1, num_vars - 1, current_values);
+        simplified = lp_simplify_polynomial_mod_prime(substituted,
+                                                      state->original_vars,
+                                                      state->num_original_vars,
+                                                      state->sols->ctx);
+        if (large_prime_solver_realtime_progress_enabled && i == 0) {
+            fprintf(stderr, "Progress: substituted polynomial: %s\n", substituted);
+            if (simplified) {
+                fprintf(stderr, "Progress: simplified polynomial: %s\n", simplified);
+            }
+        }
+        free(substituted);
+        substituted = simplified;
+
+        if (!substituted) {
+            free(remaining_vars);
+            lp_free_string_array(reduced, reduced_count);
+            return 0;
+        }
+
+        zero_status = lp_polynomial_is_probably_zero(substituted, state,
+                                                     remaining_vars, num_remaining,
+                                                     current_values);
         if (zero_status < 0) {
             free(substituted);
+            free(remaining_vars);
             lp_free_string_array(reduced, reduced_count);
             return 0;
         }
@@ -564,6 +1019,7 @@ static int lp_reduce_system_by_root(lp_solver_state_t *state,
         }
     }
 
+    free(remaining_vars);
     *reduced_polys_out = reduced;
     *reduced_count_out = reduced_count;
     return 1;
@@ -602,7 +1058,7 @@ static int lp_join_elimination_vars(rational_variable_info_t *vars, slong num_va
 
     *joined_out = NULL;
 
-    for (slong i = 1; i < num_vars; i++)
+    for (slong i = 0; i < num_vars - 1; i++)
         total += strlen(vars[i].name) + 2;
 
     joined = (char *) malloc(total);
@@ -610,8 +1066,8 @@ static int lp_join_elimination_vars(rational_variable_info_t *vars, slong num_va
         return 0;
 
     joined[0] = '\0';
-    for (slong i = 1; i < num_vars; i++) {
-        if (i > 1)
+    for (slong i = 0; i < num_vars - 1; i++) {
+        if (i > 0)
             strcat(joined, ",");
         strcat(joined, vars[i].name);
     }
@@ -881,8 +1337,14 @@ static int lp_resultant_roots(const char *resultant_str,
     fmpz_mod_ctx_init(ctx, prime);
     fmpz_mod_poly_init(poly, ctx);
 
-    if (!lp_resultant_string_to_poly(resultant_str, var_name, prime, poly, ctx))
+    if (!lp_resultant_string_to_poly(resultant_str, var_name, prime, poly, ctx)) {
+        if (large_prime_solver_realtime_progress_enabled) {
+            fprintf(stderr, "Progress: failed to parse univariate polynomial in %s:\n%s\n",
+                    var_name ? var_name : "?",
+                    resultant_str ? resultant_str : "<null>");
+        }
         goto cleanup_poly;
+    }
 
     degree = fmpz_mod_poly_degree(poly, ctx);
     *degree_out = degree;
@@ -945,11 +1407,26 @@ static int lp_verify_full_assignment(lp_solver_state_t *state, fmpz_t *current_v
                                         current_values,
                                         state->sols->ctx,
                                         eval)) {
+            if (large_prime_solver_realtime_progress_enabled) {
+                fprintf(stderr, "Progress: final verification parse failed on equation %ld\n", i + 1);
+            }
             ok = 0;
             break;
         }
-        if (!fmpz_is_zero(eval))
+        if (!fmpz_is_zero(eval)) {
+            if (large_prime_solver_realtime_progress_enabled) {
+                fprintf(stderr, "Progress: final verification residual on equation %ld = ", i + 1);
+                fmpz_fprint(stderr, eval);
+                fprintf(stderr, " with assignment ");
+                for (slong v = 0; v < state->num_original_vars; v++) {
+                    if (v > 0) fprintf(stderr, ", ");
+                    fprintf(stderr, "%s=", state->original_vars[v].name);
+                    fmpz_fprint(stderr, current_values[state->original_vars[v].index]);
+                }
+                fprintf(stderr, "\n");
+            }
             ok = 0;
+        }
         if (!ok)
             break;
     }
@@ -961,6 +1438,7 @@ static int lp_append_current_solution(lp_solver_state_t *state, fmpz_t *current_
 {
     large_prime_solutions_t *sols = state->sols;
     fmpz_t **new_rows;
+    int *new_verified;
     slong idx;
 
     if (!lp_verify_full_assignment(state, current_values))
@@ -984,6 +1462,12 @@ static int lp_append_current_solution(lp_solver_state_t *state, fmpz_t *current_
         return 0;
     sols->solution_values = new_rows;
 
+    new_verified = (int *) realloc(sols->solution_verified,
+                                   (size_t) (sols->num_solution_sets + 1) * sizeof(int));
+    if (!new_verified)
+        return 0;
+    sols->solution_verified = new_verified;
+
     idx = sols->num_solution_sets++;
     sols->solution_values[idx] = (fmpz_t *) malloc((size_t) sols->num_variables * sizeof(fmpz_t));
     if (!sols->solution_values[idx])
@@ -993,6 +1477,7 @@ static int lp_append_current_solution(lp_solver_state_t *state, fmpz_t *current_
         fmpz_init(sols->solution_values[idx][v]);
         fmpz_set(sols->solution_values[idx][v], current_values[v]);
     }
+    sols->solution_verified[idx] = 1;
 
     lp_progress("Found solution set %ld", idx + 1);
     return 1;
@@ -1008,6 +1493,7 @@ static int lp_solve_recursive(lp_solver_state_t *state,
     int status = LP_SOLVE_NONE;
 
     lp_progress("large-prime recursion: vars=%ld polys=%ld", num_vars, num_polys);
+    lp_debug_print_var_list("active vars:", vars, num_vars);
 
     if (!lp_duplicate_nonzero_equations(state, poly_strings, num_polys,
                                         vars, num_vars, current_values,
@@ -1030,7 +1516,14 @@ static int lp_solve_recursive(lp_solver_state_t *state,
 
     if (num_vars == 0) {
         lp_free_string_array(active_polys, active_count);
-        return LP_SOLVE_NONE;
+        {
+            slong prev_count = state->sols->num_solution_sets;
+            if (!lp_append_current_solution(state, current_values)) {
+                lp_set_error(state->sols, "Failed to append a fully assigned large-prime solution");
+                return LP_SOLVE_ERROR;
+            }
+            return (state->sols->num_solution_sets > prev_count) ? LP_SOLVE_FOUND : LP_SOLVE_NONE;
+        }
     }
 
     if (active_count < num_vars) {
@@ -1076,6 +1569,7 @@ static int lp_solve_recursive(lp_solver_state_t *state,
             char *resultant = NULL;
             lp_root_list_t roots;
             slong resultant_degree = -1;
+            rational_variable_info_t *keep_var = vars + (num_vars - 1);
 
             if (!lp_join_strings_by_indices(active_polys,
                                             combinations[comb_idx].equation_indices,
@@ -1113,7 +1607,7 @@ static int lp_solve_recursive(lp_solver_state_t *state,
             }
 
             lp_root_list_init(&roots);
-            if (!lp_resultant_roots(resultant, vars[0].name, state->sols->prime, &roots, &resultant_degree)) {
+            if (!lp_resultant_roots(resultant, keep_var->name, state->sols->prime, &roots, &resultant_degree)) {
                 free(resultant);
                 lp_root_list_clear(&roots);
                 rational_free_equation_combinations(combinations, num_combinations);
@@ -1128,16 +1622,34 @@ static int lp_solve_recursive(lp_solver_state_t *state,
                 continue;
             }
 
-            lp_progress("Found %ld root(s) for %s", roots.count, vars[0].name);
+            lp_progress("Found %ld root(s) for %s", roots.count, keep_var->name);
 
             for (slong r = 0; r < roots.count; r++) {
                 char **reduced_polys = NULL;
                 slong reduced_count = 0;
+                rational_variable_info_t *reduced_vars = NULL;
+                slong reduced_num_vars = 0;
                 int sub_status;
+                slong prev_count;
 
-                fmpz_set(current_values[vars[0].index], roots.values[r]);
+                fmpz_set(current_values[keep_var->index], roots.values[r]);
 
-                if (!lp_reduce_system_by_root(state, active_polys, active_count, vars, num_vars,
+                if (num_vars == 1) {
+                    prev_count = state->sols->num_solution_sets;
+                    if (!lp_append_current_solution(state, current_values)) {
+                        lp_root_list_clear(&roots);
+                        rational_free_equation_combinations(combinations, num_combinations);
+                        lp_free_string_array(active_polys, active_count);
+                        lp_set_error(state->sols, "Failed to append a final large-prime solution");
+                        return LP_SOLVE_ERROR;
+                    }
+                    if (state->sols->num_solution_sets > prev_count)
+                        found_solution = 1;
+                    continue;
+                }
+
+                if (!lp_reduce_system_by_root(state, active_polys, active_count,
+                                             vars, num_vars, keep_var,
                                              roots.values[r], current_values,
                                              &reduced_polys, &reduced_count)) {
                     lp_root_list_clear(&roots);
@@ -1165,8 +1677,34 @@ static int lp_solve_recursive(lp_solver_state_t *state,
                     continue;
                 }
 
+                if (!rational_extract_and_sort_variables(reduced_polys, reduced_count,
+                                                        &reduced_vars, &reduced_num_vars)) {
+                    lp_free_string_array(reduced_polys, reduced_count);
+                    lp_root_list_clear(&roots);
+                    rational_free_equation_combinations(combinations, num_combinations);
+                    lp_free_string_array(active_polys, active_count);
+                    lp_set_error(state->sols, "Failed to extract variables from reduced large-prime subsystem");
+                    return LP_SOLVE_ERROR;
+                }
+                if (!lp_realign_variable_indices(reduced_vars, reduced_num_vars,
+                                                state->original_vars, state->num_original_vars)) {
+                    lp_free_rational_vars(reduced_vars, reduced_num_vars);
+                    lp_free_string_array(reduced_polys, reduced_count);
+                    lp_root_list_clear(&roots);
+                    rational_free_equation_combinations(combinations, num_combinations);
+                    lp_free_string_array(active_polys, active_count);
+                    lp_set_error(state->sols, "Failed to map reduced large-prime subsystem variables back to original indices");
+                    return LP_SOLVE_ERROR;
+                }
+
+                lp_debug_print_var_list("reduced vars:", reduced_vars, reduced_num_vars);
+                if (large_prime_solver_realtime_progress_enabled && reduced_count > 0) {
+                    fprintf(stderr, "Progress: first reduced polynomial: %s\n", reduced_polys[0]);
+                }
+
                 sub_status = lp_solve_recursive(state, reduced_polys, reduced_count,
-                                                vars + 1, num_vars - 1, current_values);
+                                                reduced_vars, reduced_num_vars, current_values);
+                lp_free_rational_vars(reduced_vars, reduced_num_vars);
                 lp_free_string_array(reduced_polys, reduced_count);
 
                 if (sub_status == LP_SOLVE_ERROR) {
@@ -1228,6 +1766,9 @@ void large_prime_solutions_clear(large_prime_solutions_t *sols)
         free(sols->solution_values);
     }
 
+    if (sols->solution_verified)
+        free(sols->solution_verified);
+
     if (sols->error_message)
         free(sols->error_message);
 
@@ -1268,6 +1809,8 @@ void print_large_prime_solutions(const large_prime_solutions_t *sols)
     for (slong s = 0; s < sols->num_solution_sets; s++) {
         printf("  Solution %ld: ", s + 1);
         lp_print_solution_row(stdout, sols, s);
+        if (sols->solution_verified && sols->solution_verified[s])
+            printf(" [pass]");
         printf("\n");
     }
 }
@@ -1307,6 +1850,8 @@ void save_large_prime_solver_result_to_file(const char *filename,
         for (slong s = 0; s < sols->num_solution_sets; s++) {
             fprintf(fp, "  Solution %ld: ", s + 1);
             lp_print_solution_row(fp, sols, s);
+            if (sols->solution_verified && sols->solution_verified[s])
+                fprintf(fp, " [pass]");
             fprintf(fp, "\n");
         }
     }
@@ -1450,8 +1995,9 @@ large_prime_solutions_t *solve_large_prime_polynomial_system_string(const char *
     sols->num_equations = num_polys;
 
     for (slong i = 0; i < num_vars; i++) {
-        sols->variable_names[i] = strdup(vars[i].name);
-        if (!sols->variable_names[i]) {
+        slong slot = vars[i].index;
+        sols->variable_names[slot] = strdup(vars[i].name);
+        if (!sols->variable_names[slot]) {
             lp_set_error(sols, "Out of memory while storing large-prime variable names");
             free_split_strings(poly_strings, num_polys);
             lp_free_rational_vars(vars, num_vars);

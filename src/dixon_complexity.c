@@ -1076,6 +1076,9 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     report->step1_direct_mpoly_split_log2 =
         ((num_polys > 0) ? (log2((double) num_polys) + (double) num_polys) : 0.0) +
         report->step1_direct_mpoly_mul_proxy_log2;
+    report->step1_bareiss_log2 =
+        ((num_polys > 1) ? (3.0 * log2((double) num_polys)) : 0.0) +
+        4.0 * report->det_size_log2;
 
     {
         long max_degree = 0;
@@ -1297,6 +1300,8 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         log2_add_exp(report->step1_direct_mpoly_log2, report->step4_log2);
     report->total_direct_mpoly_split_log2 =
         log2_add_exp(report->step1_direct_mpoly_split_log2, report->step4_log2);
+    report->total_bareiss_log2 =
+        log2_add_exp(report->step1_bareiss_log2, report->step4_log2);
     report->total_ordinary_log2 =
         log2_add_exp(report->step1_ordinary_interp_log2, report->step4_log2);
     report->total_hnf_log2 = log2_add_exp(report->step1_hnf_log2, report->step4_log2);
@@ -1402,6 +1407,10 @@ static double select_step1_best_method(const dixon_complexity_report_t *report,
     if (report->step1_direct_mpoly_split_log2 < best) {
         best = report->step1_direct_mpoly_split_log2;
         method = "direct multivariate (cached Laplace surrogate)";
+    }
+    if (report->step1_bareiss_log2 < best) {
+        best = report->step1_bareiss_log2;
+        method = "Bareiss";
     }
     if (report->step1_ordinary_interp_log2 < best) {
         best = report->step1_ordinary_interp_log2;
@@ -1550,6 +1559,15 @@ static void dixon_complexity_write_report_body(
                 num_polys,
                 ((num_polys > 0) ? (log2((double) num_polys) + (double) num_polys) : 0.0),
                 report->step1_direct_mpoly_mul_proxy_log2);
+    }
+    fprintf(fp, "Step 1 Bareiss determinant surrogate (n^3, log2): %.6f\n",
+            report->step1_bareiss_log2);
+    if (verbose_level >= 2) {
+        fprintf(fp, "  Formula: 3*log2(n) + log2(M^4), using n^3 fraction-free updates and M^4 as a worst-case product-size surrogate for intermediate Bareiss numerators/denominators\n");
+        fprintf(fp, "  Values : n=%ld, log2(n^3)=%.6f, log2(M^4)=%.6f\n",
+                num_polys,
+                ((num_polys > 1) ? (3.0 * log2((double) num_polys)) : 0.0),
+                4.0 * report->det_size_log2);
     }
     fprintf(fp, "Step 1 direct univariate after Kronecker (Leibniz/FFT, log2): %.6f\n",
             report->step1_direct_factorial_log2 + report->step1_direct_fft_log2);
@@ -1969,6 +1987,46 @@ static void dixon_complexity_write_report_body(
     if (report->num_parameter_vars == 1) {
         fprintf(fp, "FGLM estimate (log2): %.6f\n",
                 report->fglm_log2);
+    }
+    fprintf(fp, "Bareiss determinant surrogate (log2): %.6f\n",
+            report->step1_bareiss_log2);
+
+    if (verbose_level >= 2) {
+        fprintf(fp, "\n--- Space Complexity (Theoretical) ---\n");
+        fprintf(fp, "All bounds below are matrix/object counts on the log2 scale; the true byte cost is this factor times the peak intermediate polynomial size.\n");
+        fprintf(fp, "Step 1 direct multivariate cofactor expansion: log2 space ~= log2(n^2) + log2(M^2) = %.6f\n",
+                ((num_polys > 1) ? (2.0 * log2((double) num_polys)) : 0.0) +
+                2.0 * report->det_size_log2);
+        fprintf(fp, "Step 1 cached Laplace / minors DP (layered theoretical optimum): log2 space ~= log2(C(n,floor(n/2))) + log2(M^2) = %.6f\n",
+                log2_binomial_upper(num_polys, num_polys / 2) +
+                2.0 * report->det_size_log2);
+        fprintf(fp, "Step 1 Bareiss: log2 space ~= log2(n^2) + log2(M^4) = %.6f\n",
+                ((num_polys > 1) ? (2.0 * log2((double) num_polys)) : 0.0) +
+                4.0 * report->det_size_log2);
+        fprintf(fp, "Step 1 direct Kronecker / HNF backend: log2 space ~= log2(n^2) + log2(M^2) = %.6f\n",
+                ((num_polys > 1) ? (2.0 * log2((double) num_polys)) : 0.0) +
+                2.0 * report->det_size_log2);
+        fprintf(fp, "Step 1 ordinary dense interpolation: log2 black-box space ~= log2(n^2) + log2(M^2) = %.6f; add interpolation workspace depending on reconstruction strategy\n",
+                ((num_polys > 1) ? (2.0 * log2((double) num_polys)) : 0.0) +
+                2.0 * report->det_size_log2);
+        fprintf(fp, "Step 1 sparse interpolation: log2 black-box space ~= log2(n^2) + log2(M^2) = %.6f; add recovered-support storage log2(T) ~= %.6f\n",
+                ((num_polys > 1) ? (2.0 * log2((double) num_polys)) : 0.0) +
+                2.0 * report->det_size_log2,
+                report->step1_sparse_term_bound_log2);
+        if (isfinite(report->step12_standard_table_log2)) {
+            fprintf(fp, "Step 1 standard Dixon construction: space model not yet separated from time surrogate in this report\n");
+        }
+        if (isfinite(report->step12_recursive_log2)) {
+            fprintf(fp, "Step 2 recursive block Dixon construction: space model not yet separated from time surrogate in this report\n");
+        }
+        fprintf(fp, "Step 4 HNF / ordinary / sparse black-box determinant core: log2 space ~= log2(M^2) = %.6f\n",
+                2.0 * report->det_size_log2);
+        fprintf(fp, "Groebner basis matrix surrogate: log2 space ~= omega-free log2(square size^2) = %.6f\n",
+                (report->macaulay_square_size > 1) ? (2.0 * log2((double) report->macaulay_square_size)) : 0.0);
+        if (report->num_parameter_vars == 1) {
+            fprintf(fp, "FGLM multiplication-matrix style surrogate: log2 space ~= 2*log2(D_I) = %.6f\n",
+                    2.0 * log2_fmpz_upper_bound(bezout_bound));
+        }
     }
 }
 

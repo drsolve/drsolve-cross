@@ -82,6 +82,8 @@ void test_dixon_system(const char *test_name, slong nvars, slong npars,
                       int test_case_index);
 
 void test_xhash(void);
+int test_polynomial_solver_correctness(void);
+int test_polynomial_solver_performance(void);
 int test_dixon_resultant(void);
 void test_dixon(int test_mode);
     
