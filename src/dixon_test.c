@@ -1559,7 +1559,7 @@ int test_bezout_bound() {
     printf("=================================================\n");
     
     // Test configurations
-    const int num_reps = 10;
+    const int num_reps = 200;
     
     // Define test cases
     typedef struct {
