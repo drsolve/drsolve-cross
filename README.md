@@ -40,7 +40,7 @@ make check                         # optional
 make install                       # optional
 ```
 For more options, run `./configure --help` or `make help`.
-We also provide a Windows GUI at [drsolve-win](https://github.com/drsolve/drsolve-win) or [drsolve-cross](https://github.com/drsolve/drsolve-cross).
+We also provide a Windows GUI at [drsolve-win](https://github.com/drsolve/drsolve-win).
 
 ---
 
