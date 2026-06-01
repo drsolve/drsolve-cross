@@ -247,7 +247,7 @@ Example:
 
 ## SageMath Interface
 
-`drsolve_sage_interface.sage` lets you call DRsolve directly from SageMath with Sage polynomial objects.
+`drsolve_sage_interface.sage` lets you call DRSolve directly from SageMath with Sage polynomial objects.
 
 - Load the interface with `load("drsolve_sage_interface.sage")`, then set the binary path once with `set_dixon_path("./drsolve")`.
 - Main entry points:
