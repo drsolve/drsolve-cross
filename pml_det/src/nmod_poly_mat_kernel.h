@@ -57,6 +57,9 @@ extern "C" {
 int nmod_poly_mat_kernel_zls(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat_t A, \
                              const slong *ishift, const double kappa);
 
+void nmod_poly_mat_kernel_zls_profile_reset(void);
+void nmod_poly_mat_kernel_zls_profile_print(void);
+
 
 /**
  * Experimental, should not be really considered

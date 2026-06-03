@@ -12,10 +12,92 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
 
 #include "nmod_poly_mat_utils.h"
 #include "nmod_poly_mat_approximant.h"
 #include "nmod_poly_mat_kernel.h"
+
+extern int g_dixon_verbose_level;
+extern int g_dixon_debug_mode;
+
+typedef struct
+{
+    slong kernel_calls;
+    slong zls_calls;
+    slong zls_zero_residue_returns;
+    slong zls_m1_returns;
+    slong zls_recursive_fallback_returns;
+    slong zls_recursive_success_returns;
+    slong max_depth;
+    slong max_m;
+    slong max_n;
+    slong max_order;
+    double kernel_total_time;
+    double kernel_copy_time;
+    double kernel_sort_time;
+    double kernel_zls_time;
+    double kernel_unpermute_time;
+    double zls_total_time;
+    double zls_shift_prep_time;
+    double zls_transpose_time;
+    double zls_pmbasis_time;
+    double zls_residual_mul_time;
+    double zls_zero_split_time;
+    double zls_p2_sort_time;
+    double zls_shift_right_split_time;
+    double zls_recursive_time;
+    double zls_middle_mul_time;
+    double zls_combine_time;
+} nmod_poly_mat_kernel_zls_profile_t;
+
+static nmod_poly_mat_kernel_zls_profile_t g_nmod_kernel_zls_profile;
+static slong g_nmod_kernel_zls_depth = 0;
+
+static double
+_nmod_kernel_now_seconds(void)
+{
+    return ((double) clock()) / CLOCKS_PER_SEC;
+}
+
+static int
+_nmod_kernel_profile_enabled(void)
+{
+    return g_dixon_verbose_level >= 2 || g_dixon_debug_mode;
+}
+
+void
+nmod_poly_mat_kernel_zls_profile_reset(void)
+{
+    g_nmod_kernel_zls_profile = (nmod_poly_mat_kernel_zls_profile_t) {0};
+    nmod_poly_mat_pmbasis_profile_reset();
+}
+
+void
+nmod_poly_mat_kernel_zls_profile_print(void)
+{
+    if (!_nmod_kernel_profile_enabled())
+        return;
+
+    const nmod_poly_mat_kernel_zls_profile_t *p = &g_nmod_kernel_zls_profile;
+    printf("    [kernel_zls profile]\n");
+    printf("      kernel_calls=%ld zls_calls=%ld max_depth=%ld max_shape=%ldx%ld max_order=%ld\n",
+           p->kernel_calls, p->zls_calls, p->max_depth, p->max_m, p->max_n, p->max_order);
+    printf("      returns: zero_residue=%ld m1=%ld recursive_fallback=%ld recursive_success=%ld\n",
+           p->zls_zero_residue_returns, p->zls_m1_returns,
+           p->zls_recursive_fallback_returns, p->zls_recursive_success_returns);
+    printf("      kernel_total=%.6fs copy=%.6fs sort=%.6fs zls=%.6fs unpermute=%.6fs\n",
+           p->kernel_total_time, p->kernel_copy_time, p->kernel_sort_time,
+           p->kernel_zls_time, p->kernel_unpermute_time);
+    printf("      zls_total=%.6fs shift_prep=%.6fs transpose=%.6fs pmbasis=%.6fs residual_mul=%.6fs zero_split=%.6fs\n",
+           p->zls_total_time, p->zls_shift_prep_time, p->zls_transpose_time,
+           p->zls_pmbasis_time, p->zls_residual_mul_time, p->zls_zero_split_time);
+    printf("      p2_sort=%.6fs shift_right_split=%.6fs recurse=%.6fs middle_mul=%.6fs combine=%.6fs\n",
+           p->zls_p2_sort_time, p->zls_shift_right_split_time, p->zls_recursive_time,
+           p->zls_middle_mul_time, p->zls_combine_time);
+    nmod_poly_mat_pmbasis_profile_print();
+}
 
 /**
  *
@@ -105,6 +187,9 @@ void _nmod_poly_mat_sort_permute_columns_zls(nmod_poly_mat_t M, slong *sdeg, \
 int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat_t A, \
                                  const slong *ishift, const double kappa)
 {
+    const double call_start = _nmod_kernel_now_seconds();
+    const int collect_profile = _nmod_kernel_profile_enabled();
+    const slong depth = g_nmod_kernel_zls_depth++;
 
     slong i,j,k;
 
@@ -114,6 +199,16 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     slong min_mn;
     slong rho=0;
+
+    if (collect_profile) {
+        g_nmod_kernel_zls_profile.zls_calls++;
+        if (depth > g_nmod_kernel_zls_profile.max_depth)
+            g_nmod_kernel_zls_profile.max_depth = depth;
+        if (m > g_nmod_kernel_zls_profile.max_m)
+            g_nmod_kernel_zls_profile.max_m = m;
+        if (n > g_nmod_kernel_zls_profile.max_n)
+            g_nmod_kernel_zls_profile.max_n = n;
+    }
 
     // Tuning the order of the subsequent approximant
     // ----------------------------------------------
@@ -126,13 +221,16 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
 
     // In order to sort for computing the order of the approximant, for the test m=1 to be ok
-    for (i=0; i<n; i++)
     {
-        shift[i]=ishift[i];
+        double t0 = _nmod_kernel_now_seconds();
+        for (i=0; i<n; i++)
+        {
+            shift[i]=ishift[i];
+        }
+        qsort(shift, n, sizeof(slong), cmp);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_shift_prep_time += _nmod_kernel_now_seconds() - t0;
     }
-
-
-    qsort(shift, n, sizeof(slong), cmp);
 
     if (m <= n)
     {
@@ -157,7 +255,12 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     nmod_poly_mat_t AT;
     nmod_poly_mat_init(AT, n, m, A->modulus);
-    nmod_poly_mat_transpose(AT,A);
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        nmod_poly_mat_transpose(AT,A);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_transpose_time += _nmod_kernel_now_seconds() - t0;
+    }
 
     nmod_poly_mat_t PT;
     nmod_poly_mat_init(PT, n, n, A->modulus);
@@ -173,7 +276,14 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     slong ks;
     ks=ceil((double) kappa*s);
-    nmod_poly_mat_pmbasis(PT, shift, AT, ks+1);
+    if (collect_profile && ks + 1 > g_nmod_kernel_zls_profile.max_order)
+        g_nmod_kernel_zls_profile.max_order = ks + 1;
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        nmod_poly_mat_pmbasis(PT, shift, AT, ks+1);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_pmbasis_time += _nmod_kernel_now_seconds() - t0;
+    }
 
     // Looking for zero residues and non zero residues
     //  the global residue is reused later
@@ -181,7 +291,12 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     nmod_poly_mat_t RT;
     nmod_poly_mat_init(RT, n, m, A->modulus);
-    nmod_poly_mat_mul(RT,PT,AT);
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        nmod_poly_mat_mul(RT,PT,AT);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_residual_mul_time += _nmod_kernel_now_seconds() - t0;
+    }
 
     slong cdeg[n];
     nmod_poly_mat_row_degree(cdeg, RT, NULL);
@@ -195,9 +310,14 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     slong n1=0;
     slong n2;
 
-    for (j=0; j<n; j++) {
-        if (cdeg[j]<0)
-            n1+=1;
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        for (j=0; j<n; j++) {
+            if (cdeg[j]<0)
+                n1+=1;
+        }
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_zero_split_time += _nmod_kernel_now_seconds() - t0;
     }
 
     nmod_poly_mat_t P1;
@@ -223,11 +343,16 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     if (n2==0) {
         nmod_poly_mat_init_set(N,P1);
         nmod_poly_mat_column_degree(degN, P1, ishift);
+        if (collect_profile) {
+            g_nmod_kernel_zls_profile.zls_zero_residue_returns++;
+            g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+        }
 
         nmod_poly_mat_clear(P1);
         nmod_poly_mat_clear(RT);
         nmod_poly_mat_clear(PT);
         flint_free(shift);
+        g_nmod_kernel_zls_depth--;
         return n1;
     }
 
@@ -256,22 +381,32 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     if (m==1){
 
         if (n1==0) {
+            if (collect_profile) {
+                g_nmod_kernel_zls_profile.zls_m1_returns++;
+                g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+            }
             nmod_poly_mat_clear(P2);
             nmod_poly_mat_clear(RT);
             nmod_poly_mat_clear(PT);
             flint_free(shift);
+            g_nmod_kernel_zls_depth--;
             return 0;
         }
         else {
 
             nmod_poly_mat_init_set(N,P1);
             nmod_poly_mat_column_degree(degN, P1, ishift);
+            if (collect_profile) {
+                g_nmod_kernel_zls_profile.zls_m1_returns++;
+                g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+            }
 
             nmod_poly_mat_clear(P1);
             nmod_poly_mat_clear(P2);
             nmod_poly_mat_clear(RT);
             nmod_poly_mat_clear(PT);
             flint_free(shift);
+            g_nmod_kernel_zls_depth--;
             return n1;
         }
     }
@@ -287,7 +422,12 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     slong degP2[n2];
 
     // perm will be used also later for G from RT
-    _nmod_poly_mat_sort_permute_columns_zls(P2,degP2,perm,ishift);
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        _nmod_poly_mat_sort_permute_columns_zls(P2,degP2,perm,ishift);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_p2_sort_time += _nmod_kernel_now_seconds() - t0;
+    }
 
     for (i = 0; i < n2; i++) {
         degP2[i]=degP2[i]-ks;  // used below for the recursive calls
@@ -340,187 +480,243 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 
     // We extract G (temporary TT) from RT as we have been extracting P2 from PT
     //   and apply above ordering of P2
-    k=0;
-    for (j = 0; j < n; j++)
     {
-        if (cdeg[j]>=0) {
+        double t0 = _nmod_kernel_now_seconds();
+        k=0;
+        for (j = 0; j < n; j++)
+        {
+            if (cdeg[j]>=0) {
 
-            for (i = 0; i < m; i++)
-                nmod_poly_set(nmod_poly_mat_entry(TT, i, k), nmod_poly_mat_entry(RT, j, i));
-            k+=1;
+                for (i = 0; i < m; i++)
+                    nmod_poly_set(nmod_poly_mat_entry(TT, i, k), nmod_poly_mat_entry(RT, j, i));
+                k+=1;
+            }
+
         }
+        nmod_poly_mat_clear(RT);
 
-    }
-    nmod_poly_mat_clear(RT);
+        nmod_poly_mat_permute_columns(TT, perm, NULL);
 
-    nmod_poly_mat_permute_columns(TT, perm, NULL);
+        nmod_poly_mat_t G;
+        nmod_poly_mat_init(G, m, n2, A->modulus);
 
-    nmod_poly_mat_t G;
-    nmod_poly_mat_init(G, m, n2, A->modulus);
-
-    nmod_poly_mat_shift_right(G,TT,ks);
+        nmod_poly_mat_shift_right(G,TT,ks);
 
 
     // We split G for the recursive call
     // ---------------------------------
 
-    slong new_m=floor((double) m/2);
+        slong new_m=floor((double) m/2);
 
-    nmod_poly_mat_t G1;
-    nmod_poly_mat_init(G1, new_m, n2, A->modulus);
+        nmod_poly_mat_t G1;
+        nmod_poly_mat_init(G1, new_m, n2, A->modulus);
 
-    for (i = 0; i < new_m; i++){
-        for (j = 0; j < n2; j++) {
-            nmod_poly_set(nmod_poly_mat_entry(G1, i, j), nmod_poly_mat_entry(G, i, j));
+        for (i = 0; i < new_m; i++){
+            for (j = 0; j < n2; j++) {
+                nmod_poly_set(nmod_poly_mat_entry(G1, i, j), nmod_poly_mat_entry(G, i, j));
+            }
         }
-    }
 
-    nmod_poly_mat_t G2;
-    nmod_poly_mat_init(G2, m-new_m, n2, A->modulus);
+        nmod_poly_mat_t G2;
+        nmod_poly_mat_init(G2, m-new_m, n2, A->modulus);
 
-    for (i = 0; i < m-new_m; i++) {
-        for (j = 0; j < n2; j++) {
-            nmod_poly_set(nmod_poly_mat_entry(G2, i, j), nmod_poly_mat_entry(G, i+new_m, j));
+        for (i = 0; i < m-new_m; i++) {
+            for (j = 0; j < n2; j++) {
+                nmod_poly_set(nmod_poly_mat_entry(G2, i, j), nmod_poly_mat_entry(G, i+new_m, j));
+            }
         }
-    }
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_shift_right_split_time += _nmod_kernel_now_seconds() - t0;
 
-    nmod_poly_mat_clear(TT);
-    nmod_poly_mat_clear(G);
+        nmod_poly_mat_clear(TT);
+        nmod_poly_mat_clear(G);
     //++++++++++++++  END NEW ++++++++++++++++++
 
     // Recursive calls
     // ---------------
 
-    nmod_poly_mat_t N1;
-    nmod_poly_mat_t N2;
+        nmod_poly_mat_t N1;
+        nmod_poly_mat_t N2;
 
-    slong c1=0;
-    slong c2=0;
-
-
-    c1=nmod_poly_mat_zls_sorted(N1, degN, G1, degP2, kappa);
+        slong c1=0;
+        slong c2=0;
 
 
-    if (c1 != 0) {
-
-        nmod_poly_mat_t G3;
-        nmod_poly_mat_init(G3, m-new_m, c1, A->modulus);
-
-        nmod_poly_mat_mul(G3, G2, N1);
-
-        for (i=0; i<c1; i++) {
-            shift[i]=degN[i];
+        {
+            double t1 = _nmod_kernel_now_seconds();
+            c1=nmod_poly_mat_zls_sorted(N1, degN, G1, degP2, kappa);
+            if (collect_profile)
+                g_nmod_kernel_zls_profile.zls_recursive_time += _nmod_kernel_now_seconds() - t1;
         }
 
-        c2=nmod_poly_mat_zls_sorted(N2, degN, G3, shift, kappa);
-        nmod_poly_mat_clear(G3);
 
-    }
+        if (c1 != 0) {
+
+            nmod_poly_mat_t G3;
+            nmod_poly_mat_init(G3, m-new_m, c1, A->modulus);
+
+            {
+                double t1 = _nmod_kernel_now_seconds();
+                nmod_poly_mat_mul(G3, G2, N1);
+                if (collect_profile)
+                    g_nmod_kernel_zls_profile.zls_middle_mul_time += _nmod_kernel_now_seconds() - t1;
+            }
+
+            for (i=0; i<c1; i++) {
+                shift[i]=degN[i];
+            }
+
+            {
+                double t1 = _nmod_kernel_now_seconds();
+                c2=nmod_poly_mat_zls_sorted(N2, degN, G3, shift, kappa);
+                if (collect_profile)
+                    g_nmod_kernel_zls_profile.zls_recursive_time += _nmod_kernel_now_seconds() - t1;
+            }
+            nmod_poly_mat_clear(G3);
+
+        }
 
 
-    nmod_poly_mat_clear(G1);
-    nmod_poly_mat_clear(G2);
+        nmod_poly_mat_clear(G1);
+        nmod_poly_mat_clear(G2);
 
     // the recursive calls did not provide anything more
 
-    if ((c1==0) || (c2==0)){
+        if ((c1==0) || (c2==0)){
 
-        if (c1 != 0)
-            nmod_poly_mat_clear(N1);
-        if (c2 != 0)
-            nmod_poly_mat_clear(N2);
-        flint_free(perm);
-        nmod_poly_mat_clear(PT);
+            if (c1 != 0)
+                nmod_poly_mat_clear(N1);
+            if (c2 != 0)
+                nmod_poly_mat_clear(N2);
+            flint_free(perm);
+            nmod_poly_mat_clear(PT);
 
-        if (n1==0) {
-            nmod_poly_mat_clear(P2);
-            if (n1 > 0)
+            if (collect_profile)
+                g_nmod_kernel_zls_profile.zls_recursive_fallback_returns++;
+
+            if (n1==0) {
+                nmod_poly_mat_clear(P2);
+                if (n1 > 0)
+                    nmod_poly_mat_clear(P1);
+                flint_free(shift);
+                if (collect_profile)
+                    g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+                g_nmod_kernel_zls_depth--;
+                return 0;
+            }
+            else {
+                nmod_poly_mat_init_set(N,P1);
+                nmod_poly_mat_column_degree(degN, P1, ishift);
+
                 nmod_poly_mat_clear(P1);
-            flint_free(shift);
-            return 0;
+                nmod_poly_mat_clear(P2);
+                flint_free(shift);
+                if (collect_profile)
+                    g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+                g_nmod_kernel_zls_depth--;
+                return n1;
+            }
         }
-        else {
-            nmod_poly_mat_init_set(N,P1);
-            nmod_poly_mat_column_degree(degN, P1, ishift);
-
-            nmod_poly_mat_clear(P1);
-            nmod_poly_mat_clear(P2);
-            flint_free(shift);
-            return n1;
-        }
-    }
 
     // A new part of the kernel has been found by the recursive calls, Q
     // -----------------------------------------------------------------
 
 
-    nmod_poly_mat_t Q1;
-    nmod_poly_mat_init(Q1, n, c1, A->modulus);
+        nmod_poly_mat_t Q1;
+        nmod_poly_mat_init(Q1, n, c1, A->modulus);
 
-    nmod_poly_mat_mul(Q1, P2, N1);
+        {
+            double t1 = _nmod_kernel_now_seconds();
+            nmod_poly_mat_mul(Q1, P2, N1);
+            if (collect_profile)
+                g_nmod_kernel_zls_profile.zls_middle_mul_time += _nmod_kernel_now_seconds() - t1;
+        }
 
-    nmod_poly_mat_t Q;
-    nmod_poly_mat_init(Q, n, c2, A->modulus);
+        nmod_poly_mat_t Q;
+        nmod_poly_mat_init(Q, n, c2, A->modulus);
 
-    nmod_poly_mat_mul(Q, Q1, N2);
+        {
+            double t1 = _nmod_kernel_now_seconds();
+            nmod_poly_mat_mul(Q, Q1, N2);
+            if (collect_profile)
+                g_nmod_kernel_zls_profile.zls_combine_time += _nmod_kernel_now_seconds() - t1;
+        }
 
-    nmod_poly_mat_clear(N1);
-    nmod_poly_mat_clear(N2);
-    nmod_poly_mat_clear(Q1);
-    nmod_poly_mat_clear(P2);
-    flint_free(perm);
-    nmod_poly_mat_clear(PT);
+        nmod_poly_mat_clear(N1);
+        nmod_poly_mat_clear(N2);
+        nmod_poly_mat_clear(Q1);
+        nmod_poly_mat_clear(P2);
+        flint_free(perm);
+        nmod_poly_mat_clear(PT);
 
-    if (n1 ==0) {
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.zls_recursive_success_returns++;
 
-        nmod_poly_mat_init_set(N,Q); // We should not need to copy
-        nmod_poly_mat_column_degree(degN, Q, ishift);
+        if (n1 ==0) {
 
-        nmod_poly_mat_clear(Q);
-        if (n1 > 0)
+            nmod_poly_mat_init_set(N,Q); // We should not need to copy
+            nmod_poly_mat_column_degree(degN, Q, ishift);
+
+            nmod_poly_mat_clear(Q);
+            if (n1 > 0)
+                nmod_poly_mat_clear(P1);
+            flint_free(shift);
+            if (collect_profile)
+                g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+            g_nmod_kernel_zls_depth--;
+            return c2;
+
+        }
+        else {
+            nmod_poly_mat_init(N, n, n1+c2, A->modulus);
+
+            {
+                double t1 = _nmod_kernel_now_seconds();
+                for (i = 0; i < n; i++) {
+                    for (j = 0; j < n1; j++) {
+                        nmod_poly_set(nmod_poly_mat_entry(N, i, j), nmod_poly_mat_entry(P1,i,j));
+                    }
+                }
+
+                for (i = 0; i < n; i++) {
+                    for (j = 0; j < c2; j++) {
+                        nmod_poly_set(nmod_poly_mat_entry(N, i, j+n1), nmod_poly_mat_entry(Q, i, j));
+                    }
+                }
+                if (collect_profile)
+                    g_nmod_kernel_zls_profile.zls_combine_time += _nmod_kernel_now_seconds() - t1;
+            }
+
+            slong odeg[n1+c2];
+
+            nmod_poly_mat_column_degree(odeg, P1, ishift);
+
+            for (i=0; i<n1; i++) {
+                degN[i]=odeg[i];
+            }
+
+            nmod_poly_mat_column_degree(odeg, Q, ishift);
+
+            for (i=0; i<c2; i++) {
+                degN[i+n1]=odeg[i];
+            }
+
             nmod_poly_mat_clear(P1);
-        flint_free(shift);
-        return c2;
+            nmod_poly_mat_clear(Q);
 
-    }
-    else {
-        nmod_poly_mat_init(N, n, n1+c2, A->modulus);
-
-        for (i = 0; i < n; i++) {
-            for (j = 0; j < n1; j++) {
-                nmod_poly_set(nmod_poly_mat_entry(N, i, j), nmod_poly_mat_entry(P1,i,j));
-            }
+            flint_free(shift);
+            if (collect_profile)
+                g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+            g_nmod_kernel_zls_depth--;
+            return n1+c2;
         }
-
-        for (i = 0; i < n; i++) {
-            for (j = 0; j < c2; j++) {
-                nmod_poly_set(nmod_poly_mat_entry(N, i, j+n1), nmod_poly_mat_entry(Q, i, j));
-            }
-        }
-
-        slong odeg[n1+c2];
-
-        nmod_poly_mat_column_degree(odeg, P1, ishift);
-
-        for (i=0; i<n1; i++) {
-            degN[i]=odeg[i];
-        }
-
-        nmod_poly_mat_column_degree(odeg, Q, ishift);
-
-        for (i=0; i<c2; i++) {
-            degN[i+n1]=odeg[i];
-        }
-
-        nmod_poly_mat_clear(P1);
-        nmod_poly_mat_clear(Q);
-
-        flint_free(shift);
-        return n1+c2;
 
     }
 
     flint_free(shift);
+    if (collect_profile)
+        g_nmod_kernel_zls_profile.zls_total_time += _nmod_kernel_now_seconds() - call_start;
+    g_nmod_kernel_zls_depth--;
     return 0;
 }
 
@@ -564,14 +760,24 @@ int nmod_poly_mat_zls_sorted(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
 int nmod_poly_mat_kernel_zls(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat_t iA, \
                          const slong *ishift, const double kappa)
 {
+    const double call_start = _nmod_kernel_now_seconds();
+    const int collect_profile = _nmod_kernel_profile_enabled();
 
     slong j,k;
 
     slong n = iA->c;
 
+    if (collect_profile)
+        g_nmod_kernel_zls_profile.kernel_calls++;
+
 
     nmod_poly_mat_t A;
-    nmod_poly_mat_init_set(A, iA);
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        nmod_poly_mat_init_set(A, iA);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.kernel_copy_time += _nmod_kernel_now_seconds() - t0;
+    }
 
     slong * perm = flint_malloc(n * sizeof(slong));
     slong sdeg[n];
@@ -581,21 +787,27 @@ int nmod_poly_mat_kernel_zls(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     // -------------------------------------------------------
 
     if (ishift == NULL) {
+        double t0 = _nmod_kernel_now_seconds();
         nmod_poly_mat_column_degree(sdeg, A, NULL);
 
         for (j=0; j<n; j++)
             if (sdeg[j] < 0) sdeg[j]=0;
 
         _nmod_poly_mat_permute_columns_by_sorting_vec(A, n, sdeg, perm);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.kernel_sort_time += _nmod_kernel_now_seconds() - t0;
     }
     // Input shift, we sort
     // --------------------
     else {
+        double t0 = _nmod_kernel_now_seconds();
 
         for (j=0; j<n; j++)
             sdeg[j]=ishift[j];
 
         _nmod_poly_mat_permute_columns_by_sorting_vec(A, n, sdeg, perm);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.kernel_sort_time += _nmod_kernel_now_seconds() - t0;
     }
 
     // Call to ZLS
@@ -605,13 +817,19 @@ int nmod_poly_mat_kernel_zls(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
     slong tdeg[n];
 
     nmod_poly_mat_t NT;
-    nz=nmod_poly_mat_zls_sorted(NT, tdeg, A, sdeg, kappa);
+    {
+        double t0 = _nmod_kernel_now_seconds();
+        nz=nmod_poly_mat_zls_sorted(NT, tdeg, A, sdeg, kappa);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.kernel_zls_time += _nmod_kernel_now_seconds() - t0;
+    }
 
 
     // Undo the permutation for the kernel of the input matrix
     // -------------------------------------------------------
 
     if (nz !=0) {
+        double t0 = _nmod_kernel_now_seconds();
 
         for (k = 0; k < n; k++) {
             for (j = 0; j < nz; j++){
@@ -619,16 +837,22 @@ int nmod_poly_mat_kernel_zls(nmod_poly_mat_t N, slong *degN, const nmod_poly_mat
                 degN[perm[k]]=tdeg[k];
             }
         }
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.kernel_unpermute_time += _nmod_kernel_now_seconds() - t0;
 
         nmod_poly_mat_clear(NT); // Since nz > 0
         flint_free(perm);
         nmod_poly_mat_clear(A);
+        if (collect_profile)
+            g_nmod_kernel_zls_profile.kernel_total_time += _nmod_kernel_now_seconds() - call_start;
 
         return nz;
     }
 
     flint_free(perm);
     nmod_poly_mat_clear(A);
+    if (collect_profile)
+        g_nmod_kernel_zls_profile.kernel_total_time += _nmod_kernel_now_seconds() - call_start;
 
     return 0;
 

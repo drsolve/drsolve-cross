@@ -396,6 +396,9 @@ void nmod_poly_mat_pmbasis(nmod_poly_mat_t appbas,
                            const nmod_poly_mat_t pmat,
                            slong order);
 
+void nmod_poly_mat_pmbasis_profile_reset(void);
+void nmod_poly_mat_pmbasis_profile_print(void);
+
 
 /** Computes a `shift`-Popov approximant basis for `(pmat,order)` using the
  * algorithm PM-Basis (see @ref pmbasis) twice: the first call yields an

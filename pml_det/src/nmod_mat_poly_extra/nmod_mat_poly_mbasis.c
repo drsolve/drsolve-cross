@@ -3,8 +3,82 @@
 #include <flint/perm.h>
 #include <flint/profiler.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <time.h>
 #include "nmod_mat_poly.h"
 #include "nmod_mat_extra.h"
+
+extern int g_dixon_verbose_level;
+extern int g_dixon_debug_mode;
+
+typedef struct
+{
+    slong calls;
+    slong zero_input_returns;
+    slong nullity_zero_breaks;
+    slong partial_nullity_updates;
+    slong full_nullity_skips;
+    slong max_order;
+    slong max_rows;
+    slong max_cols;
+    double total_time;
+    double init_time;
+    double residual_time;
+    double residual_copy0_time;
+    double residual_mul_coeff_time;
+    double permute_time;
+    double nullspace_time;
+    double update_time;
+    double update_bookkeeping_time;
+    double update_const_update_time;
+    double update_const_mul_time;
+    double update_const_accumulate_time;
+    double update_shift_rows_time;
+    double cleanup_time;
+} nmod_mat_poly_mbasis_profile_t;
+
+static nmod_mat_poly_mbasis_profile_t g_nmod_mat_poly_mbasis_profile;
+
+static double
+_nmod_mbasis_now_seconds(void)
+{
+    return ((double) clock()) / CLOCKS_PER_SEC;
+}
+
+static int
+_nmod_mbasis_profile_enabled(void)
+{
+    return g_dixon_verbose_level >= 2 || g_dixon_debug_mode;
+}
+
+void
+nmod_mat_poly_mbasis_profile_reset(void)
+{
+    g_nmod_mat_poly_mbasis_profile = (nmod_mat_poly_mbasis_profile_t) {0};
+}
+
+void
+nmod_mat_poly_mbasis_profile_print(void)
+{
+    if (!_nmod_mbasis_profile_enabled())
+        return;
+
+    const nmod_mat_poly_mbasis_profile_t *p = &g_nmod_mat_poly_mbasis_profile;
+    printf("        [mbasis profile]\n");
+    printf("          calls=%ld zero_input=%ld nullity_zero_breaks=%ld partial_updates=%ld full_nullity_skips=%ld max_order=%ld max_shape=%ldx%ld\n",
+           p->calls, p->zero_input_returns, p->nullity_zero_breaks,
+           p->partial_nullity_updates, p->full_nullity_skips,
+           p->max_order, p->max_rows, p->max_cols);
+    printf("          total=%.6fs init=%.6fs residual=%.6fs permute=%.6fs nullspace=%.6fs update=%.6fs cleanup=%.6fs\n",
+           p->total_time, p->init_time, p->residual_time, p->permute_time,
+           p->nullspace_time, p->update_time, p->cleanup_time);
+    printf("          residual: copy0=%.6fs mul_coeff=%.6fs | update: bookkeeping=%.6fs const_update=%.6fs shift_rows=%.6fs\n",
+           p->residual_copy0_time, p->residual_mul_coeff_time,
+           p->update_bookkeeping_time, p->update_const_update_time,
+           p->update_shift_rows_time);
+    printf("          const_update split: mul=%.6fs accumulate=%.6fs\n",
+           p->update_const_mul_time, p->update_const_accumulate_time);
+}
 
 //#define MBASIS1_PROFILE
 //#define MBASIS_PROFILE
@@ -118,11 +192,24 @@ void nmod_mat_poly_mbasis(nmod_mat_poly_t appbas,
                           const nmod_mat_poly_t matp,
                           slong order)
 {
+    const double call_start = _nmod_mbasis_now_seconds();
+    const int collect_profile = _nmod_mbasis_profile_enabled();
+    double t0 = 0.0;
 _MBASIS_PROFILER_INIT
 _PROFILER_REGION_START
     // dimensions of input matrix
     const slong m = matp->r;
     const slong n = matp->c;
+
+    if (collect_profile) {
+        g_nmod_mat_poly_mbasis_profile.calls++;
+        if (order > g_nmod_mat_poly_mbasis_profile.max_order)
+            g_nmod_mat_poly_mbasis_profile.max_order = order;
+        if (m > g_nmod_mat_poly_mbasis_profile.max_rows)
+            g_nmod_mat_poly_mbasis_profile.max_rows = m;
+        if (n > g_nmod_mat_poly_mbasis_profile.max_cols)
+            g_nmod_mat_poly_mbasis_profile.max_cols = n;
+    }
 
     // initialize output approximant basis with identity
     nmod_mat_poly_one(appbas);
@@ -130,6 +217,11 @@ _PROFILER_REGION_START
     // if matp == 0: return
     if (nmod_mat_poly_is_zero(matp))
     {
+        if (collect_profile) {
+            g_nmod_mat_poly_mbasis_profile.zero_input_returns++;
+            g_nmod_mat_poly_mbasis_profile.init_time += _nmod_mbasis_now_seconds() - call_start;
+            g_nmod_mat_poly_mbasis_profile.total_time += _nmod_mbasis_now_seconds() - call_start;
+        }
 _PROFILER_REGION_STOP(t_others)
 _MBASIS_PROFILER_OUTPUT
         return;
@@ -154,6 +246,8 @@ _MBASIS_PROFILER_OUTPUT
     slong nullity;
     slong * pivots = (slong *) flint_malloc(m * sizeof(slong));
     nmod_mat_t nsbas;
+    if (collect_profile)
+        g_nmod_mat_poly_mbasis_profile.init_time += _nmod_mbasis_now_seconds() - call_start;
 _PROFILER_REGION_STOP(t_others)
 
     // Note: iterations will guarantee that `shift` (initially, this is the
@@ -166,19 +260,31 @@ printf("\n\nDEBUG -- Start iteration %ld\n", ord);
 #endif // MBASIS_DEBUG
 
 _PROFILER_REGION_START
+        t0 = _nmod_mbasis_now_seconds();
         // Letting s0 be the original input shift:
         // start of loop: appbas is an `s0`-ordered weak Popov approximant
         //    basis at order `ord` for `pmat`, and shift = rdeg_s0(appbas)
         // end of loop: appbas is an `s0`-ordered weak Popov approximant
         //    basis at order `ord+1` for `pmat`, and shift = rdeg_s0(appbas)
         if (ord == 0) // initially res = coeffs_matp[0] (note matp->length > 0 here)
+        {
             nmod_mat_set(res, matp->coeffs + 0);
+            if (collect_profile)
+                g_nmod_mat_poly_mbasis_profile.residual_copy0_time += _nmod_mbasis_now_seconds() - t0;
+        }
         else // res = coefficient of degree ord in appbas*pmat
+        {
             nmod_mat_poly_mul_coeff(res, appbas, matp, ord);
+            if (collect_profile)
+                g_nmod_mat_poly_mbasis_profile.residual_mul_coeff_time += _nmod_mbasis_now_seconds() - t0;
+        }
         // TODO try another variant with res_tmp to save memory?
+        if (collect_profile)
+            g_nmod_mat_poly_mbasis_profile.residual_time += _nmod_mbasis_now_seconds() - t0;
 _PROFILER_REGION_STOP(t_residual)
 
 _PROFILER_REGION_START
+        t0 = _nmod_mbasis_now_seconds();
         // compute stable permutation which makes the shift nondecreasing
         // --> we will need to permute things, to take into account the
         // "priority" indicated by the shift
@@ -200,14 +306,19 @@ nmod_mat_print_pretty(res);
 printf("\n\nDEBUG -- it %ld -- res after perm: ", ord);
 nmod_mat_print_pretty(res);
 #endif // MBASIS_DEBUG
+        if (collect_profile)
+            g_nmod_mat_poly_mbasis_profile.permute_time += _nmod_mbasis_now_seconds() - t0;
 _PROFILER_REGION_STOP(t_others)
 
 _PROFILER_REGION_START
+        t0 = _nmod_mbasis_now_seconds();
         // find the left nullspace basis of the (permuted) residual, in reduced
         // row echelon form and compact storage (see the documentation)
         if (ord >= 1) // nsbas should be uninitialized for nullspace
             nmod_mat_clear(nsbas);
         nullity = nmod_mat_left_nullspace_compact(nsbas,pivots,res);
+        if (collect_profile)
+            g_nmod_mat_poly_mbasis_profile.nullspace_time += _nmod_mbasis_now_seconds() - t0;
 _PROFILER_REGION_STOP(t_kernel)
 
 #ifdef MBASIS_DEBUG
@@ -220,18 +331,27 @@ flint_printf("%{slong*}", pivots, m);
 
         if (nullity==0)
         {
+            if (collect_profile)
+                g_nmod_mat_poly_mbasis_profile.nullity_zero_breaks++;
             // Exceptional case: the residual matrix has empty left nullspace
             // --> no need to compute more: the final basis is X^(order-ord)*appbas
 _PROFILER_REGION_START
+            t0 = _nmod_mbasis_now_seconds();
             nmod_mat_poly_shift_left(appbas, appbas, order-ord);
             for (long i = 0; i < m; ++i)
                 shift[i] += order-ord;
+            if (collect_profile) {
+                g_nmod_mat_poly_mbasis_profile.update_time += _nmod_mbasis_now_seconds() - t0;
+                g_nmod_mat_poly_mbasis_profile.update_shift_rows_time += _nmod_mbasis_now_seconds() - t0;
+            }
 _PROFILER_REGION_STOP(t_others)
             break;
         }
 
         else if (nullity < m)
         {
+            if (collect_profile)
+                g_nmod_mat_poly_mbasis_profile.partial_nullity_updates++;
             // nothing to do if nullity == m, another exceptional case:
             // residual coeff was zero, and nullspace 'nsbas' is identity
             // --> approximant basis is already correct for this order, no need to
@@ -248,6 +368,7 @@ _PROFILER_REGION_STOP(t_others)
             //         i.e. pivots*perm*appbas[i] = appbas[perm[pivots[i]]]
 
 _PROFILER_REGION_START
+            t0 = _nmod_mbasis_now_seconds();
             // transform pivots[i] into perm[pivots[i]]
             _perm_compose(pivots, perm, pivots, m);
 #ifdef MBASIS_DEBUG
@@ -280,9 +401,14 @@ nmod_mat_poly_print_pretty(appbas);
 printf("\n\nDEBUG -- it %ld -- permuted appbas before update:\n", ord);
 nmod_mat_poly_print_pretty(appbas);
 #endif // MBASIS_DEBUG
+            if (collect_profile) {
+                g_nmod_mat_poly_mbasis_profile.update_time += _nmod_mbasis_now_seconds() - t0;
+                g_nmod_mat_poly_mbasis_profile.update_bookkeeping_time += _nmod_mbasis_now_seconds() - t0;
+            }
 _PROFILER_REGION_STOP(t_others)
 
 _PROFILER_REGION_START
+            t0 = _nmod_mbasis_now_seconds();
             // Update the approximant basis: 2/ perform constant update
             // Submatrix of rows corresponding to pivots are replaced by
             // nsbas*appbas (note: these rows currently have degree
@@ -293,18 +419,33 @@ _PROFILER_REGION_START
             // TODO see if a convenient way to make this matrix fixed at the beginning;
             // note nullity is most often unchanged along iterations
             // TODO generally try to improve memory handling in here
-            nmod_mat_t ns_app, app_win_mul, app_win_add;
+            nmod_mat_t ns_app, app_win_mul;
             nmod_mat_init(ns_app, nullity, appbas->c, appbas->mod.n);
             for (slong d = 0; d < appbas->length; ++d)
             {
                 nmod_mat_window_init(app_win_mul, appbas->coeffs + d, 0, 0, m-nullity, m);
-                nmod_mat_window_init(app_win_add, appbas->coeffs + d, m-nullity, 0, m, m);
-                nmod_mat_mul(ns_app, nsbas, app_win_mul);
-                nmod_mat_add(app_win_add, app_win_add, ns_app);
+                {
+                    double t_mul = _nmod_mbasis_now_seconds();
+                    nmod_mat_mul(ns_app, nsbas, app_win_mul);
+                    if (collect_profile)
+                        g_nmod_mat_poly_mbasis_profile.update_const_mul_time += _nmod_mbasis_now_seconds() - t_mul;
+                }
+                {
+                    double t_acc = _nmod_mbasis_now_seconds();
+                for (slong i = 0; i < nullity; ++i)
+                {
+                    _nmod_vec_add(nmod_mat_entry_ptr(appbas->coeffs + d, m - nullity + i, 0),
+                                  nmod_mat_entry_ptr(appbas->coeffs + d, m - nullity + i, 0),
+                                  nmod_mat_entry_ptr(ns_app, i, 0),
+                                  m,
+                                  appbas->mod);
+                }
+                    if (collect_profile)
+                        g_nmod_mat_poly_mbasis_profile.update_const_accumulate_time += _nmod_mbasis_now_seconds() - t_acc;
+                }
             }
             nmod_mat_clear(ns_app);
             nmod_mat_window_clear(app_win_mul);
-            nmod_mat_window_clear(app_win_add);
 
             // Update the approximant basis: 3/ left-shift relevant rows by 1
             // increase length of appbas if necessary
@@ -343,9 +484,14 @@ _PROFILER_REGION_START
             for (slong i = 0; i < m-nullity; ++i)
                 _nmod_vec_zero(nmod_mat_poly_entry_ptr(appbas, 0, i, 0), m);
 #endif
+            if (collect_profile) {
+                g_nmod_mat_poly_mbasis_profile.update_time += _nmod_mbasis_now_seconds() - t0;
+                g_nmod_mat_poly_mbasis_profile.update_const_update_time += _nmod_mbasis_now_seconds() - t0;
+            }
 _PROFILER_REGION_STOP(t_appbas)
 
 _PROFILER_REGION_START
+            t0 = _nmod_mbasis_now_seconds();
 #ifdef MBASIS_DEBUG
 printf("\n\nDEBUG -- it %ld -- permuted appbas after update:\n", ord);
 nmod_mat_poly_print_pretty(appbas);
@@ -361,17 +507,30 @@ flint_printf("%{slong*}", pivots, m);
 printf("\n\nDEBUG -- it %ld -- appbas after update:\n", ord);
 nmod_mat_poly_print_pretty(appbas);
 #endif // MBASIS_DEBUG
+            if (collect_profile) {
+                g_nmod_mat_poly_mbasis_profile.update_time += _nmod_mbasis_now_seconds() - t0;
+                g_nmod_mat_poly_mbasis_profile.update_shift_rows_time += _nmod_mbasis_now_seconds() - t0;
+            }
 _PROFILER_REGION_STOP(t_others)
+        }
+        else if (collect_profile)
+        {
+            g_nmod_mat_poly_mbasis_profile.full_nullity_skips++;
         }
     }
 
 _PROFILER_REGION_START
+    t0 = _nmod_mbasis_now_seconds();
     nmod_mat_clear(res);
     nmod_mat_clear(res_tmp);
     _perm_clear(perm);
     flint_free(pair_tmp);
     flint_free(pivots);
     nmod_mat_clear(nsbas);
+    if (collect_profile) {
+        g_nmod_mat_poly_mbasis_profile.cleanup_time += _nmod_mbasis_now_seconds() - t0;
+        g_nmod_mat_poly_mbasis_profile.total_time += _nmod_mbasis_now_seconds() - call_start;
+    }
 _PROFILER_REGION_STOP(t_others)
 _MBASIS_PROFILER_OUTPUT
     return;

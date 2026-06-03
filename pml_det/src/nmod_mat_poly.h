@@ -683,6 +683,14 @@ void nmod_mat_poly_mbasis(nmod_mat_poly_t appbas,
                           const nmod_mat_poly_t matp,
                           slong order);
 
+void nmod_mat_poly_mbasis_resupdate(nmod_mat_poly_t appbas,
+                                    slong * shift,
+                                    const nmod_mat_poly_t matp,
+                                    slong order);
+
+void nmod_mat_poly_mbasis_profile_reset(void);
+void nmod_mat_poly_mbasis_profile_print(void);
+
 //@} // doxygen group: M-Basis algorithm (uniform approximant order)
 
 #ifdef __cplusplus

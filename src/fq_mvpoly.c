@@ -10,10 +10,16 @@
  * i.e. any exponent >= q is replaced using x^q = x (Frobenius: a^q = a in F_q).
  * Enable via fq_mvpoly_set_field_equation_reduction(1) before computation. */
 int g_field_equation_reduction = 0;
+int g_field_equation_final_only = 0;
 
 void fq_mvpoly_set_field_equation_reduction(int enable)
 {
     g_field_equation_reduction = enable;
+}
+
+void fq_mvpoly_set_field_equation_final_only(int enable)
+{
+    g_field_equation_final_only = enable;
 }
 
 /* Reduce a single exponent e modulo x^q - x.

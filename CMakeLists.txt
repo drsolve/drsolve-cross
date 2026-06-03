@@ -401,6 +401,7 @@ if(DRSOLVE_ENABLE_PML)
       "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/approximant_basis.c"
       "${PML_SOURCE_DIR}/src/nmod_poly_mat_extra/middle_product.c"
       "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_mbasis.c"
+      "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_mbasis_resupdate.c"
       "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_mem.c"
       "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_arith.c"
       "${PML_SOURCE_DIR}/src/nmod_mat_poly_extra/nmod_mat_poly_set_from.c"

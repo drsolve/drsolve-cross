@@ -104,6 +104,7 @@ static void print_short_usage(const char *prog_name)
     printf("  --macaulay        Use Macaulay resultant\n");
     printf("  --subres          Use Subresultant (2 polys)\n");
     printf("  --field-equation  After each multiplication, reduces x^q -> x for every variable\n");
+    printf("  --field-equation-s Reduce only the final resultant/output via x^q -> x\n");
     printf("  --ideal <args>    After each multiplication, reduces using the given substitution\n");
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
@@ -179,6 +180,10 @@ static void print_usage(const char *prog_name)
     printf("    %s --field-equation input_file\n", prog_name);
     printf("    %s --field-equation -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
     printf("    -> After each multiplication, reduces x^q -> x for every variable\n");
+    printf("    %s --field-equation-s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
+    printf("    %s --field-equation-s input_file\n", prog_name);
+    printf("    %s --field-equation-s -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
+    printf("    -> Reduce only the final resultant/output via x^q -> x\n");
     printf("\n");
 
     printf("  Random mode (combine with any compute flag):\n");
@@ -2481,6 +2486,7 @@ int main(int argc, char *argv[])
     int    rand_mode   = 0;   /* --random / -r */
     int    ideal_mode  = 0;   /*  --ideal flag */
     int    field_eq_mode = 0; /* --field-equation */
+    int    field_eq_final_only_mode = 0; /* --field-equation-s */
     int    time_mode   = 0;   /* --time */
     double omega       = DIXON_OMEGA;   /* default, overridden by --omega */
     int    det_method_step1 = -1;  /* determinant method override for step 1 */
@@ -2530,6 +2536,8 @@ int main(int argc, char *argv[])
             ideal_mode = 1;
         } else if (strcmp(argv[i], "--field-equation") == 0) {
             field_eq_mode = 1;
+        } else if (strcmp(argv[i], "--field-equation-s") == 0) {
+            field_eq_final_only_mode = 1;
         } else if (strcmp(argv[i], "--time") == 0) {
             time_mode = 1;
         } else if (strcmp(argv[i], "--no-rational-root-scan") == 0) {
@@ -3101,8 +3109,8 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error: field_size=0 currently does not support --ideal.\n");
             goto cleanup_fail;
         }
-        if (field_eq_mode) {
-            fprintf(stderr, "Error: field_size=0 currently does not support --field-equation.\n");
+        if (field_eq_mode || field_eq_final_only_mode) {
+            fprintf(stderr, "Error: field_size=0 currently does not support --field-equation or --field-equation-s.\n");
             goto cleanup_fail;
         }
     } else if (solve_rational_only_mode) {
@@ -3114,8 +3122,8 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error: large prime fallback currently does not support --ideal.\n");
             goto cleanup_fail;
         }
-        if (field_eq_mode) {
-            fprintf(stderr, "Error: large prime fallback currently does not support --field-equation.\n");
+        if (field_eq_mode || field_eq_final_only_mode) {
+            fprintf(stderr, "Error: large prime fallback currently does not support --field-equation or --field-equation-s.\n");
             goto cleanup_fail;
         }
         if (rand_mode) {
@@ -3192,6 +3200,11 @@ int main(int argc, char *argv[])
         fq_mvpoly_set_field_equation_reduction(1);
         if (!silent_mode)
             printf("Reduction: field equations enabled\n");
+    }
+    if (!rational_mode && field_eq_final_only_mode) {
+        fq_mvpoly_set_field_equation_final_only(1);
+        if (!silent_mode)
+            printf("Reduction: final resultant field-equation reduction enabled\n");
     }
 
     /* ======================================================

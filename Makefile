@@ -102,6 +102,7 @@ PML_REL_SOURCES := \
 	nmod_poly_mat_extra/approximant_basis.c \
 	nmod_poly_mat_extra/middle_product.c \
 	nmod_mat_poly_extra/nmod_mat_poly_mbasis.c \
+	nmod_mat_poly_extra/nmod_mat_poly_mbasis_resupdate.c \
 	nmod_mat_poly_extra/nmod_mat_poly_mem.c \
 	nmod_mat_poly_extra/nmod_mat_poly_arith.c \
 	nmod_mat_poly_extra/nmod_mat_poly_set_from.c \

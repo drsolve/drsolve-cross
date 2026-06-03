@@ -2981,7 +2981,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
             }
         }
     }
-    if (g_field_equation_reduction) {
+    if (g_field_equation_reduction || g_field_equation_final_only) {
         fq_mvpoly_reduce_field_equation(&result_mvpoly);
     }
     fq_mvpoly_make_monic(&result_mvpoly);

@@ -61,8 +61,15 @@ typedef struct {
  * x^q - x after every multiplication (working in F_q[vars] / <x^q - x, ...>). */
 extern int g_field_equation_reduction;
 
+/* Global flag: when non-zero, only final output/resultants are reduced modulo
+ * x^q - x, while intermediate arithmetic stays in the ordinary polynomial ring. */
+extern int g_field_equation_final_only;
+
 /* Enable or disable field-equation reduction mode. */
 void fq_mvpoly_set_field_equation_reduction(int enable);
+
+/* Enable or disable final-result-only field-equation reduction mode. */
+void fq_mvpoly_set_field_equation_final_only(int enable);
 
 /* Reduce all variable exponents of poly in-place using x^q = x. */
 void fq_mvpoly_reduce_field_equation(fq_mvpoly_t *poly);

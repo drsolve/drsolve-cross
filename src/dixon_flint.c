@@ -1255,7 +1255,7 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
         // printf("CPU time: %.3f seconds | Wall time: %.3f seconds | Threads: %d\n", cpu_elapsed, wall_elapsed, threads);
     }
 
-    if (g_field_equation_reduction) {
+    if (g_field_equation_reduction || g_field_equation_final_only) {
         fq_mvpoly_reduce_field_equation(result);
     }
 }
@@ -2171,7 +2171,7 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         }
     }
     
-    const int use_extension_specialization = 1;//(fq_nmod_ctx_degree(ctx) == 1 && fq_nmod_ctx_prime(ctx) <= 100 && npars > 0);
+    const int use_extension_specialization = (fq_nmod_ctx_degree(ctx) == 1 && fq_nmod_ctx_prime(ctx) <= 100 && npars > 0);
     const slong MAX_SELECTION_ATTEMPTS = use_extension_specialization ? 3 : 2;
 
     field_ctx_t selection_ctx;
