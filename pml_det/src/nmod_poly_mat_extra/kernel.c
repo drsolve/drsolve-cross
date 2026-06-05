@@ -64,7 +64,7 @@ _nmod_kernel_now_seconds(void)
 static int
 _nmod_kernel_profile_enabled(void)
 {
-    return g_dixon_verbose_level >= 2 || g_dixon_debug_mode;
+    return g_dixon_verbose_level >= 3 && g_dixon_debug_mode;
 }
 
 void

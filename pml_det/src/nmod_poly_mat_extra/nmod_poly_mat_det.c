@@ -78,13 +78,13 @@ _nmod_det_now_seconds(void)
 static int
 _nmod_det_profile_enabled(void)
 {
-    return g_dixon_verbose_level >= 2 || g_dixon_debug_mode;
+    return g_dixon_verbose_level >= 3 && g_dixon_debug_mode;
 }
 
 static int
 _nmod_det_profile_heavy_enabled(void)
 {
-    return g_dixon_verbose_level >= 3 || g_dixon_debug_mode;
+    return g_dixon_verbose_level >= 3 && g_dixon_debug_mode;
 }
 
 static void
@@ -240,7 +240,7 @@ _nmod_poly_mat_det_hnf_recursive(nmod_poly_t det,
         if (collect_profile)
             g_nmod_det_hnf_profile.basecase_calls++;
         g_nmod_det_hnf_profile.total_time += _nmod_det_now_seconds() - call_start;
-        if (collect_profile && heavy_profile)
+        if (collect_profile && heavy_profile && 0)
             printf("    [PML HNF node] depth=%ld dim=%ld input_deg=%ld basecase=1\n",
                    depth, dim, input_degree);
         if (collect_profile && depth == 0)
@@ -378,7 +378,7 @@ _nmod_poly_mat_det_hnf_recursive(nmod_poly_t det,
             g_nmod_det_hnf_profile.max_schur_degree = schur_deg;
         if (schur_input_deg > g_nmod_det_hnf_profile.max_kernel_pivot_degree)
             g_nmod_det_hnf_profile.max_kernel_pivot_degree = schur_input_deg;
-        if (heavy_profile)
+        if (heavy_profile && 0)
             printf("    [PML HNF node] depth=%ld dim=%ld split=(%ld,%ld) input_deg=%ld schur_deg=%ld ker_pivot_deg=%ld\n",
                    depth, dim, cdim1, cdim2, input_degree, schur_deg, schur_input_deg);
     }

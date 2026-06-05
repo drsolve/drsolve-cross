@@ -1,0 +1,33 @@
+Rational Polynomial System Solver
+==================================
+Field: Q
+Polynomials: x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1
+Time: 0.041 seconds
+
+Solutions:
+==========
+
+=== Rational Polynomial System Solutions ===
+Candidate sets: 2
+Found 2 exact rational solution set(s):
+
+Solution set 1:
+  x = 1
+  y = 2
+  z = 1
+  residuals: [eq1=0, eq2=0, eq3=0]
+
+Solution set 2:
+  x = 1
+  y = 1
+  z = 2
+  residuals: [eq1=0, eq2=0, eq3=0]
+
+=== Projection View (all solution sets) ===
+x = {1, 1} (2 solutions)
+y = {2, 1} (2 solutions)
+z = {1, 2} (2 solutions)
+
+Detected 4 real root(s) for resultant variable x. Expanded 2 rational branch(es); additional irrational real branches were handled by numerical back-substitution when possible. Real roots ~= {0 +/- 0, 1.0000000000000000000 +/- 0, 0.38196601124851475669 +/- 8.3385e-12, 2.6180339887504730448 +/- 3.0604e-12}
+=== Solution Complete ===
+

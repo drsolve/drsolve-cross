@@ -53,7 +53,7 @@ _nmod_pmbasis_now_seconds(void)
 static int
 _nmod_pmbasis_profile_enabled(void)
 {
-    return g_dixon_verbose_level >= 2 || g_dixon_debug_mode;
+    return g_dixon_verbose_level >= 3 && g_dixon_debug_mode;
 }
 
 void
@@ -102,10 +102,13 @@ void nmod_poly_mat_mbasis(nmod_poly_mat_t appbas,
     nmod_mat_poly_init(matp, pmat->r, pmat->c, pmat->modulus);
     nmod_mat_poly_set_trunc_from_poly_mat(matp, pmat, order);
     nmod_mat_poly_init(app, pmat->r, pmat->r, pmat->modulus);
-    if (mbasis_mode != NULL && strcmp(mbasis_mode, "resupdate") == 0)
-        nmod_mat_poly_mbasis_resupdate(app, shift, matp, order);
-    else
+    if (mbasis_mode != NULL &&
+        (strcmp(mbasis_mode, "legacy") == 0 ||
+         strcmp(mbasis_mode, "classic") == 0 ||
+         strcmp(mbasis_mode, "rescomp") == 0))
         nmod_mat_poly_mbasis(app, shift, matp, order);
+    else
+        nmod_mat_poly_mbasis_resupdate(app, shift, matp, order);
     nmod_poly_mat_set_from_mat_poly(appbas, app);
     nmod_mat_poly_clear(matp);
     nmod_mat_poly_clear(app);
