@@ -34,7 +34,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.3.0"
+#define PROGRAM_VERSION "0.3.1"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -104,7 +104,6 @@ static void print_short_usage(const char *prog_name)
     printf("  --macaulay        Use Macaulay resultant\n");
     printf("  --subres          Use Subresultant (2 polys)\n");
     printf("  --field-equation  After each multiplication, reduces x^q -> x for every variable\n");
-    printf("  --field-equation-s Reduce only the final resultant/output via x^q -> x\n");
     printf("  --ideal <args>    After each multiplication, reduces using the given substitution\n");
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
