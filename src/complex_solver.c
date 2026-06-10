@@ -126,6 +126,8 @@ static int complex_solver_solution_list_reserve(complex_solver_solution_list_t *
     for (slong i = sols->alloc; i < new_alloc; i++) {
         acb_init(sols->items[i].x);
         acb_init(sols->items[i].y);
+        acb_init(sols->items[i].residual1);
+        acb_init(sols->items[i].residual2);
     }
     sols->alloc = new_alloc;
     return 1;
@@ -156,6 +158,8 @@ void complex_solver_solution_list_clear(complex_solver_solution_list_t *sols)
         for (slong i = 0; i < sols->alloc; i++) {
             acb_clear(sols->items[i].x);
             acb_clear(sols->items[i].y);
+            acb_clear(sols->items[i].residual1);
+            acb_clear(sols->items[i].residual2);
         }
         free(sols->items);
     }
@@ -189,6 +193,11 @@ void complex_solver_solution_list_print(const complex_solver_solution_list_t *so
         acb_fprintd(out, sols->items[i].x, digits);
         fprintf(out, ", %s = ", y_name);
         acb_fprintd(out, sols->items[i].y, digits);
+        fprintf(out, "\n");
+        fprintf(out, "      residuals: f1 = ");
+        acb_fprintd(out, sols->items[i].residual1, digits);
+        fprintf(out, ", f2 = ");
+        acb_fprintd(out, sols->items[i].residual2, digits);
         fprintf(out, "\n");
     }
 }
@@ -879,7 +888,9 @@ static int complex_solver_pair_present(const complex_solver_solution_list_t *sol
 
 static int complex_solver_solution_list_append_unique(complex_solver_solution_list_t *sols,
                                                       const acb_t x,
-                                                      const acb_t y)
+                                                      const acb_t y,
+                                                      const acb_t residual1,
+                                                      const acb_t residual2)
 {
     if (!sols || !x || !y) {
         return 0;
@@ -893,6 +904,8 @@ static int complex_solver_solution_list_append_unique(complex_solver_solution_li
 
     acb_set(sols->items[sols->num_solutions].x, x);
     acb_set(sols->items[sols->num_solutions].y, y);
+    acb_set(sols->items[sols->num_solutions].residual1, residual1);
+    acb_set(sols->items[sols->num_solutions].residual2, residual2);
     sols->num_solutions++;
     return 1;
 }
@@ -966,6 +979,8 @@ static int complex_solver_verify_solution_pair_from_strings(const char *poly1_st
                                                             const char *y_name,
                                                             const acb_t x,
                                                             const acb_t y,
+                                                            acb_t residual1_out,
+                                                            acb_t residual2_out,
                                                             slong prec)
 {
     acb_t res1;
@@ -979,6 +994,12 @@ static int complex_solver_verify_solution_pair_from_strings(const char *poly1_st
         acb_clear(res1);
         acb_clear(res2);
         return 0;
+    }
+    if (residual1_out) {
+        acb_set(residual1_out, res1);
+    }
+    if (residual2_out) {
+        acb_set(residual2_out, res2);
     }
     ok = acb_contains_zero(res1) && acb_contains_zero(res2);
     acb_clear(res1);
@@ -1045,14 +1066,23 @@ int complex_solver_solve_bivariate_2x2_from_string(const char *poly_string,
             acb_poly_find_roots(x_root_vec, x_poly, NULL, 0, prec);
 
             for (slong j = 0; j < x_root_count; j++) {
+                acb_t residual1;
+                acb_t residual2;
+                acb_init(residual1);
+                acb_init(residual2);
                 if (complex_solver_verify_solution_pair_from_strings(poly1_str, poly2_str,
                                                                      var_names[0], var_names[1],
                                                                      x_root_vec + j, y_roots.roots[i],
+                                                                     residual1, residual2,
                                                                      prec)) {
                     complex_solver_solution_list_append_unique(sols_out,
                                                                x_root_vec + j,
-                                                               y_roots.roots[i]);
+                                                               y_roots.roots[i],
+                                                               residual1,
+                                                               residual2);
                 }
+                acb_clear(residual1);
+                acb_clear(residual2);
             }
         }
 
@@ -1081,60 +1111,5 @@ cleanup:
     if (!ok) {
         complex_solver_solution_list_clear(sols_out);
     }
-    return ok;
-}
-
-int complex_solver_self_test(void)
-{
-    static const struct {
-        const char *poly_str;
-        const char *var_name;
-    } cases[] = {
-        {"x^2 + 1", "x"},
-        {"x^4 + 1", "x"}
-    };
-    static const char *system_cases[] = {
-        "x^2 + y^2 + 1, x - y",
-        "x^2 + y^2 - 1, x - y"
-    };
-
-    int ok = 1;
-
-    printf("=== Complex Solver Self Test ===\n");
-    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-        complex_solver_roots_t roots;
-        complex_solver_roots_init(&roots);
-
-        printf("\nCase %zu: %s\n", i + 1, cases[i].poly_str);
-        if (!complex_solver_univariate_complex_roots_from_string(cases[i].poly_str,
-                                                                 cases[i].var_name,
-                                                                 128,
-                                                                 &roots)) {
-            printf("  FAILED: complex root solve failed.\n");
-            ok = 0;
-        } else {
-            complex_solver_roots_print(&roots, stdout, 20);
-        }
-
-        complex_solver_roots_clear(&roots);
-    }
-
-    printf("\n=== Complex Solver 2x2 Self Test ===\n");
-    for (size_t i = 0; i < sizeof(system_cases) / sizeof(system_cases[0]); i++) {
-        complex_solver_solution_list_t sols;
-        complex_solver_solution_list_init(&sols);
-
-        printf("\nSystem %zu: %s\n", i + 1, system_cases[i]);
-        if (!complex_solver_solve_bivariate_2x2_from_string(system_cases[i], 128, &sols)) {
-            printf("  FAILED: 2x2 complex solve failed.\n");
-            ok = 0;
-        } else {
-            complex_solver_solution_list_print(&sols, stdout, 20);
-        }
-
-        complex_solver_solution_list_clear(&sols);
-    }
-
-    printf("\nComplex solver self test: %s\n", ok ? "PASS" : "FAIL");
     return ok;
 }

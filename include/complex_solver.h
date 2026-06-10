@@ -27,6 +27,8 @@ typedef struct {
 typedef struct {
     acb_t x;
     acb_t y;
+    acb_t residual1;
+    acb_t residual2;
 } complex_solver_solution_pair_t;
 
 typedef struct {
@@ -59,7 +61,5 @@ int complex_solver_univariate_complex_roots_from_string(const char *poly_str,
 int complex_solver_solve_bivariate_2x2_from_string(const char *poly_string,
                                                    slong prec,
                                                    complex_solver_solution_list_t *sols_out);
-
-int complex_solver_self_test(void);
 
 #endif

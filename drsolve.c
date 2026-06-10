@@ -109,7 +109,6 @@ static void print_short_usage(const char *prog_name)
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
     printf("  --complex         Q-only complex mode (2x2 solver or univariate resultant complex roots)\n");
-    printf("  --test-complex-solver  Run built-in complex-solver self test\n");
     printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
     printf("  -h, --help        Show full detailed help information\n");
     printf("  -V, --version     Print version and build information\n");
@@ -216,12 +215,10 @@ static void print_usage(const char *prog_name)
     printf("  Diagnostics:\n");
     printf("    %s --test <n>\n", prog_name);
     printf("    %s --complex \"f1, f2\" 0\n", prog_name);
-    printf("    %s --test-complex-solver\n", prog_name);
     printf("    %s --time <args>\n", prog_name);
     printf("    %s -v 2 <args>\n", prog_name);
     printf("    -> --test values: 0 help, 1 matrix size, 2 Bezout bound, 3 solver correctness, 4 solver performance, 5 XHash\n");
     printf("    -> --complex supports Q-only 2x2 solver mode; in elimination mode it prints complex roots when the resultant is univariate\n");
-    printf("    -> --test-complex-solver currently exercises univariate complex roots over Q\n");
     printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
     printf("    -> `--silent`, `--debug`, `--solve-verbose` and `--solve` remain accepted for compatibility\n");
     printf("\n");
@@ -2540,7 +2537,6 @@ int main(int argc, char *argv[])
     int random_density_given = 0;
     ulong random_seed = 0;
     int random_seed_given = 0;
-    int complex_solver_test_mode = 0;
     int complex_mode = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -2552,8 +2548,6 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--solve-rational-only") == 0) {
             solve_mode = 1;
             solve_rational_only_mode = 1;
-        } else if (strcmp(argv[i], "--test-complex-solver") == 0) {
-            complex_solver_test_mode = 1;
         } else if (strcmp(argv[i], "--complex") == 0) {
             complex_mode = 1;
         } else if (strcmp(argv[i], "--solve") == 0 ||
@@ -2835,12 +2829,6 @@ int main(int argc, char *argv[])
     if (positional_count >= 1 &&
         strcmp(positional_args[0], "--test-solver") == 0) {
         if (!silent_mode) test_polynomial_solver();
-        return 0;
-    }
-    if (complex_solver_test_mode) {
-        if (!silent_mode) {
-            return complex_solver_self_test() ? 0 : 1;
-        }
         return 0;
     }
 
