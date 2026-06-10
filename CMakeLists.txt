@@ -579,6 +579,7 @@ set(MATH_SOURCES
   src/fq_sparse_interpolation.c
   src/fq_unified_interface.c
   src/fmpq_acb_roots.c
+  src/complex_solver.c
   src/gf2n_mpoly.c
   src/gf2n_field.c
   src/gf2n_poly.c

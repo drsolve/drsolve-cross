@@ -169,6 +169,7 @@ MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
                $(SRC_DIR)/unified_mpoly_interface.c \
                $(SRC_DIR)/unified_mpoly_resultant.c \
                $(SRC_DIR)/fmpq_acb_roots.c \
+               $(SRC_DIR)/complex_solver.c \
                $(SRC_DIR)/rational_system_solver.c
 # Object files (in build directory)
 MATH_OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(MATH_SOURCES))

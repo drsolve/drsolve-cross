@@ -99,6 +99,8 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
 void print_resultant_summary(const fq_mvpoly_t *result, char **remaining_vars, slong num_remaining_vars);
 void dixon_clear_last_root_report(void);
 const char *dixon_get_last_root_report(void);
+void dixon_set_print_complex_roots(int enabled);
+int dixon_get_print_complex_roots(void);
 
 // Main Dixon interface functions
 char* dixon(const char **poly_strings, slong num_polys, 

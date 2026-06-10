@@ -16,6 +16,7 @@
 static int g_suppress_univariate_root_reporting = 0;
 static int g_suppress_rational_root_reporting = 0;
 static char *g_last_root_report = NULL;
+static int g_dixon_print_complex_roots = 0;
 
 static int qq_root_debug_enabled(void)
 {
@@ -356,6 +357,16 @@ void dixon_clear_last_root_report(void)
 const char *dixon_get_last_root_report(void)
 {
     return g_last_root_report;
+}
+
+void dixon_set_print_complex_roots(int enabled)
+{
+    g_dixon_print_complex_roots = enabled ? 1 : 0;
+}
+
+int dixon_get_print_complex_roots(void)
+{
+    return g_dixon_print_complex_roots;
 }
 
 static void dixon_set_last_root_report(const char *report)
@@ -2451,6 +2462,30 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
                       var_name, degree, coeff_recon_seconds);
 
     printf("\nRoots in %s (degree %ld):\n", var_name, degree);
+
+    if (g_dixon_print_complex_roots) {
+        slong prec = 64;
+        fmpq_acb_roots_t all_roots;
+        fmpq_acb_roots_init(&all_roots);
+        root_search_start = clock();
+        qq_root_debug_log("[root-debug] Calling approximate complex-root pipeline (prec=%ld).\n",
+                          prec);
+        fmpq_poly_all_roots(&all_roots, rat_poly, prec);
+        root_search_seconds = (double) (clock() - root_search_start) / CLOCKS_PER_SEC;
+        qq_root_debug_log("[root-debug] Approximate complex-root pipeline finished in %.3f s.\n",
+                          root_search_seconds);
+
+        fmpq_acb_roots_print(&all_roots);
+        if (have_file) {
+            fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+            fmpq_acb_roots_print_all_to_file(fp_file, &all_roots);
+        }
+
+        fmpq_acb_roots_clear(&all_roots);
+        fmpq_poly_clear(rat_poly);
+        free(par_used);
+        return;
+    }
 
     exponent_gcd = qq_fmpq_poly_exponent_gcd(rat_poly);
     use_compressed_root_search = (exponent_gcd > 1);

@@ -31,6 +31,7 @@
 #include "dixon_complexity.h"
 #include "large_prime_system_solver.h"
 #include "polynomial_system_solver.h"
+#include "complex_solver.h"
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
@@ -107,6 +108,8 @@ static void print_short_usage(const char *prog_name)
     printf("  --ideal <args>    After each multiplication, reduces using the given substitution\n");
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
+    printf("  --complex         Q-only complex mode (2x2 solver or univariate resultant complex roots)\n");
+    printf("  --test-complex-solver  Run built-in complex-solver self test\n");
     printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
     printf("  -h, --help        Show full detailed help information\n");
     printf("  -V, --version     Print version and build information\n");
@@ -212,9 +215,13 @@ static void print_usage(const char *prog_name)
 
     printf("  Diagnostics:\n");
     printf("    %s --test <n>\n", prog_name);
+    printf("    %s --complex \"f1, f2\" 0\n", prog_name);
+    printf("    %s --test-complex-solver\n", prog_name);
     printf("    %s --time <args>\n", prog_name);
     printf("    %s -v 2 <args>\n", prog_name);
     printf("    -> --test values: 0 help, 1 matrix size, 2 Bezout bound, 3 solver correctness, 4 solver performance, 5 XHash\n");
+    printf("    -> --complex supports Q-only 2x2 solver mode; in elimination mode it prints complex roots when the resultant is univariate\n");
+    printf("    -> --test-complex-solver currently exercises univariate complex roots over Q\n");
     printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
     printf("    -> `--silent`, `--debug`, `--solve-verbose` and `--solve` remain accepted for compatibility\n");
     printf("\n");
@@ -1905,6 +1912,27 @@ static void save_rational_solver_result_to_file(const char *filename,
     fclose(out_fp);
 }
 
+static void save_complex_solver_result_to_file(const char *filename,
+                                               const char *polys_str,
+                                               const complex_solver_solution_list_t *sols,
+                                               double wall_time)
+{
+    FILE *out_fp = fopen(filename, "w");
+    if (!out_fp) {
+        fprintf(stderr, "Warning: Could not create output file '%s'\n", filename);
+        return;
+    }
+
+    fprintf(out_fp, "Complex Polynomial System Solver\n");
+    fprintf(out_fp, "===============================\n");
+    fprintf(out_fp, "Field: Q (complex 2x2 mode)\n");
+    fprintf(out_fp, "Polynomials: %s\n", polys_str ? polys_str : "");
+    fprintf(out_fp, "Time: %.3f seconds\n", wall_time);
+    fprintf(out_fp, "\nSolutions:\n==========\n");
+    complex_solver_solution_list_print(sols, out_fp, 20);
+    fclose(out_fp);
+}
+
 static int redirect_fd_to_devnull(int target_fd, int *orig_fd)
 {
     int devnull;
@@ -2512,6 +2540,8 @@ int main(int argc, char *argv[])
     int random_density_given = 0;
     ulong random_seed = 0;
     int random_seed_given = 0;
+    int complex_solver_test_mode = 0;
+    int complex_mode = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -2522,6 +2552,10 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--solve-rational-only") == 0) {
             solve_mode = 1;
             solve_rational_only_mode = 1;
+        } else if (strcmp(argv[i], "--test-complex-solver") == 0) {
+            complex_solver_test_mode = 1;
+        } else if (strcmp(argv[i], "--complex") == 0) {
+            complex_mode = 1;
         } else if (strcmp(argv[i], "--solve") == 0 ||
                    strcmp(argv[i], "-s")      == 0) {
             solve_mode = 1;
@@ -2801,6 +2835,12 @@ int main(int argc, char *argv[])
     if (positional_count >= 1 &&
         strcmp(positional_args[0], "--test-solver") == 0) {
         if (!silent_mode) test_polynomial_solver();
+        return 0;
+    }
+    if (complex_solver_test_mode) {
+        if (!silent_mode) {
+            return complex_solver_self_test() ? 0 : 1;
+        }
         return 0;
     }
 
@@ -3114,6 +3154,10 @@ int main(int argc, char *argv[])
         }
     } else if (solve_rational_only_mode) {
         fprintf(stderr, "Error: --solve-rational-only is only supported for field_size=0.\n");
+        goto cleanup_fail;
+    }
+    if (complex_mode && !rational_mode) {
+        fprintf(stderr, "Error: --complex is only supported for field_size=0.\n");
         goto cleanup_fail;
     }
     if (large_prime_mode) {
@@ -3490,8 +3534,13 @@ int main(int argc, char *argv[])
     polynomial_solutions_t *solutions = NULL;
     rational_solutions_t *rational_solutions = NULL;
     large_prime_solutions_t *large_prime_solutions = NULL;
+    complex_solver_solution_list_t complex_solutions;
+    int complex_solutions_initialized = 0;
 
     dixon_clear_last_root_report();
+    dixon_set_print_complex_roots(complex_mode);
+    complex_solver_solution_list_init(&complex_solutions);
+    complex_solutions_initialized = 1;
 
     if (comp_mode) {
         /* ---- Complexity analysis ---- */
@@ -3536,24 +3585,51 @@ int main(int argc, char *argv[])
         int suppress_solver_stderr = !enable_solver_realtime_progress;
 
         if (rational_mode) {
-            rational_solver_set_realtime_progress(enable_solver_realtime_progress);
-            rational_solver_set_internal_trace(solve_verbose_mode);
-            rational_solver_set_exact_only(solve_rational_only_mode);
+            if (complex_mode) {
+                slong num_polys = 0, num_vars = 0;
+                char **poly_parts = split_string(polys_str, &num_polys);
+                char **var_names = rational_extract_variables_improved(poly_parts, num_polys, &num_vars);
 
-            if (suppress_solver_stdout) {
-                redirect_fd_to_devnull(STDOUT_FILENO, &orig_stdout);
-            }
-            if (suppress_solver_stderr) {
-                redirect_fd_to_devnull(STDERR_FILENO, &orig_stderr);
-            }
+                if (!poly_parts || num_polys != 2 || !var_names || num_vars != 2) {
+                    if (!silent_mode) {
+                        fprintf(stderr, "Error: --complex solver mode currently supports only 2 equations in 2 variables over Q.\n");
+                    }
+                    if (poly_parts) free_split_strings(poly_parts, num_polys);
+                    if (var_names) {
+                        for (slong i = 0; i < num_vars; i++) free(var_names[i]);
+                        free(var_names);
+                    }
+                    goto cleanup_fail;
+                }
 
-            rational_solutions = solve_rational_polynomial_system_string(polys_str);
+                if (!complex_solver_solve_bivariate_2x2_from_string(polys_str, 128, &complex_solutions) &&
+                    !silent_mode) {
+                    fprintf(stderr, "\nError: Complex 2x2 polynomial system solving failed\n");
+                }
 
-            if (suppress_solver_stdout) {
-                restore_fd(STDOUT_FILENO, orig_stdout);
-            }
-            if (suppress_solver_stderr) {
-                restore_fd(STDERR_FILENO, orig_stderr);
+                free_split_strings(poly_parts, num_polys);
+                for (slong i = 0; i < num_vars; i++) free(var_names[i]);
+                free(var_names);
+            } else {
+                rational_solver_set_realtime_progress(enable_solver_realtime_progress);
+                rational_solver_set_internal_trace(solve_verbose_mode);
+                rational_solver_set_exact_only(solve_rational_only_mode);
+
+                if (suppress_solver_stdout) {
+                    redirect_fd_to_devnull(STDOUT_FILENO, &orig_stdout);
+                }
+                if (suppress_solver_stderr) {
+                    redirect_fd_to_devnull(STDERR_FILENO, &orig_stderr);
+                }
+
+                rational_solutions = solve_rational_polynomial_system_string(polys_str);
+
+                if (suppress_solver_stdout) {
+                    restore_fd(STDOUT_FILENO, orig_stdout);
+                }
+                if (suppress_solver_stderr) {
+                    restore_fd(STDERR_FILENO, orig_stderr);
+                }
             }
         } else if (large_prime_mode) {
             large_prime_solver_set_realtime_progress(enable_solver_realtime_progress);
@@ -3693,7 +3769,22 @@ int main(int argc, char *argv[])
         ;
     } else if (solve_mode) {
         if (rational_mode) {
-            if (rational_solutions) {
+            if (complex_mode) {
+                if (complex_solutions.num_solutions > 0) {
+                    if (!silent_mode) {
+                        complex_solver_solution_list_print(&complex_solutions, stdout, 20);
+                    }
+
+                    if (output_filename) {
+                        save_complex_solver_result_to_file(output_filename, polys_str,
+                                                           &complex_solutions, wall_time);
+                        if (!silent_mode)
+                            printf("Result saved to: %s\n", output_filename);
+                    }
+                } else if (!silent_mode) {
+                    fprintf(stderr, "\nError: Complex 2x2 polynomial system solving failed\n");
+                }
+            } else if (rational_solutions) {
                 if (!silent_mode) {
                     print_rational_solutions(rational_solutions);
                 }
@@ -3826,6 +3917,9 @@ int main(int argc, char *argv[])
     free(rand_comp_spec);
     if (input_filename)  free(input_filename);
     if (output_filename) free(output_filename);
+    if (complex_solutions_initialized) {
+        complex_solver_solution_list_clear(&complex_solutions);
+    }
 
     cleanup_unified_workspace();
     flint_cleanup();
@@ -3856,6 +3950,9 @@ cleanup_fail:
     free(rand_comp_spec);
     if (input_filename)  free(input_filename);
     if (output_filename) free(output_filename);
+    if (complex_solutions_initialized) {
+        complex_solver_solution_list_clear(&complex_solutions);
+    }
     flint_cleanup();
     return 1;
 }
