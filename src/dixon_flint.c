@@ -20,6 +20,7 @@ resultant_method_t g_resultant_method = RESULTANT_METHOD_DIXON;
 int g_dixon_verbose_level = 1;
 int g_dixon_debug_mode = 0;
 int g_dixon_show_step_timing = 0;
+int g_matrix_transpose_threshold = 10000;
 rational_root_scan_mode_t g_rational_root_scan_mode = RATIONAL_ROOT_SCAN_AUTO;
 int g_dixon_fast_use_ksy_precondition = 0;
 slong g_dixon_fast_ksy_constant_col = 0;
@@ -2150,7 +2151,6 @@ void find_pivot_rows_simple(slong **selected_rows_out, slong *num_selected,
     //printf("Non-prime field computation completed in %.4f seconds using unified interface\n", elapsed);
 }
 
-int g_matrix_transpose_threshold = 1000;
 
 // Optimized find_fq_optimal_maximal_rank_submatrix
 void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix, 

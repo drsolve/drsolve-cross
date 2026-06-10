@@ -61,6 +61,7 @@ nmod_poly_mat_pmbasis_profile_reset(void)
 {
     g_nmod_pmbasis_profile = (nmod_poly_mat_pmbasis_profile_t) {0};
     nmod_mat_poly_mbasis_profile_reset();
+    nmod_mat_poly_mbasis_resupdate_profile_reset();
 }
 
 void
@@ -80,6 +81,7 @@ nmod_poly_mat_pmbasis_profile_print(void)
            p->pmbasis_second_half_time, p->pmbasis_final_mul_time,
            p->mbasis_total_time);
     nmod_mat_poly_mbasis_profile_print();
+    nmod_mat_poly_mbasis_resupdate_profile_print();
 }
 
 void nmod_poly_mat_mbasis(nmod_poly_mat_t appbas,

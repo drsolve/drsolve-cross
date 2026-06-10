@@ -1245,7 +1245,7 @@ void compute_unified_mpoly_det_with_method(unified_mpoly_t det_result,
                                           int use_parallel,
                                           int method) {
     if (method != DET_METHOD_KRONECKER_NMOD &&
-        g_dixon_verbose_level >= 3 && size <= 5) {
+        g_dixon_verbose_level >= 3 && size <= 3) {
         debug_dump_leibniz_paths(mpoly_matrix, size, ctx);
     }
 
