@@ -29,15 +29,24 @@
 // Global control for parallelization
 extern int USE_PARALLEL;
 extern int g_interpolation_threads;
+extern int g_dixon_verbose_level;
 
 // Debug switch
 #define DEBUG_FQ_INTERPOLATION 0
 
-#if DEBUG_FQ_INTERPOLATION
-#define FQ_INTERP_PRINT(fmt, ...) printf("[FQ_INTERP] " fmt, ##__VA_ARGS__)
-#else
-#define FQ_INTERP_PRINT(fmt, ...)
-#endif
+#define FQ_INTERP_PRINT(fmt, ...)                                            \
+    do {                                                                     \
+        if (g_dixon_verbose_level >= 3) {                                    \
+            printf("[FQ_INTERP] " fmt, ##__VA_ARGS__);                       \
+        }                                                                    \
+    } while (0)
+
+#define FQ_INTERP_PROGRESS_PRINT(fmt, ...)                                   \
+    do {                                                                     \
+        if (g_dixon_verbose_level >= 2) {                                    \
+            printf(fmt, ##__VA_ARGS__);                                      \
+        }                                                                    \
+    } while (0)
 
 // Forward declaration
 //typedef struct fq_mvpoly_struct fq_mvpoly_t;

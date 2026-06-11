@@ -177,6 +177,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                           slong num_all_vars,
                                           slong num_elim_vars,
                                           slong num_parameter_vars,
+                                          const fmpz_t field_characteristic,
                                           const fmpz_t field_order,
                                           double omega);
 

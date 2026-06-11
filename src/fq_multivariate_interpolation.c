@@ -761,8 +761,8 @@ void fq_tensor_interpolation_recursive_optimized(fq_mvpoly_t *result,
         if (current_dim == 0 && total_dims > 1) {
             top_level_progress += grid_sizes[0];
             if (top_level_progress % 100 == 0 || top_level_progress == top_level_total) {
-                FQ_INTERP_PRINT("\r  Interpolation progress: %ld/%ld", 
-                       top_level_progress, top_level_total);
+                FQ_INTERP_PROGRESS_PRINT("\r  Interpolation progress: %ld/%ld",
+                                         top_level_progress, top_level_total);
                 fflush(stdout);
             }
         }
@@ -1048,7 +1048,7 @@ void fq_tensor_interpolation_all_vars_optimized(fq_mvpoly_t *result,
     fq_tensor_interpolation_recursive_optimized(result, total_dims - 1, grids, grid_sizes,
                                                values, &value_offset, total_dims, ctx);
     
-    FQ_INTERP_PRINT("\n");
+    FQ_INTERP_PROGRESS_PRINT("\n");
     
     if (result->nvars != nvars || result->npars != npars) {
         FQ_INTERP_PRINT("Fixing result structure: %ld->%ld vars, %ld->%ld pars\n",
@@ -1451,6 +1451,8 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
         double cpu_det_time = 0.0;
         slong par_eval_count = 0;
         slong par_det_count = 0;
+        slong completed_points = 0;
+        slong next_progress_report = 100;
         
         double parallel_start = omp_get_wtime();
         
@@ -1515,13 +1517,30 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
                 }
                 free(coords);
                 free(indices);
-                
-                // Progress report (only from thread 0)
-                if (omp_get_thread_num() == 0 && (point % 100 == 0)) {
-                    // Use atomic read to get a better estimate
-                    slong completed = point;  // This is just an approximation
-                    FQ_INTERP_PRINT("\r  Progress: %ld/%ld", completed, total_points);
-                    fflush(stdout);
+
+                slong completed;
+                #pragma omp atomic capture
+                completed = ++completed_points;
+
+                if (g_dixon_verbose_level >= 2 &&
+                    (completed >= next_progress_report || completed == total_points)) {
+                    #pragma omp critical
+                    {
+                        while (next_progress_report <= completed &&
+                               next_progress_report <= total_points) {
+                            FQ_INTERP_PROGRESS_PRINT("\r  Progress: %ld/%ld",
+                                                     next_progress_report, total_points);
+                            fflush(stdout);
+                            next_progress_report += 100;
+                        }
+
+                        if (completed == total_points &&
+                            next_progress_report > total_points) {
+                            FQ_INTERP_PROGRESS_PRINT("\r  Progress: %ld/%ld",
+                                                     total_points, total_points);
+                            fflush(stdout);
+                        }
+                    }
                 }
             }
             
@@ -1661,8 +1680,8 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
             
             // Progress report
             if (point % 1 == 0 || point == total_points - 1) {
-                FQ_INTERP_PRINT("\r  Progress: %ld/%ld", 
-                       point + 1, total_points);
+                FQ_INTERP_PROGRESS_PRINT("\r  Progress: %ld/%ld",
+                                         point + 1, total_points);
                 fflush(stdout);
             }
         }
@@ -1680,7 +1699,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
         printf("\n");
     }
     */
-    FQ_INTERP_PRINT("\n");
+    FQ_INTERP_PROGRESS_PRINT("\n");
     
     FQ_INTERP_PRINT("Starting tensor interpolation...\n");
     
