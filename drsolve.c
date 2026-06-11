@@ -97,7 +97,7 @@ static void print_short_usage(const char *prog_name)
     printf("    %s example.dr\n", prog_name);
     printf("    %s example_solve.dr -o solution.dr\n", prog_name);
     printf("OTHER OPTIONS:\n");
-    printf("  --method <n>      Determinant method selection (0:Recursive, 1:HNF, 2:Interpolation, 3:Sparse, 4:Bareiss, 5:Fdixon)\n");
+    printf("  --method <n>      Determinant method selection (0:Expansion, 1:HNF, 2:Interpolation, 3:Sparse, 4:Bareiss, 5:Fdixon)\n");
     printf("  --step1, --step4  Override method <n> for specific algorithm steps\n");
     printf("  --cache <num>     Determinant memoization cache entry limit (default: 1024)\n");
     printf("  --threads <num>   Set number of threads for parallel computation\n");
@@ -106,10 +106,10 @@ static void print_short_usage(const char *prog_name)
     printf("  --subres          Use Subresultant (2 polys)\n");
     printf("  --field-equation  After each multiplication, reduces x^q -> x for every variable\n");
     printf("  --ideal <args>    After each multiplication, reduces using the given substitution\n");
+    printf("  --complex         Output complex solutions (2x2 solver or complex roots over Q)\n");
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
-    printf("  --complex         Q-only complex mode (2x2 solver or univariate resultant complex roots)\n");
-    printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:debug, 3:trace)\n");
+    printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:detailed, 3:debug)\n");
     printf("  -h, --help        Show full detailed help information\n");
     printf("  -V, --version     Print version and build information\n");
 }
@@ -237,10 +237,10 @@ static void print_usage(const char *prog_name)
     printf("    %s --method <num> <args>\n", prog_name);
     printf("    %s --fq-det-method <auto|hnf|iter> <args>\n", prog_name);
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
-    printf("    -> Available methods: 0.Recursive; 1.HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction; 6.Balanced split Laplace (experimental)\n");
+    printf("    -> Available methods: 0.Minor expansion; 1.HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction; 6.Balanced split Laplace (experimental)\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
     printf("    -> --fq-det-method (auto|hnf|iter) controls the prime-field univariate polynomial-matrix determinant backend used in fq_poly_mat_det\n");
-    printf("    -> --cache sets the determinant memoization cache entry cap (method 0 / unified recursive path)\n");
+    printf("    -> --cache sets the determinant memoization cache entry cap (method 0 / unified expansion path)\n");
     printf("    -> --fast-ksy enables a KSY precondition check for method 5 submatrix extraction; --no-fast-ksy disables it\n");
     printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
     printf("    -> --step3-verify-second enables the second Step 3 verification pass; default is off\n");
@@ -395,7 +395,7 @@ static const char *display_prog_name(const char *argv0)
 static const char *det_method_name_cli(int method)
 {
     switch (method) {
-        case 0: return "Recursive expansion";
+        case 0: return "Minor expansion";
         case 1: return "HNF";
         case 2: return "Interpolation";
         case 3: return "sparse interpolation";

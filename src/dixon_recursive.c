@@ -605,7 +605,7 @@ static const char *fast_dixon_det_method_name(det_method_t method)
 {
     switch (method) {
         case DET_METHOD_RECURSIVE:
-            return "recursive expansion";
+            return "minor expansion";
         case DET_METHOD_KRONECKER:
             return "HNF";
         case DET_METHOD_INTERPOLATION:

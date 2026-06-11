@@ -26,7 +26,7 @@
 #include "unified_mpoly_det.h"
 
 // Algorithm selection options
-#define DET_ALGORITHM_RECURSIVE       0  // Original recursive expansion algorithm
+#define DET_ALGORITHM_RECURSIVE       0  // Original minor expansion algorithm
 #define DET_ALGORITHM_INTERPOLATION   1  // Multivariate interpolation algorithm
 #define DET_ALGORITHM_KRONECKER       2  // Kronecker+HNF to univariate
 #define DET_ALGORITHM_POLY_RECURSIVE  3  // Convert to fq_nmod_poly and use recursive

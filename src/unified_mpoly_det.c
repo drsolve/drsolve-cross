@@ -283,7 +283,7 @@ static void compute_unified_mpoly_det_balanced_split_top_level(unified_mpoly_t d
     right_cols = (int *) malloc((size_t) right_size * sizeof(int));
     if (left_mat == NULL || right_mat == NULL || left_cols == NULL || right_cols == NULL) {
         if (g_dixon_verbose_level >= 1) {
-            printf("  balanced split experimental: allocation failed, falling back to recursive expansion\n");
+            printf("  balanced split experimental: allocation failed, falling back to minor expansion\n");
         }
         if (left_mat != NULL) unified_mpoly_mat_clear(left_mat, left_size, left_size);
         if (right_mat != NULL) unified_mpoly_mat_clear(right_mat, right_size, right_size);

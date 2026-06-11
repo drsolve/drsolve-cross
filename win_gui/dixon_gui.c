@@ -101,10 +101,12 @@ static int max_int(int a, int b)
 static void populate_method_combo(HWND combo)
 {
     SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "Default");
-    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "0 - Recursive");
-    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "1 - Kronecker+HNF");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "0 - Minor expansion");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "1 - HNF");
     SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "2 - Interpolation");
     SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "3 - Sparse interpolation");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "4 - Bareiss");
+    SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM) "5 - Recursive Dixon construction");
     SendMessageA(combo, CB_SETCURSEL, 0, 0);
 }
 
@@ -556,7 +558,7 @@ static void create_tab_pages(void)
 
     item.pszText = "Solve";
     TabCtrl_InsertItem(g_tab, 0, &item);
-    item.pszText = "Dixon";
+    item.pszText = "Resultant";
     TabCtrl_InsertItem(g_tab, 1, &item);
     item.pszText = "Complexity";
     TabCtrl_InsertItem(g_tab, 2, &item);

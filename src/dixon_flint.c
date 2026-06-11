@@ -31,7 +31,7 @@ static const char *dixon_det_method_name(det_method_t method)
 {
     switch (method) {
         case DET_METHOD_RECURSIVE:
-            return "recursive expansion";
+            return "minor expansion";
         case DET_METHOD_KRONECKER:
             return "fast HNF";
         case DET_METHOD_INTERPOLATION:
@@ -1212,7 +1212,7 @@ void compute_fq_coefficient_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **coeff_
                 break;
                 
             case DET_METHOD_RECURSIVE:
-                dixon_debug_log("  Method: recursive expansion\n");
+                dixon_debug_log("  Method: minor expansion\n");
                 
                 compute_fq_det_recursive(result, coeff_matrix, size);
                 break;

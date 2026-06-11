@@ -9,7 +9,7 @@ static const char *macaulay_det_method_name(det_method_t method)
 {
     switch (method) {
         case DET_METHOD_RECURSIVE:
-            return "recursive expansion";
+            return "minor expansion";
         case DET_METHOD_KRONECKER:
             return "Kronecker+HNF";
         case DET_METHOD_INTERPOLATION:

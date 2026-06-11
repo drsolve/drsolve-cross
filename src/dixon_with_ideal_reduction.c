@@ -2167,7 +2167,7 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     
     /* Compute determinant of modified matrix */
     fq_mvpoly_t d_poly;
-    if (g_dixon_verbose_level >= 2) printf("Computing cancellation matrix determinant using recursive expansion...\n");
+    if (g_dixon_verbose_level >= 2) printf("Computing cancellation matrix determinant using minor expansion...\n");
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, num_elim_vars, state.npars, DET_METHOD_RECURSIVE);
     if (g_dixon_verbose_level >= 1 && d_poly.nterms <= 100) {
         printf("Dixon polynomial: %ld terms\n", d_poly.nterms);
