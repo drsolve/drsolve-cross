@@ -44,6 +44,7 @@
     #define DEBUG_PRINT_D(...) ((void)0)
 #endif
 
+#define DIXON_INTERPOLATION_POINT_LIMIT 100000000L
 
 // Method enumeration for determinant computation
 typedef enum {

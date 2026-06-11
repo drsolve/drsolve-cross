@@ -7,6 +7,7 @@
 
 #include "dixon_flint.h"
 #include <stdarg.h>
+#include <limits.h>
 #include <sys/time.h>
 #ifdef _OPENMP
 #include <omp.h>
@@ -47,6 +48,109 @@ static const char *dixon_det_method_name(det_method_t method)
     }
 }
 
+static int dixon_estimate_interpolation_points(slong *total_points_out,
+                                               fq_mvpoly_t **matrix,
+                                               slong size)
+{
+    slong actual_nvars;
+    slong actual_npars;
+    slong total_vars;
+    slong *degree_bounds;
+    ulong prime;
+    slong field_degree;
+    slong field_size = 1;
+    int field_size_capped = 0;
+    slong total_points = 1;
+
+    if (!total_points_out || !matrix || size <= 0) return 0;
+
+    actual_nvars = matrix[0][0].nvars;
+    actual_npars = matrix[0][0].npars;
+    total_vars = actual_nvars + actual_npars;
+    if (total_vars <= 0) {
+        *total_points_out = 1;
+        return 1;
+    }
+
+    degree_bounds = (slong *) flint_malloc((size_t) total_vars * sizeof(slong));
+    if (!degree_bounds) return 0;
+
+    fq_compute_det_degree_bounds_optimized(degree_bounds, matrix, size, total_vars);
+
+    prime = fq_nmod_ctx_prime(matrix[0][0].ctx);
+    field_degree = fq_nmod_ctx_degree(matrix[0][0].ctx);
+    for (slong i = 0; i < field_degree; i++) {
+        if (prime != 0 && field_size > LONG_MAX / (slong) prime) {
+            field_size = LONG_MAX;
+            field_size_capped = 1;
+            break;
+        }
+        field_size *= (slong) prime;
+    }
+
+    for (slong i = 0; i < total_vars; i++) {
+        slong grid_size = degree_bounds[i] + 1;
+        if (grid_size < 1) grid_size = 1;
+        if (!field_size_capped && grid_size > field_size) {
+            grid_size = field_size;
+        }
+        if (grid_size < 1) grid_size = 1;
+
+        if (total_points > DIXON_INTERPOLATION_POINT_LIMIT / grid_size) {
+            flint_free(degree_bounds);
+            *total_points_out = DIXON_INTERPOLATION_POINT_LIMIT + 1;
+            return 1;
+        }
+        total_points *= grid_size;
+    }
+
+    flint_free(degree_bounds);
+    *total_points_out = total_points;
+    return 1;
+}
+
+static void dixon_info_log(const char *fmt, ...)
+{
+    va_list args;
+
+    if (g_dixon_verbose_level < 1) {
+        return;
+    }
+
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
+static det_method_t dixon_resolve_step1_det_method(fq_mvpoly_t **modified_M_mvpoly,
+                                                   slong nvars,
+                                                   slong npars,
+                                                   det_method_t requested_method,
+                                                   int emit_warning)
+{
+    slong total_points = 0;
+
+    if (requested_method != DET_METHOD_INTERPOLATION) return requested_method;
+    if (nvars < 0 || npars < 0) return requested_method;
+
+    if (!dixon_estimate_interpolation_points(&total_points, modified_M_mvpoly, nvars + 1) ||
+        total_points > DIXON_INTERPOLATION_POINT_LIMIT) {
+        if (emit_warning) {
+            if (total_points > DIXON_INTERPOLATION_POINT_LIMIT) {
+                dixon_info_log("  Warning: interpolation for Step 1 needs over %ld points; "
+                               "falling back to minor expansion\n",
+                               total_points);
+            } else {
+                dixon_info_log("  Warning: failed to estimate Step 1 interpolation size; "
+                               "falling back to minor expansion\n");
+            }
+        }
+        return DET_METHOD_RECURSIVE;
+    }
+
+    return requested_method;
+}
+
 int dixon_method_uses_parallel_timing(det_method_t method)
 {
     return method == DET_METHOD_INTERPOLATION;
@@ -76,18 +180,6 @@ static int dixon_get_effective_parallel_threads(void)
     return threads > 0 ? threads : 1;
 }
 
-static void dixon_info_log(const char *fmt, ...)
-{
-    va_list args;
-
-    if (g_dixon_verbose_level < 1) {
-        return;
-    }
-
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    va_end(args);
-}
 
 void dixon_maybe_print_step_time(const char *step_label, double wall_elapsed)
 {
@@ -3339,6 +3431,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
 void compute_fq_cancel_matrix_det(fq_mvpoly_t *result, fq_mvpoly_t **modified_M_mvpoly,
                                   slong nvars, slong npars, det_method_t method) {
     clock_t start = clock();
+    method = dixon_resolve_step1_det_method(modified_M_mvpoly, nvars, npars, method, 0);
     switch (method) {
         case DET_METHOD_INTERPOLATION:
             fq_compute_det_by_interpolation_optimized(result, modified_M_mvpoly,
@@ -3551,6 +3644,8 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     if (dixon_global_method_step1 != -1) {
         step1_method = dixon_global_method_step1;
     }
+    step1_method = dixon_resolve_step1_det_method(modified_M_mvpoly, nvars, npars,
+                                                  step1_method, 1);
     dixon_info_log("  Determinant method: %s\n", dixon_det_method_name(step1_method));
     if (dixon_show_step_details()) {
         dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
@@ -3684,6 +3779,8 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     if (dixon_global_method_step1 != -1) {
         step1_method = dixon_global_method_step1;
     }
+    step1_method = dixon_resolve_step1_det_method(modified_M_mvpoly, nvars, npars,
+                                                  step1_method, 1);
     dixon_info_log("  Determinant method: %s\n", dixon_det_method_name(step1_method));
     dixon_debug_log("  Computing cancellation matrix determinant using %s...\n",
                     dixon_det_method_name(step1_method));

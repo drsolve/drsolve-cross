@@ -1429,7 +1429,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
     time_preprocessing = (double)(clock() - temp_time) / CLOCKS_PER_SEC;
     #endif
     
-    if (total_points > 100000) {
+    if (total_points > 1000000) {
         FQ_INTERP_PRINT("  Warning: Very large interpolation problem (%ld points)\n", total_points);
     }
     
@@ -1528,7 +1528,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
                     {
                         while (next_progress_report <= completed &&
                                next_progress_report <= total_points) {
-                            FQ_INTERP_PROGRESS_PRINT("\r  Progress: %ld/%ld",
+                            FQ_INTERP_PROGRESS_PRINT("\r  Evaluation progress: %ld/%ld",
                                                      next_progress_report, total_points);
                             fflush(stdout);
                             next_progress_report += 100;
@@ -1536,7 +1536,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
 
                         if (completed == total_points &&
                             next_progress_report > total_points) {
-                            FQ_INTERP_PROGRESS_PRINT("\r  Progress: %ld/%ld",
+                            FQ_INTERP_PROGRESS_PRINT("\r  Evaluation progress: %ld/%ld",
                                                      total_points, total_points);
                             fflush(stdout);
                         }
@@ -1680,7 +1680,7 @@ void fq_compute_det_by_interpolation_optimized(fq_mvpoly_t *result,
             
             // Progress report
             if (point % 1 == 0 || point == total_points - 1) {
-                FQ_INTERP_PROGRESS_PRINT("\r  Progress: %ld/%ld",
+                FQ_INTERP_PROGRESS_PRINT("\r  Evaluation progress: %ld/%ld",
                                          point + 1, total_points);
                 fflush(stdout);
             }
