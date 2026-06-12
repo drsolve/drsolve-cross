@@ -106,7 +106,8 @@ void compute_det_with_reduction_from_mvpoly(fq_mvpoly_t *result,
                                            fq_mvpoly_t **matrix,
                                            slong size,
                                            const unified_triangular_ideal_t *ideal,
-                                           char **current_var_names);
+                                           char **current_var_names,
+                                           det_method_t method);
 
 /* Equation information functions */
 void equation_info_init(equation_info_t *eq, slong nvars, slong npars, const fq_nmod_ctx_t ctx);

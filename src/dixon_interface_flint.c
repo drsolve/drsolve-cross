@@ -2761,8 +2761,9 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         free(state.current.str);
         state.current.str = NULL;
     }
-    next_token(&state);
-    parse_expression(&state, &poly1);
+     next_token(&state);
+     parse_expression(&state, &poly1);
+    fq_mvpoly_reduce_field_equation(&poly1);
     
     state.input = poly2_str;
     state.pos = 0;
@@ -2770,9 +2771,10 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     if (state.current.str) {
         free(state.current.str);
         state.current.str = NULL;
-    }
-    next_token(&state);
-    parse_expression(&state, &poly2);
+     }
+     next_token(&state);
+     parse_expression(&state, &poly2);
+    fq_mvpoly_reduce_field_equation(&poly2);
     
     // Initialize unified field context
     field_ctx_t field_ctx;

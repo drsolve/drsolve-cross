@@ -1482,12 +1482,64 @@ void compute_fq_nmod_det_with_triangular_reduction(fq_nmod_mpoly_t det,
     compute_fq_nmod_det_with_triangular_reduction_with_names(det, matrix, size, ideal, NULL);
 }
 
+static void reduce_fq_mvpoly_with_triangular_ideal(fq_mvpoly_t *result,
+                                                  const fq_mvpoly_t *poly,
+                                                  const unified_triangular_ideal_t *ideal,
+                                                  char **current_var_names) {
+    slong current_nvars = poly->npars;
+    char **complete_var_names = (char**) malloc(current_nvars * sizeof(char*));
+
+    for (slong i = 0; i < current_nvars; i++) {
+        if (current_var_names && current_var_names[i]) {
+            complete_var_names[i] = current_var_names[i];
+        } else {
+            char temp[32];
+            sprintf(temp, "param_%ld", i);
+            complete_var_names[i] = strdup(temp);
+        }
+    }
+
+    unified_triangular_ideal_t reduced_ideal;
+    create_reduced_ideal_context(&reduced_ideal, ideal, complete_var_names,
+                                 current_nvars, ideal->field_ctx);
+
+    if (ideal->is_prime_field) {
+        nmod_mpoly_t reduced_poly;
+        nmod_mpoly_init(reduced_poly, reduced_ideal.ctx.nmod_ctx);
+        fq_mvpoly_to_nmod_mpoly(reduced_poly, poly, reduced_ideal.ctx.nmod_ctx);
+        triangular_ideal_reduce_nmod_mpoly_with_names(reduced_poly, &reduced_ideal,
+                                                      complete_var_names);
+        nmod_mpoly_to_fq_mvpoly(result, reduced_poly, 0, current_nvars,
+                                reduced_ideal.ctx.nmod_ctx, ideal->field_ctx);
+        nmod_mpoly_clear(reduced_poly, reduced_ideal.ctx.nmod_ctx);
+    } else {
+        fq_nmod_mpoly_t reduced_poly;
+        fq_nmod_mpoly_init(reduced_poly, reduced_ideal.ctx.fq_ctx);
+        fq_mvpoly_to_fq_nmod_mpoly(reduced_poly, poly, reduced_ideal.ctx.fq_ctx);
+        triangular_ideal_reduce_fq_nmod_mpoly_with_names(reduced_poly, &reduced_ideal,
+                                                         complete_var_names);
+        fq_nmod_mpoly_to_fq_mvpoly(result, reduced_poly, 0, current_nvars,
+                                   reduced_ideal.ctx.fq_ctx, ideal->field_ctx);
+        fq_nmod_mpoly_clear(reduced_poly, reduced_ideal.ctx.fq_ctx);
+    }
+
+    unified_triangular_ideal_clear(&reduced_ideal);
+
+    for (slong i = 0; i < current_nvars; i++) {
+        if (!current_var_names || complete_var_names[i] != current_var_names[i]) {
+            free(complete_var_names[i]);
+        }
+    }
+    free(complete_var_names);
+}
+
 /* Simplified and safer matrix conversion with timeout protection */
 void compute_det_with_reduction_from_mvpoly(fq_mvpoly_t *result,
                                            fq_mvpoly_t **matrix,
                                            slong size,
                                            const unified_triangular_ideal_t *ideal,
-                                           char **current_var_names) {
+                                           char **current_var_names,
+                                           det_method_t method) {
     DEBUG_PRINT_R("Computing determinant with ideal reduction (matrix size: %ld x %ld)\n", size, size);
     
     if (size == 0) {
@@ -1514,6 +1566,24 @@ void compute_det_with_reduction_from_mvpoly(fq_mvpoly_t *result,
     create_reduced_ideal_context(&reduced_ideal, ideal, complete_var_names, 
                                current_nvars, ideal->field_ctx);
     
+    if (method != DET_METHOD_RECURSIVE) {
+        fq_mvpoly_t unreduced_result;
+        compute_fq_coefficient_matrix_det(&unreduced_result, matrix, size, current_nvars,
+                                          ideal->field_ctx, method, 0);
+        reduce_fq_mvpoly_with_triangular_ideal(result, &unreduced_result, ideal,
+                                               current_var_names);
+        fq_mvpoly_clear(&unreduced_result);
+
+        for (slong i = 0; i < current_nvars; i++) {
+            if (!current_var_names || complete_var_names[i] != current_var_names[i]) {
+                free(complete_var_names[i]);
+            }
+        }
+        free(complete_var_names);
+        unified_triangular_ideal_clear(&reduced_ideal);
+        return;
+    }
+
     if (ideal->is_prime_field) {
         DEBUG_PRINT_R("Using nmod_mpoly for prime field computation\n");
         
@@ -1829,7 +1899,7 @@ void compute_det_with_reduction_from_mvpoly(fq_mvpoly_t *result,
     
     /* Free any allocated names that we created */
     for (slong i = 0; i < current_nvars; i++) {
-        if (complete_var_names[i] != current_var_names[i]) {
+        if (!current_var_names || complete_var_names[i] != current_var_names[i]) {
             free(complete_var_names[i]);
         }
     }
@@ -2167,8 +2237,16 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     
     /* Compute determinant of modified matrix */
     fq_mvpoly_t d_poly;
-    if (g_dixon_verbose_level >= 2) printf("Computing cancellation matrix determinant using minor expansion...\n");
-    compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, num_elim_vars, state.npars, DET_METHOD_RECURSIVE);
+    det_method_t step1_method = DET_METHOD_RECURSIVE;
+    if (dixon_global_method_step1 != -1) {
+        step1_method = dixon_global_method_step1;
+    }
+    if (g_dixon_verbose_level >= 2) {
+        printf("Computing cancellation matrix determinant using method %d...\n",
+               (int) step1_method);
+    }
+    compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, num_elim_vars, state.npars,
+                                 step1_method);
     if (g_dixon_verbose_level >= 1 && d_poly.nterms <= 100) {
         printf("Dixon polynomial: %ld terms\n", d_poly.nterms);
     } else if (g_dixon_verbose_level >= 1) {
@@ -2192,11 +2270,22 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     /* Compute determinant with ideal reduction */
     fq_mvpoly_t result_poly;
     if (matrix_size > 0) {
-        if (g_dixon_verbose_level >= 1) printf("\nStep 4: Compute resultant with ideal reduction\n");
-        
-        /* Pass parameter names for proper variable mapping during reduction */
-        compute_det_with_reduction_from_mvpoly(&result_poly, coeff_matrix, matrix_size, ideal, 
-                                             state.par_names);
+        det_method_t step4_method = DET_METHOD_RECURSIVE;
+        if (dixon_global_method_step4 != -1) {
+            step4_method = dixon_global_method_step4;
+        }
+
+        if (g_dixon_verbose_level >= 1) {
+            if (step4_method == DET_METHOD_RECURSIVE) {
+                printf("\nStep 4: Compute resultant with ideal reduction\n");
+            } else {
+                printf("\nStep 4: Compute resultant, then apply ideal reduction\n");
+            }
+        }
+
+        /* Method 0 keeps reduction inside determinant computation; others reduce once at the end. */
+        compute_det_with_reduction_from_mvpoly(&result_poly, coeff_matrix, matrix_size, ideal,
+                                               state.par_names, step4_method);
         
         /* Cleanup coefficient matrix */
         for (slong i = 0; i < matrix_size; i++) {
