@@ -1115,16 +1115,33 @@ void perform_fq_matrix_row_operations_mvpoly(fq_mvpoly_t ***new_matrix, fq_mvpol
     for (slong i = 1; i < n; i++) {
         for (slong j = 0; j < n; j++) {
             fq_mvpoly_t diff;
+            fq_mvpoly_init(&diff, 2 * nvars, npars, (*original_matrix)[i][j].ctx);
+            if (g_dixon_verbose_level >= 3) {
+                dixon_debug_log("    RowOp[%ld,%ld]: top terms=%ld, bottom terms=%ld\n",
+                                i, j,
+                                (*original_matrix)[i][j].nterms,
+                                (*original_matrix)[i-1][j].nterms);
+            }
             fq_mvpoly_sub(&diff, &(*original_matrix)[i][j], &(*original_matrix)[i-1][j]);
+            if (g_dixon_verbose_level >= 3) {
+                dixon_debug_log("    RowOp[%ld,%ld]: diff terms=%ld\n", i, j, diff.nterms);
+            }
       
             if (diff.nterms > 0) {
-
                 divide_by_fq_linear_factor_flint(&(*new_matrix)[i][j], &diff, 
                                                i-1, 2*nvars, npars);
+                if (g_dixon_verbose_level >= 3) {
+                    dixon_debug_log("    RowOp[%ld,%ld]: quotient terms=%ld\n",
+                                    i, j, (*new_matrix)[i][j].nterms);
+                }
             } else {
                 fq_mvpoly_init(&(*new_matrix)[i][j], 2*nvars, npars, diff.ctx);
+                if (g_dixon_verbose_level >= 3) {
+                    dixon_debug_log("    RowOp[%ld,%ld]: zero diff, initialized zero quotient\n",
+                                    i, j);
+                }
             }
-            
+             
             fq_mvpoly_clear(&diff);
         }
     }

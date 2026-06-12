@@ -1533,6 +1533,57 @@ static void reduce_fq_mvpoly_with_triangular_ideal(fq_mvpoly_t *result,
     free(complete_var_names);
 }
 
+static void reduce_fq_mvpoly_full_with_triangular_ideal(fq_mvpoly_t *result,
+                                                       const fq_mvpoly_t *poly,
+                                                       const unified_triangular_ideal_t *ideal,
+                                                       char **current_var_names) {
+    slong current_nvars = poly->nvars + poly->npars;
+    char **complete_var_names = (char**) malloc(current_nvars * sizeof(char*));
+
+    for (slong i = 0; i < current_nvars; i++) {
+        if (current_var_names && current_var_names[i]) {
+            complete_var_names[i] = current_var_names[i];
+        } else {
+            char temp[32];
+            sprintf(temp, "var_%ld", i);
+            complete_var_names[i] = strdup(temp);
+        }
+    }
+
+    unified_triangular_ideal_t reduced_ideal;
+    create_reduced_ideal_context(&reduced_ideal, ideal, complete_var_names,
+                                 current_nvars, ideal->field_ctx);
+
+    if (ideal->is_prime_field) {
+        nmod_mpoly_t reduced_poly;
+        nmod_mpoly_init(reduced_poly, reduced_ideal.ctx.nmod_ctx);
+        fq_mvpoly_to_nmod_mpoly(reduced_poly, poly, reduced_ideal.ctx.nmod_ctx);
+        triangular_ideal_reduce_nmod_mpoly_with_names(reduced_poly, &reduced_ideal,
+                                                      complete_var_names);
+        nmod_mpoly_to_fq_mvpoly(result, reduced_poly, poly->nvars, poly->npars,
+                                reduced_ideal.ctx.nmod_ctx, ideal->field_ctx);
+        nmod_mpoly_clear(reduced_poly, reduced_ideal.ctx.nmod_ctx);
+    } else {
+        fq_nmod_mpoly_t reduced_poly;
+        fq_nmod_mpoly_init(reduced_poly, reduced_ideal.ctx.fq_ctx);
+        fq_mvpoly_to_fq_nmod_mpoly(reduced_poly, poly, reduced_ideal.ctx.fq_ctx);
+        triangular_ideal_reduce_fq_nmod_mpoly_with_names(reduced_poly, &reduced_ideal,
+                                                         complete_var_names);
+        fq_nmod_mpoly_to_fq_mvpoly(result, reduced_poly, poly->nvars, poly->npars,
+                                   reduced_ideal.ctx.fq_ctx, ideal->field_ctx);
+        fq_nmod_mpoly_clear(reduced_poly, reduced_ideal.ctx.fq_ctx);
+    }
+
+    unified_triangular_ideal_clear(&reduced_ideal);
+
+    for (slong i = 0; i < current_nvars; i++) {
+        if (!current_var_names || complete_var_names[i] != current_var_names[i]) {
+            free(complete_var_names[i]);
+        }
+    }
+    free(complete_var_names);
+}
+
 /* Simplified and safer matrix conversion with timeout protection */
 void compute_det_with_reduction_from_mvpoly(fq_mvpoly_t *result,
                                            fq_mvpoly_t **matrix,
@@ -2222,6 +2273,15 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
         
         parse_expression(&state, &polys[i]);
     }
+
+    /* Reduce each input polynomial once before Step 1. */
+    for (slong i = 0; i < num_polys; i++) {
+        fq_mvpoly_t reduced_poly;
+        reduce_fq_mvpoly_full_with_triangular_ideal(&reduced_poly, &polys[i], ideal,
+                                                    all_var_names);
+        fq_mvpoly_clear(&polys[i]);
+        polys[i] = reduced_poly;
+    }
     
     /* Build cancellation matrix */
     if (g_dixon_verbose_level >= 1) printf("\nStep 1: Build Dixon polynomial\n");
@@ -2266,6 +2326,17 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
                                             &matrix_size, &d_poly, num_elim_vars, state.npars,
                                             state.var_names, state.par_names,
                                             state.generator_name);
+
+    /* Reduce each coefficient-matrix entry once before Step 4. */
+    for (slong i = 0; i < matrix_size; i++) {
+        for (slong j = 0; j < matrix_size; j++) {
+            fq_mvpoly_t reduced_entry;
+            reduce_fq_mvpoly_with_triangular_ideal(&reduced_entry, &coeff_matrix[i][j], ideal,
+                                                   state.par_names);
+            fq_mvpoly_clear(&coeff_matrix[i][j]);
+            coeff_matrix[i][j] = reduced_entry;
+        }
+    }
     
     /* Compute determinant with ideal reduction */
     fq_mvpoly_t result_poly;
