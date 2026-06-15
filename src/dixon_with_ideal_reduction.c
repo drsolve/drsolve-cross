@@ -2286,6 +2286,7 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     /* Build cancellation matrix */
     if (g_dixon_verbose_level >= 1) printf("\nStep 1: Build Dixon polynomial\n");
     clock_t step1_start = clock();
+    double step1_wall_start = get_wall_time();
     fq_mvpoly_t **M_mvpoly;
     if (g_dixon_verbose_level >= 2) printf("Build Cancellation Matrix\n");
     build_fq_cancellation_matrix_mvpoly(&M_mvpoly, polys, num_elim_vars, state.npars);
@@ -2312,9 +2313,10 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     } else if (g_dixon_verbose_level >= 1) {
         printf("Dixon polynomial: %ld terms (not shown)\n", d_poly.nterms);
     }
-    if (g_dixon_verbose_level >= 3) {
-        printf("Step 1 time: %.3f seconds\n", (double)(clock() - step1_start) / CLOCKS_PER_SEC);
-    }
+    dixon_maybe_print_step_method_time("Step 1",
+                                       step1_method,
+                                       (double)(clock() - step1_start) / CLOCKS_PER_SEC,
+                                       get_wall_time() - step1_wall_start);
     
     /* Extract coefficient matrix */
     fq_mvpoly_t **coeff_matrix = NULL;
@@ -2341,6 +2343,8 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     /* Compute determinant with ideal reduction */
     fq_mvpoly_t result_poly;
     if (matrix_size > 0) {
+        clock_t step4_start = clock();
+        double step4_wall_start = get_wall_time();
         det_method_t step4_method = DET_METHOD_RECURSIVE;
         if (dixon_global_method_step4 != -1) {
             step4_method = dixon_global_method_step4;
@@ -2357,6 +2361,10 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
         /* Method 0 keeps reduction inside determinant computation; others reduce once at the end. */
         compute_det_with_reduction_from_mvpoly(&result_poly, coeff_matrix, matrix_size, ideal,
                                                state.par_names, step4_method);
+        dixon_maybe_print_step_method_time("Step 4",
+                                           step4_method,
+                                           (double)(clock() - step4_start) / CLOCKS_PER_SEC,
+                                           get_wall_time() - step4_wall_start);
         
         /* Cleanup coefficient matrix */
         for (slong i = 0; i < matrix_size; i++) {
