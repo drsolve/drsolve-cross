@@ -123,7 +123,8 @@ void atomic_solve_pivot_collision_unified_optimized(unified_poly_mat_struct *mat
     if (!lc1_ptr || !lc2_ptr) return;
     
     /* Use workspace elements */
-    field_elem_u *cst = &g_unified_workspace.cst;
+    unified_workspace_t *ws = get_unified_workspace();
+    field_elem_u *cst = &ws->cst;
     
     /* Get context pointer */
     void *ctx_ptr = (mat->ctx->field_id == FIELD_ID_NMOD) ? 
@@ -135,8 +136,8 @@ void atomic_solve_pivot_collision_unified_optimized(unified_poly_mat_struct *mat
     if (field_is_one(lc2_ptr, mat->ctx->field_id, ctx_ptr)) {
         field_set_elem(cst, lc1_ptr, mat->ctx->field_id, ctx_ptr);
     } else {
-        field_inv(&g_unified_workspace.inv, lc2_ptr, mat->ctx->field_id, ctx_ptr);
-        field_mul(cst, lc1_ptr, &g_unified_workspace.inv, mat->ctx->field_id, ctx_ptr);
+        field_inv(&ws->inv, lc2_ptr, mat->ctx->field_id, ctx_ptr);
+        field_mul(cst, lc1_ptr, &ws->inv, mat->ctx->field_id, ctx_ptr);
     }
     
     field_neg(cst, cst, mat->ctx->field_id, ctx_ptr);
@@ -149,8 +150,8 @@ void atomic_solve_pivot_collision_unified_optimized(unified_poly_mat_struct *mat
         if (unified_poly_is_zero(e2)) continue;
         
         /* Always use multiply and add approach for correctness */
-        unified_poly_scalar_mul(&g_unified_workspace.tmp, e2, cst);
-        unified_poly_shift_left_add_inplace(e1, &g_unified_workspace.tmp, exp, mat->ctx);
+        unified_poly_scalar_mul(&ws->tmp, e2, cst);
+        unified_poly_shift_left_add_inplace(e1, &ws->tmp, exp, mat->ctx);
         unified_poly_normalise(e1);
     }
     
@@ -162,8 +163,8 @@ void atomic_solve_pivot_collision_unified_optimized(unified_poly_mat_struct *mat
             
             if (unified_poly_is_zero(e2)) continue;
             
-            unified_poly_scalar_mul(&g_unified_workspace.tmp, e2, cst);
-            unified_poly_shift_left_add_inplace(e1, &g_unified_workspace.tmp, exp, other->ctx);
+            unified_poly_scalar_mul(&ws->tmp, e2, cst);
+            unified_poly_shift_left_add_inplace(e1, &ws->tmp, exp, other->ctx);
             unified_poly_normalise(e1);
         }
     }

@@ -13,6 +13,14 @@ extern "C" {
    POLYNOMIAL STRUCTURES
    ============================================================================ */
 
+/* GF(2^4) polynomial structure */
+typedef struct {
+    uint8_t *coeffs;
+    slong length;
+    slong alloc;
+} gf24_poly_struct;
+typedef gf24_poly_struct gf24_poly_t[1];
+
 /* GF(2^8) polynomial structure */
 typedef struct {
     uint8_t *coeffs;
@@ -106,6 +114,25 @@ typedef struct {
     fq_nmod_ctx_struct *ctx;
 } fq_nmod_poly_mat_struct;
 typedef fq_nmod_poly_mat_struct fq_nmod_poly_mat_t[1];
+
+/* ============================================================================
+   GF(2^4) POLYNOMIAL OPERATIONS
+   ============================================================================ */
+
+void gf24_poly_init(gf24_poly_t poly);
+void gf24_poly_clear(gf24_poly_t poly);
+void gf24_poly_fit_length(gf24_poly_t poly, slong len);
+void gf24_poly_normalise(gf24_poly_t poly);
+void gf24_poly_zero(gf24_poly_t poly);
+int gf24_poly_is_zero(const gf24_poly_t poly);
+slong gf24_poly_degree(const gf24_poly_t poly);
+void gf24_poly_set(gf24_poly_t res, const gf24_poly_t poly);
+uint8_t gf24_poly_get_coeff(const gf24_poly_t poly, slong i);
+void gf24_poly_set_coeff(gf24_poly_t poly, slong i, uint8_t c);
+void gf24_poly_add(gf24_poly_t res, const gf24_poly_t a, const gf24_poly_t b);
+void gf24_poly_scalar_mul(gf24_poly_t res, const gf24_poly_t poly, uint8_t c);
+void gf24_poly_shift_left(gf24_poly_t res, const gf24_poly_t poly, slong n);
+void gf24_poly_mul(gf24_poly_t res, const gf24_poly_t a, const gf24_poly_t b);
 
 /* ============================================================================
    GF(2^8) POLYNOMIAL OPERATIONS

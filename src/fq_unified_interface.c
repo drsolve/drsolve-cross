@@ -8,6 +8,11 @@ static int gf216_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
     return extract_irred_poly(fq_ctx) == 0x1002D;
 }
 
+static int gf24_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
+{
+    return extract_irred_poly(fq_ctx) == 0x13;
+}
+
 static int gf232_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
 {
     uint64_t poly = extract_irred_poly(fq_ctx);
@@ -38,7 +43,11 @@ static int gf2128_native_modulus_supported(const fq_nmod_ctx_t fq_ctx)
    ============================================================================ */
 
 /* Per-thread workspace */
-__thread unified_workspace_t g_unified_workspace = {0};
+static __thread unified_workspace_t g_unified_workspace = {0};
+
+unified_workspace_t *get_unified_workspace(void) {
+    return &g_unified_workspace;
+}
 
 /* ============================================================================
    CONTEXT MANAGEMENT IMPLEMENTATIONS
@@ -72,6 +81,17 @@ void field_ctx_init_enhanced(field_ctx_t *ctx, const fq_nmod_ctx_t fq_ctx, ulong
     } else if (prime == 2) {
         /* Check for optimized GF(2^n) implementations */
         switch (degree) {
+            case 4:
+                if (gf24_native_modulus_supported(fq_ctx)) {
+                    ctx->field_id = FIELD_ID_GF24;
+                    ctx->ctx.fq_ctx = fq_ctx;
+                    ctx->elem_size = sizeof(uint8_t);
+                    init_gf24_standard();
+                    init_gf24_conversion(fq_ctx);
+                    ctx->description = "GF(2^4) lookup tables";
+                    break;
+                }
+                goto check_zech;
             case 8:
                 ctx->field_id = FIELD_ID_GF28;
                 ctx->ctx.fq_ctx = fq_ctx;
@@ -185,6 +205,8 @@ ulong field_ctx_get_size(const field_ctx_t *ctx) {
     switch (ctx->field_id) {
         case FIELD_ID_NMOD:
             return ctx->ctx.nmod_ctx.n;
+        case FIELD_ID_GF24:
+            return 16;
         case FIELD_ID_GF28:
             return 256;
         case FIELD_ID_GF216:
@@ -224,6 +246,7 @@ void field_ctx_clear(field_ctx_t *ctx) {
 void field_neg(field_elem_u *res, const field_elem_u *a,
                field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
         case FIELD_ID_GF28:
         case FIELD_ID_GF216:
         case FIELD_ID_GF232:
@@ -249,6 +272,9 @@ void field_neg(field_elem_u *res, const field_elem_u *a,
 void field_inv(field_elem_u *res, const field_elem_u *a,
                field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            res->gf24 = gf24_inv(a->gf24);
+            break;
         case FIELD_ID_GF28:
             res->gf28 = gf28_inv(a->gf28);
             break;
@@ -281,6 +307,9 @@ void field_inv(field_elem_u *res, const field_elem_u *a,
 
 void field_set_zero(field_elem_u *res, field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            res->gf24 = 0;
+            break;
         case FIELD_ID_GF28:
             res->gf28 = 0;
             break;
@@ -310,6 +339,9 @@ void field_set_zero(field_elem_u *res, field_id_t field_id, const void *ctx) {
 
 void field_set_one(field_elem_u *res, field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            res->gf24 = 1;
+            break;
         case FIELD_ID_GF28:
             res->gf28 = 1;
             break;
@@ -340,6 +372,8 @@ void field_set_one(field_elem_u *res, field_id_t field_id, const void *ctx) {
 int field_equal(const field_elem_u *a, const field_elem_u *b, 
                 field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            return a->gf24 == b->gf24;
         case FIELD_ID_GF28:
             return a->gf28 == b->gf28;
         case FIELD_ID_GF216:
@@ -362,6 +396,9 @@ int field_equal(const field_elem_u *a, const field_elem_u *b,
 
 void field_init_elem(field_elem_u *elem, field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            elem->gf24 = 0;
+            break;
         case FIELD_ID_GF28:
             elem->gf28 = 0;
             break;
@@ -406,6 +443,9 @@ void field_clear_elem(field_elem_u *elem, field_id_t field_id, const void *ctx) 
 void field_set_elem(field_elem_u *res, const field_elem_u *a,
                     field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            res->gf24 = a->gf24;
+            break;
         case FIELD_ID_GF28:
             res->gf28 = a->gf28;
             break;
@@ -436,6 +476,7 @@ void field_set_elem(field_elem_u *res, const field_elem_u *a,
 void field_sub(field_elem_u *res, const field_elem_u *a, const field_elem_u *b,
                field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
         case FIELD_ID_GF28:
         case FIELD_ID_GF216:
         case FIELD_ID_GF232:
@@ -472,6 +513,9 @@ void fq_nmod_to_field_elem(field_elem_u *res, const fq_nmod_t elem,
         case FIELD_ID_NMOD:
             res->nmod = nmod_poly_get_coeff_ui(elem, 0);
             break;
+        case FIELD_ID_GF24:
+            res->gf24 = fq_nmod_to_gf24_elem(elem, ctx->ctx.fq_ctx);
+            break;
         case FIELD_ID_GF28:
             res->gf28 = fq_nmod_to_gf28_elem(elem, ctx->ctx.fq_ctx);
             break;
@@ -504,6 +548,9 @@ void field_elem_to_fq_nmod(fq_nmod_t res, const field_elem_u *elem,
         case FIELD_ID_NMOD:
             fq_nmod_zero(res, ctx->ctx.fq_ctx);
             nmod_poly_set_coeff_ui(res, 0, elem->nmod);
+            break;
+        case FIELD_ID_GF24:
+            gf24_elem_to_fq_nmod(res, elem->gf24, ctx->ctx.fq_ctx);
             break;
         case FIELD_ID_GF28:
             gf28_elem_to_fq_nmod(res, elem->gf28, ctx->ctx.fq_ctx);
@@ -1298,6 +1345,10 @@ void ensure_workspace_initialized(field_ctx_t *ctx) {
 
 /* Also add cleanup for conversion tables in gf2n_field.h */
 void reset_all_gf2n_conversions(void) {
+    if (g_gf24_conversion) {
+        g_gf24_conversion->initialized = 0;
+    }
+
     /* Reset GF(2^8) conversion */
     if (g_gf28_conversion) {
         g_gf28_conversion->initialized = 0;
@@ -1343,6 +1394,27 @@ field_ctx_t* field_init(field_id_t field_id, ulong characteristic) {
             ctx->description = "Prime field (nmod)";
             break;
             
+        case FIELD_ID_GF24:
+            {
+                fq_nmod_ctx_struct *fq_ctx = (fq_nmod_ctx_struct*)malloc(sizeof(fq_nmod_ctx_struct));
+                nmod_poly_t modulus;
+                nmod_poly_init(modulus, 2);
+                nmod_poly_set_coeff_ui(modulus, 0, 1);
+                nmod_poly_set_coeff_ui(modulus, 1, 1);
+                nmod_poly_set_coeff_ui(modulus, 4, 1);
+
+                fq_nmod_ctx_init_modulus(fq_ctx, modulus, "x");
+                nmod_poly_clear(modulus);
+
+                ctx->ctx.fq_ctx = fq_ctx;
+                ctx->elem_size = sizeof(uint8_t);
+                ctx->description = "GF(2^4) lookup tables";
+
+                init_gf24_standard();
+                init_gf24_conversion(fq_ctx);
+            }
+            break;
+
         case FIELD_ID_GF28:
             {
                 /* GF(2^8) */
@@ -1496,6 +1568,7 @@ void field_clear(field_ctx_t *ctx) {
             break;
             
         case FIELD_ID_GF28:
+        case FIELD_ID_GF24:
         case FIELD_ID_GF216:
         case FIELD_ID_GF232:
         case FIELD_ID_GF264:

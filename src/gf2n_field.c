@@ -23,6 +23,115 @@ gf264_mul_func gf264_mul = NULL;
 gf2128_mul_func gf2128_mul = NULL;
 
 /* ============================================================================
+   GF(2^4) OPERATIONS IMPLEMENTATION
+   ============================================================================ */
+
+static uint8_t gf24_mul_mod(uint8_t a, uint8_t b, uint8_t irred_poly) {
+    uint16_t result = 0;
+    uint16_t aa = a & 0x0F;
+    uint8_t bb = b & 0x0F;
+
+    while (bb) {
+        if (bb & 1) result ^= aa;
+        aa <<= 1;
+        if (aa & 0x10) aa ^= irred_poly;
+        bb >>= 1;
+    }
+
+    return result & 0x0F;
+}
+
+void init_gf24_tables(uint8_t irred_poly) {
+    if (g_gf24_complete_tables.initialized) return;
+
+    memset(&g_gf24_complete_tables, 0, sizeof(g_gf24_complete_tables));
+
+    uint8_t generator = 0;
+    for (uint8_t g = 2; g < 16; g++) {
+        uint8_t alpha = 1;
+        int is_primitive = 1;
+        for (int i = 0; i < 15; i++) {
+            alpha = gf24_mul_mod(alpha, g, irred_poly);
+            if (i < 14 && alpha == 1) {
+                is_primitive = 0;
+                break;
+            }
+        }
+        if (is_primitive && alpha == 1) {
+            generator = g;
+            break;
+        }
+    }
+
+    g_gf24_complete_tables.exp_table[0] = 1;
+    g_gf24_complete_tables.log_table[0] = 0;
+    uint8_t alpha = 1;
+    for (int i = 0; i < 15; i++) {
+        g_gf24_complete_tables.exp_table[i] = alpha;
+        g_gf24_complete_tables.log_table[alpha] = i;
+        alpha = gf24_mul_mod(alpha, generator, irred_poly);
+    }
+    for (int i = 15; i < 32; i++) {
+        g_gf24_complete_tables.exp_table[i] =
+            g_gf24_complete_tables.exp_table[i - 15];
+    }
+
+    for (int i = 0; i < 16; i++) {
+        for (int j = 0; j < 16; j++) {
+            g_gf24_complete_tables.mul_table[i][j] = gf24_mul_mod(i, j, irred_poly);
+        }
+        g_gf24_complete_tables.sqr_table[i] =
+            g_gf24_complete_tables.mul_table[i][i];
+    }
+
+    g_gf24_complete_tables.inv_table[0] = 0;
+    for (int i = 1; i < 16; i++) {
+        int log_inv = 15 - g_gf24_complete_tables.log_table[i];
+        g_gf24_complete_tables.inv_table[i] =
+            g_gf24_complete_tables.exp_table[log_inv];
+    }
+
+    g_gf24_complete_tables.initialized = 1;
+}
+
+void init_gf24_standard(void) {
+    init_gf24_tables(0x13);
+}
+
+void cleanup_gf24_tables(void) {
+    memset(&g_gf24_complete_tables, 0, sizeof(g_gf24_complete_tables));
+}
+
+inline gf24_t gf24_add(gf24_t a, gf24_t b) {
+    return (a ^ b) & 0x0F;
+}
+
+inline gf24_t gf24_sub(gf24_t a, gf24_t b) {
+    return (a ^ b) & 0x0F;
+}
+
+inline gf24_t gf24_mul(gf24_t a, gf24_t b) {
+    return g_gf24_complete_tables.mul_table[a & 0x0F][b & 0x0F];
+}
+
+inline const uint8_t* gf24_get_scalar_row(uint8_t scalar) {
+    return g_gf24_complete_tables.mul_table[scalar & 0x0F];
+}
+
+inline gf24_t gf24_sqr(gf24_t a) {
+    return g_gf24_complete_tables.sqr_table[a & 0x0F];
+}
+
+inline gf24_t gf24_inv(gf24_t a) {
+    return g_gf24_complete_tables.inv_table[a & 0x0F];
+}
+
+inline gf24_t gf24_div(gf24_t a, gf24_t b) {
+    if ((b & 0x0F) == 0) return 0;
+    return gf24_mul(a, gf24_inv(b));
+}
+
+/* ============================================================================
    GF(2^8) OPERATIONS IMPLEMENTATION
    ============================================================================ */
 
@@ -1135,6 +1244,7 @@ int gf2128_from_hex(gf2128_t *a, const char *hex) {
 
 /* Initialize all GF(2^n) fields */
 void init_all_gf2n_fields(void) {
+    init_gf24_standard();
     init_gf28_standard();
     init_gf216_standard();
     init_gf232();
@@ -1143,6 +1253,8 @@ void init_all_gf2n_fields(void) {
 }
 
 void cleanup_all_gf2n_fields(void) {
+    cleanup_gf24_tables();
+    cleanup_gf24_conversion();
     cleanup_gf28_tables();
     cleanup_gf28_conversion();
     cleanup_gf216_tables();
@@ -1178,6 +1290,65 @@ static int gf2_small_find_primitive_element(fq_nmod_t primitive,
     }
 
     return 0;
+}
+
+void init_gf24_conversion(const fq_nmod_ctx_t ctx) {
+   if (g_gf24_conversion && g_gf24_conversion->initialized) {
+       return;
+   }
+
+   if (!g_gf24_conversion) {
+       g_gf24_conversion = (gf24_conversion_t *)calloc(1, sizeof(gf24_conversion_t));
+   }
+
+   init_gf24_standard();
+
+   if (fq_nmod_ctx_degree(ctx) != 4) {
+       g_gf24_conversion->initialized = 0;
+       return;
+   }
+
+   if (extract_irred_poly(ctx) == 0x13) {
+       for (int i = 0; i < 16; i++) {
+           g_gf24_conversion->flint_to_gf24[i] = (uint8_t) i;
+           g_gf24_conversion->gf24_to_flint[i] = (uint8_t) i;
+       }
+       g_gf24_conversion->initialized = 1;
+       return;
+   }
+
+   fq_nmod_t primitive;
+   fq_nmod_init(primitive, ctx);
+
+   if (!gf2_small_find_primitive_element(primitive, ctx, 4)) {
+       fq_nmod_clear(primitive, ctx);
+       g_gf24_conversion->initialized = 0;
+       return;
+   }
+
+   g_gf24_conversion->flint_to_gf24[0] = 0;
+   g_gf24_conversion->gf24_to_flint[0] = 0;
+
+   fq_nmod_t power;
+   fq_nmod_init(power, ctx);
+   fq_nmod_one(power, ctx);
+
+   for (int i = 0; i < 15; i++) {
+       uint8_t our_elem = g_gf24_complete_tables.exp_table[i];
+       uint8_t flint_elem = 0;
+       for (slong j = 0; j <= fq_nmod_ctx_degree(ctx); j++) {
+           if (nmod_poly_get_coeff_ui(power, j)) {
+               flint_elem |= (uint8_t) (1U << j);
+           }
+       }
+       g_gf24_conversion->flint_to_gf24[flint_elem] = our_elem;
+       g_gf24_conversion->gf24_to_flint[our_elem] = flint_elem;
+       fq_nmod_mul(power, power, primitive, ctx);
+   }
+
+   fq_nmod_clear(power, ctx);
+   fq_nmod_clear(primitive, ctx);
+   g_gf24_conversion->initialized = 1;
 }
 
 /* Initialize GF(2^128) conversion - stub implementation */
@@ -1390,6 +1561,13 @@ void cleanup_gf28_conversion(void) {
    }
 }
 
+void cleanup_gf24_conversion(void) {
+   if (g_gf24_conversion) {
+       free(g_gf24_conversion);
+       g_gf24_conversion = NULL;
+   }
+}
+
 void cleanup_gf216_conversion(void) {
    if (g_gf216_conversion) {
        if (g_gf216_conversion->flint_to_gf216) {
@@ -1400,6 +1578,34 @@ void cleanup_gf216_conversion(void) {
        }
        free(g_gf216_conversion);
        g_gf216_conversion = NULL;
+   }
+}
+
+uint8_t fq_nmod_to_gf24_elem(const fq_nmod_t elem, const fq_nmod_ctx_t ctx) {
+   if (!g_gf24_conversion || !g_gf24_conversion->initialized) {
+       init_gf24_conversion(ctx);
+   }
+
+   uint8_t flint_rep = 0;
+   for (slong i = 0; i <= fq_nmod_ctx_degree(ctx); i++) {
+       if (nmod_poly_get_coeff_ui(elem, i)) {
+           flint_rep |= (uint8_t) (1U << i);
+       }
+   }
+   return g_gf24_conversion->flint_to_gf24[flint_rep & 0x0F];
+}
+
+void gf24_elem_to_fq_nmod(fq_nmod_t res, uint8_t elem, const fq_nmod_ctx_t ctx) {
+   if (!g_gf24_conversion || !g_gf24_conversion->initialized) {
+       init_gf24_conversion(ctx);
+   }
+
+   fq_nmod_zero(res, ctx);
+   uint8_t flint_rep = g_gf24_conversion->gf24_to_flint[elem & 0x0F];
+   for (int i = 0; i < 4; i++) {
+       if ((flint_rep >> i) & 1U) {
+           nmod_poly_set_coeff_ui(res, i, 1);
+       }
    }
 }
 

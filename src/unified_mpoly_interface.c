@@ -27,6 +27,7 @@ unified_mpoly_ctx_t unified_mpoly_ctx_init(slong nvars, const ordering_t ord, fi
             }
             break;
             
+        case FIELD_ID_GF24:
         case FIELD_ID_GF28:
         case FIELD_ID_GF216:
         case FIELD_ID_GF232:
@@ -276,6 +277,7 @@ void unified_mpoly_sub(unified_mpoly_t poly1, const unified_mpoly_t poly2,
                              GET_ZECH_POLY(poly3), GET_ZECH_CTX(ctx));
             break;
             
+        case FIELD_ID_GF24:
         case FIELD_ID_GF28:
         case FIELD_ID_GF216:
         case FIELD_ID_GF232:
@@ -324,6 +326,7 @@ void unified_mpoly_neg(unified_mpoly_t poly1, const unified_mpoly_t poly2) {
    ============================================================================ */
 
 /* Global flags to enable/disable optimizations */
+static int use_gf24_array_mul = 1;
 static int use_gf28_array_mul = 1;
 static int use_gf216_array_mul = 1;
 static int use_gf232_array_mul = 1;
@@ -425,6 +428,10 @@ static void unified_mpoly_reduce_field_equation_inplace(unified_mpoly_t poly) {
 /* Function to enable optimizations */
 void unified_mpoly_enable_optimizations(field_id_t field_id, int enable) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            use_gf24_array_mul = enable;
+            printf("GF(2^4) array multiplication: %s\n", enable ? "enabled" : "disabled");
+            break;
         case FIELD_ID_GF28:
             use_gf28_array_mul = enable;
             printf("GF(2^8) array multiplication: %s\n", enable ? "enabled" : "disabled");
@@ -475,6 +482,63 @@ int unified_mpoly_mul(unified_mpoly_t poly1, const unified_mpoly_t poly2,
                 printf("Zech multiplication disabled, this shouldn't happen\n");
                 return 0;
             }
+
+        case FIELD_ID_GF24:
+            if (use_gf24_array_mul) {
+                slong len2 = fq_nmod_mpoly_length(GET_FQ_POLY(poly2), GET_FQ_CTX(ctx));
+                slong len3 = fq_nmod_mpoly_length(GET_FQ_POLY(poly3), GET_FQ_CTX(ctx));
+                if (len2 > 0 && len3 > 0 && len2 <= WORD_MAX / len3 &&
+                    len2 * len3 < 1024) {
+                    fq_nmod_mpoly_mul(GET_FQ_POLY(poly1), GET_FQ_POLY(poly2),
+                                      GET_FQ_POLY(poly3), GET_FQ_CTX(ctx));
+                    if (g_field_equation_reduction) unified_mpoly_reduce_field_equation_inplace(poly1);
+                    return 1;
+                }
+
+                gf24_mpoly_t A, B, C;
+                gf24_mpoly_ctx_t native_ctx;
+                int use_native_try = 0;
+
+                gf24_mpoly_ctx_init(native_ctx, ctx->nvars, ctx->ord);
+                gf24_mpoly_init(A, native_ctx);
+                gf24_mpoly_init(B, native_ctx);
+                gf24_mpoly_init(C, native_ctx);
+
+                fq_nmod_mpoly_to_gf24_mpoly(A, GET_FQ_POLY(poly2),
+                                            ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
+                fq_nmod_mpoly_to_gf24_mpoly(B, GET_FQ_POLY(poly3),
+                                            ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
+
+                use_native_try = gf24_mpoly_can_use_array_mul(A, B, native_ctx);
+                int success = 0;
+                if (use_native_try) {
+                    success = gf24_mpoly_mul(C, A, B, native_ctx);
+                }
+                if (success) {
+                    gf24_mpoly_to_fq_nmod_mpoly(GET_FQ_POLY(poly1), C,
+                                                ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
+                    if (g_field_equation_reduction) unified_mpoly_reduce_field_equation_inplace(poly1);
+
+                    gf24_mpoly_clear(A, native_ctx);
+                    gf24_mpoly_clear(B, native_ctx);
+                    gf24_mpoly_clear(C, native_ctx);
+                    gf24_mpoly_ctx_clear(native_ctx);
+                    return 1;
+                }
+
+                gf24_mpoly_clear(A, native_ctx);
+                gf24_mpoly_clear(B, native_ctx);
+                gf24_mpoly_clear(C, native_ctx);
+                gf24_mpoly_ctx_clear(native_ctx);
+
+                if (use_native_try && !success) {
+                    WARN_THRICE("GF(2^4) array multiplication failed, using standard method\n");
+                }
+            }
+            fq_nmod_mpoly_mul(GET_FQ_POLY(poly1), GET_FQ_POLY(poly2),
+                             GET_FQ_POLY(poly3), GET_FQ_CTX(ctx));
+            if (g_field_equation_reduction) unified_mpoly_reduce_field_equation_inplace(poly1);
+            return 1;
             
         case FIELD_ID_GF28:
             if (use_gf28_array_mul) {
@@ -1258,6 +1322,10 @@ void unified_mpoly_set_fmpz(unified_mpoly_t poly, const fmpz_t c) {
             coeff.nmod = fmpz_get_ui(c) % GET_NMOD_CTX(ctx)->mod.n;
             break;
             
+        case FIELD_ID_GF24:
+            coeff.gf24 = fmpz_get_ui(c) & 0x0F;
+            break;
+
         case FIELD_ID_GF28:
             coeff.gf28 = fmpz_get_ui(c) & 0xFF;  /* Take mod 256 */
             break;
@@ -1654,6 +1722,8 @@ const char* unified_mpoly_get_field_info(const unified_mpoly_t poly) {
     switch (poly->field_id) {
         case FIELD_ID_NMOD:
             return "Prime field (nmod)";
+        case FIELD_ID_GF24:
+            return "GF(2^4) lookup tables";
         case FIELD_ID_GF28:
             return "GF(2^8) lookup tables";
         case FIELD_ID_GF216:
@@ -1678,6 +1748,8 @@ const char* unified_mpoly_get_field_info_by_ctx(unified_mpoly_ctx_t ctx) {
     switch (ctx->field_ctx->field_id) {
         case FIELD_ID_NMOD:
             return "Prime field (nmod)";
+        case FIELD_ID_GF24:
+            return "GF(2^4) lookup tables";
         case FIELD_ID_GF28:
             return "GF(2^8) lookup tables";
         case FIELD_ID_GF216:
@@ -1724,6 +1796,11 @@ void unified_mpoly_randtest(unified_mpoly_t poly, flint_rand_t state,
                 if (coeff.nmod == 0) coeff.nmod = 1;
                 break;
                 
+            case FIELD_ID_GF24:
+                coeff.gf24 = n_randint(state, 16);
+                if (coeff.gf24 == 0) coeff.gf24 = 1;
+                break;
+
             case FIELD_ID_GF28:
                 coeff.gf28 = n_randint(state, 256);
                 if (coeff.gf28 == 0) coeff.gf28 = 1;

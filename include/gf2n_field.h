@@ -44,6 +44,9 @@ extern "C" {
    FORWARD DECLARATIONS AND TYPE DEFINITIONS
    ============================================================================ */
 
+/* GF(2^4) type definition */
+typedef uint8_t gf24_t;
+
 /* GF(2^8) type definition */
 typedef uint8_t gf28_t;
 
@@ -69,6 +72,16 @@ typedef struct {
 /* ============================================================================
    LOOKUP TABLE STRUCTURES
    ============================================================================ */
+
+/* GF(2^4) lookup tables */
+typedef struct {
+    uint8_t mul_table[16][16];
+    uint8_t sqr_table[16];
+    uint8_t inv_table[16];
+    uint8_t log_table[16];
+    uint8_t exp_table[32];
+    int initialized;
+} gf24_complete_tables_t;
 
 /* GF(2^8) lookup tables */
 typedef struct {
@@ -104,6 +117,12 @@ typedef struct {
 } gf216_complete_tables_t;
 
 /* Conversion table structures */
+typedef struct {
+   uint8_t flint_to_gf24[16];
+   uint8_t gf24_to_flint[16];
+   int initialized;
+} gf24_conversion_t;
+
 typedef struct {
    uint8_t flint_to_gf28[256];
    uint8_t gf28_to_flint[256];
@@ -155,6 +174,25 @@ typedef gf2128_t (*gf2128_mul_func)(const gf2128_t*, const gf2128_t*);
 
 /* Check CPU features */
 int has_pclmulqdq(void);
+
+/* ============================================================================
+   GF(2^4) OPERATIONS
+   ============================================================================ */
+
+/* Basic operations */
+gf24_t gf24_add(gf24_t a, gf24_t b);
+gf24_t gf24_sub(gf24_t a, gf24_t b);
+gf24_t gf24_mul(gf24_t a, gf24_t b);
+gf24_t gf24_sqr(gf24_t a);
+gf24_t gf24_inv(gf24_t a);
+gf24_t gf24_div(gf24_t a, gf24_t b);
+
+/* Utility functions */
+const uint8_t* gf24_get_scalar_row(uint8_t scalar);
+
+/* Initialization and cleanup */
+void init_gf24_standard(void);
+void cleanup_gf24_tables(void);
 
 /* ============================================================================
    GF(2^8) OPERATIONS
@@ -267,6 +305,12 @@ int _fq_nmod_ctx_is_gf2n(const fq_nmod_ctx_t ctx);
 uint64_t extract_irred_poly(const fq_nmod_ctx_t ctx);
 void extract_gf264_poly(const fq_nmod_ctx_t ctx, uint64_t *poly_low, uint64_t *poly_high);
 
+/* GF(2^4) conversions */
+void init_gf24_conversion(const fq_nmod_ctx_t ctx);
+void cleanup_gf24_conversion(void);
+uint8_t fq_nmod_to_gf24_elem(const fq_nmod_t elem, const fq_nmod_ctx_t ctx);
+void gf24_elem_to_fq_nmod(fq_nmod_t res, uint8_t elem, const fq_nmod_ctx_t ctx);
+
 /* GF(2^8) conversions */
 void init_gf28_conversion(const fq_nmod_ctx_t ctx);
 void cleanup_gf28_conversion(void);
@@ -317,12 +361,14 @@ extern gf2128_mul_func gf2128_mul;
    ============================================================================ */
 
 /* Global lookup tables */
+static gf24_complete_tables_t g_gf24_complete_tables = {0};
 static gf28_tables_t *g_gf28_tables = NULL;
 static gf28_complete_tables_t g_gf28_complete_tables = {0};
 static gf216_tables_t *g_gf216_tables = NULL;
 static gf216_complete_tables_t g_gf216_complete_tables = {0};
 
 /* Conversion tables */
+static gf24_conversion_t *g_gf24_conversion = NULL;
 static gf28_conversion_t *g_gf28_conversion = NULL;
 static gf216_conversion_t *g_gf216_conversion = NULL;
 static gf232_conversion_t *g_gf232_conversion = NULL;

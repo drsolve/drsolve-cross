@@ -23,18 +23,20 @@ extern "C" {
 /* Extended field element type enumeration */
 typedef enum {
     FIELD_ID_NMOD   = 0,  /* Prime field Z/pZ */
-    FIELD_ID_GF28   = 1,  /* GF(2^8) */
-    FIELD_ID_GF216  = 2,  /* GF(2^16) */
-    FIELD_ID_GF232  = 3,  /* GF(2^32) */
-    FIELD_ID_GF264  = 4,  /* GF(2^64) */
-    FIELD_ID_GF2128 = 5,  /* GF(2^128) */
-    FIELD_ID_FQ_ZECH = 6, /* Small finite fields with Zech logarithm */
-    FIELD_ID_FQ     = 7   /* General finite field */
+    FIELD_ID_GF24   = 1,  /* GF(2^4) */
+    FIELD_ID_GF28   = 2,  /* GF(2^8) */
+    FIELD_ID_GF216  = 3,  /* GF(2^16) */
+    FIELD_ID_GF232  = 4,  /* GF(2^32) */
+    FIELD_ID_GF264  = 5,  /* GF(2^64) */
+    FIELD_ID_GF2128 = 6,  /* GF(2^128) */
+    FIELD_ID_FQ_ZECH = 7, /* Small finite fields with Zech logarithm */
+    FIELD_ID_FQ     = 8   /* General finite field */
 } field_id_t;
 
 /* Unified field element using union with Zech support */
-typedef union {
+typedef union field_elem_u {
     ulong nmod;              /* For prime fields */
+    uint8_t gf24;            /* For GF(2^4) */
     uint8_t gf28;            /* For GF(2^8) */
     uint16_t gf216;          /* For GF(2^16) */
     gf232_t gf232;           /* For GF(2^32) */
@@ -48,7 +50,7 @@ typedef union {
    FIELD CONTEXT STRUCTURE WITH ZECH SUPPORT
    ============================================================================ */
 
-typedef struct {
+typedef struct field_ctx_struct {
     field_id_t field_id;
     size_t elem_size;
     ulong zech_size_limit;   /* Size limit for using Zech logarithms */
@@ -68,7 +70,7 @@ typedef struct {
    UNIFIED POLYNOMIAL TYPE
    ============================================================================ */
 
-typedef struct {
+typedef struct unified_poly_struct {
     field_elem_u *coeffs;     /* Array of coefficients */
     slong length;             /* Current length */
     slong alloc;              /* Allocated size */
@@ -81,7 +83,7 @@ typedef unified_poly_struct unified_poly_t[1];
    POLYNOMIAL MATRIX TYPE
    ============================================================================ */
 
-typedef struct {
+typedef struct unified_poly_mat_struct {
     unified_poly_struct *entries;
     slong r, c;
     unified_poly_struct **rows;
@@ -121,6 +123,7 @@ static inline int should_use_zech_logarithm(const fq_nmod_ctx_t fq_ctx, ulong si
     /* Don't use Zech for already optimized GF(2^n) fields */
     if (p == 2) {
         switch (d) {
+            case 4:   /* GF(2^4) has custom optimization */
             case 8:   /* GF(2^8) has custom optimization */
             case 16:  /* GF(2^16) has custom optimization */
             case 32:  /* GF(2^32) has custom optimization */
@@ -152,7 +155,7 @@ static inline int should_use_zech_logarithm(const fq_nmod_ctx_t fq_ctx, ulong si
    WORKSPACE FOR HOT PATHS
    ============================================================================ */
 
-typedef struct {
+typedef struct unified_workspace_struct {
     field_elem_u lc1, lc2, cst, inv;
     unified_poly_struct tmp, tmp2;
     field_id_t field_id;  /* Track which field this workspace is for */
@@ -160,8 +163,7 @@ typedef struct {
     int initialized;
 } unified_workspace_t;
 
-/* Per-thread workspace */
-extern __thread unified_workspace_t g_unified_workspace;
+unified_workspace_t *get_unified_workspace(void);
 
 /* ============================================================================
    FUNCTION DECLARATIONS - CONTEXT MANAGEMENT
@@ -264,6 +266,9 @@ void field_clear(field_ctx_t *ctx);
 static inline void field_mul(field_elem_u *res, const field_elem_u *a, const field_elem_u *b, 
                             field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            res->gf24 = gf24_mul(a->gf24, b->gf24);
+            break;
         case FIELD_ID_GF28:
             res->gf28 = gf28_mul(a->gf28, b->gf28);
             break;
@@ -303,6 +308,9 @@ static inline void field_mul(field_elem_u *res, const field_elem_u *a, const fie
 static inline void field_add(field_elem_u *res, const field_elem_u *a, const field_elem_u *b,
                             field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            res->gf24 = a->gf24 ^ b->gf24;
+            break;
         case FIELD_ID_GF28:
             res->gf28 = a->gf28 ^ b->gf28;
             break;
@@ -342,6 +350,8 @@ static inline void field_add(field_elem_u *res, const field_elem_u *a, const fie
 /* Check if zero - inline for hot path */
 static inline int field_is_zero(const field_elem_u *a, field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            return a->gf24 == 0;
         case FIELD_ID_GF28:
             return a->gf28 == 0;
         case FIELD_ID_GF216:
@@ -365,6 +375,8 @@ static inline int field_is_zero(const field_elem_u *a, field_id_t field_id, cons
 /* Check if one - inline for hot path */
 static inline int field_is_one(const field_elem_u *a, field_id_t field_id, const void *ctx) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            return a->gf24 == 1;
         case FIELD_ID_GF28:
             return a->gf28 == 1;
         case FIELD_ID_GF216:

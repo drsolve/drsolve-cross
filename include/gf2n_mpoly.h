@@ -76,6 +76,18 @@ typedef struct {
     slong size;
 } gf28_dynamic_array_t;
 
+/* GF(2^4) uses the same packed representation as GF(2^8); arithmetic kernels differ. */
+typedef gf28_mpoly_struct gf24_mpoly_struct;
+typedef gf24_mpoly_struct gf24_mpoly_t[1];
+
+typedef gf28_mpoly_ctx_struct gf24_mpoly_ctx_struct;
+typedef gf24_mpoly_ctx_struct gf24_mpoly_ctx_t[1];
+
+typedef gf28_mpolyd_struct gf24_mpolyd_struct;
+typedef gf24_mpolyd_struct gf24_mpolyd_t[1];
+
+typedef gf28_dynamic_array_t gf24_dynamic_array_t;
+
 /* ============================================================================
    GF(2^16) MULTIVARIATE POLYNOMIAL STRUCTURES
    ============================================================================ */
@@ -217,6 +229,31 @@ typedef struct {
     slong chunk_size;
     int use_chunks;
 } gf2128_dynamic_array_t;
+
+/* ============================================================================
+   FUNCTION DECLARATIONS - GF(2^4)
+   ============================================================================ */
+
+void gf24_mpoly_init(gf24_mpoly_t poly, const gf24_mpoly_ctx_t ctx);
+void gf24_mpoly_clear(gf24_mpoly_t poly, const gf24_mpoly_ctx_t ctx);
+void gf24_mpoly_ctx_init(gf24_mpoly_ctx_t ctx, slong nvars, const ordering_t ord);
+void gf24_mpoly_ctx_clear(gf24_mpoly_ctx_t ctx);
+void gf24_mpoly_zero(gf24_mpoly_t poly, const gf24_mpoly_ctx_t ctx);
+void gf24_mpoly_set(gf24_mpoly_t res, const gf24_mpoly_t poly, const gf24_mpoly_ctx_t ctx);
+void gf24_mpoly_set_coeff_ui_ui(gf24_mpoly_t poly, uint8_t c,
+                                const ulong *exp, const gf24_mpoly_ctx_t ctx);
+int gf24_mpoly_mul(gf24_mpoly_t res, const gf24_mpoly_t a, const gf24_mpoly_t b,
+                   const gf24_mpoly_ctx_t ctx);
+int gf24_mpoly_mul_array(gf24_mpoly_t A, const gf24_mpoly_t B,
+                         const gf24_mpoly_t C, const gf24_mpoly_ctx_t ctx);
+int gf24_mpoly_can_use_array_mul(const gf24_mpoly_t B, const gf24_mpoly_t C,
+                                 const gf24_mpoly_ctx_t ctx);
+void fq_nmod_mpoly_to_gf24_mpoly(gf24_mpoly_t res, const fq_nmod_mpoly_t poly,
+                                 const fq_nmod_ctx_t fqctx,
+                                 const fq_nmod_mpoly_ctx_t fq_mpoly_ctx);
+void gf24_mpoly_to_fq_nmod_mpoly(fq_nmod_mpoly_t res, const gf24_mpoly_t poly,
+                                 const fq_nmod_ctx_t fqctx,
+                                 const fq_nmod_mpoly_ctx_t fq_mpoly_ctx);
 
 /* ============================================================================
    FUNCTION DECLARATIONS - GF(2^8)

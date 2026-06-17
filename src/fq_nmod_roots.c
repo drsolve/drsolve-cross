@@ -485,12 +485,12 @@ slong our_fq_nmod_poly_roots(fq_nmod_roots_t roots, const fq_nmod_poly_t poly,
         return roots->num;
     }
     
-    printf("Starting Cantor-Zassenhaus algorithm\n");
+    //printf("Starting Cantor-Zassenhaus algorithm\n");
     
     // Get field parameters
     mp_limb_t p = fq_nmod_ctx_prime(ctx);
     slong d = fq_nmod_ctx_degree(ctx);
-    printf("Field: F_{%lu^%ld}\n", p, d);
+    //printf("Field: F_{%lu^%ld}\n", p, d);
     
     // Initialize polynomials
     fq_nmod_poly_t x_to_q, x, frobenius, splitting_poly;
@@ -503,9 +503,9 @@ slong our_fq_nmod_poly_roots(fq_nmod_roots_t roots, const fq_nmod_poly_t poly,
     fmpz_t q;
     fmpz_init(q);
     fq_nmod_ctx_order(q, ctx);
-    printf("Field size q = ");
-    fmpz_print(q);
-    printf("\n");
+    //printf("Field size q = ");
+    //fmpz_print(q);
+    //printf("\n");
     
     // Compute x^q mod poly (Frobenius endomorphism)
     fq_nmod_poly_gen(x, ctx);  // x
@@ -519,17 +519,17 @@ slong our_fq_nmod_poly_roots(fq_nmod_roots_t roots, const fq_nmod_poly_t poly,
     fq_nmod_poly_gcd(splitting_poly, poly, frobenius, ctx);
     slong splitting_deg = fq_nmod_poly_degree(splitting_poly, ctx);
     
-    printf("Splitting polynomial degree: %ld\n", splitting_deg);
+    //printf("Splitting polynomial degree: %ld\n", splitting_deg);
     
     if (splitting_deg <= 0) {
-        printf("No roots found in F_q\n");
+        //printf("No roots found in F_q\n");
         goto cleanup;
     }
     
     // Critical fix: for small splitting_deg, use factorization instead of random splitting
     // Random splitting is inefficient and unreliable for small degrees
     if (splitting_deg <= 20) {
-        printf("Small splitting polynomial (deg=%ld), using factorization\n", splitting_deg);
+        //printf("Small splitting polynomial (deg=%ld), using factorization\n", splitting_deg);
         
         fq_nmod_poly_factor_t factors;
         fq_nmod_poly_factor_init(factors, ctx);
@@ -552,7 +552,7 @@ slong our_fq_nmod_poly_roots(fq_nmod_roots_t roots, const fq_nmod_poly_t poly,
     } else if (splitting_deg == 1) {
         fq_nmod_extract_single_root(roots, splitting_poly, ctx);
     } else {
-        printf("Large splitting polynomial (deg=%ld), using equal-degree splitting\n", splitting_deg);
+        //printf("Large splitting polynomial (deg=%ld), using equal-degree splitting\n", splitting_deg);
         
         flint_rand_t state;
         flint_rand_init(state);
@@ -567,7 +567,7 @@ cleanup:
     fq_nmod_poly_clear(frobenius, ctx);
     fq_nmod_poly_clear(splitting_poly, ctx);
     
-    printf("Total roots found: %ld\n", roots->num);
+    //printf("Total roots found: %ld\n", roots->num);
     return roots->num;
 }
 

@@ -2,6 +2,193 @@
 #include "gf2n_poly.h"
 
 /* ============================================================================
+   SMALL GF(2^n) POLYNOMIAL HELPERS
+   ============================================================================ */
+
+static void gf2x_poly_mul_schoolbook_u8(
+    uint8_t *dst,
+    const uint8_t *a, slong alen,
+    const uint8_t *b, slong blen,
+    const uint8_t *(*get_row)(uint8_t))
+{
+    for (slong i = 0; i < alen; i++) {
+        uint8_t ai = a[i];
+        if (ai == 0) continue;
+        const uint8_t *row = get_row(ai);
+        for (slong j = 0; j < blen; j++) {
+            dst[i + j] ^= row[b[j]];
+        }
+    }
+}
+
+/* ============================================================================
+   GF(2^4) POLYNOMIAL OPERATIONS IMPLEMENTATION
+   ============================================================================ */
+
+void gf24_poly_init(gf24_poly_t poly) {
+    poly->coeffs = NULL;
+    poly->length = 0;
+    poly->alloc = 0;
+}
+
+void gf24_poly_clear(gf24_poly_t poly) {
+    if (poly->coeffs) {
+        free(poly->coeffs);
+        poly->coeffs = NULL;
+    }
+    poly->length = 0;
+    poly->alloc = 0;
+}
+
+void gf24_poly_fit_length(gf24_poly_t poly, slong len) {
+    if (len > poly->alloc) {
+        slong new_alloc = FLINT_MAX(len, poly->alloc * 2);
+        poly->coeffs = (uint8_t *)realloc(poly->coeffs, new_alloc * sizeof(uint8_t));
+        memset(poly->coeffs + poly->alloc, 0, (new_alloc - poly->alloc) * sizeof(uint8_t));
+        poly->alloc = new_alloc;
+    }
+}
+
+void gf24_poly_normalise(gf24_poly_t poly) {
+    while (poly->length > 0 && poly->coeffs[poly->length - 1] == 0) {
+        poly->length--;
+    }
+}
+
+inline void gf24_poly_zero(gf24_poly_t poly) {
+    poly->length = 0;
+}
+
+inline int gf24_poly_is_zero(const gf24_poly_t poly) {
+    return poly->length == 0;
+}
+
+inline slong gf24_poly_degree(const gf24_poly_t poly) {
+    return poly->length - 1;
+}
+
+void gf24_poly_set(gf24_poly_t res, const gf24_poly_t poly) {
+    if (res == poly) return;
+    gf24_poly_fit_length(res, poly->length);
+    memcpy(res->coeffs, poly->coeffs, poly->length * sizeof(uint8_t));
+    res->length = poly->length;
+}
+
+uint8_t gf24_poly_get_coeff(const gf24_poly_t poly, slong i) {
+    return (i < poly->length) ? poly->coeffs[i] : 0;
+}
+
+void gf24_poly_set_coeff(gf24_poly_t poly, slong i, uint8_t c) {
+    if (i >= poly->alloc) {
+        slong new_alloc = FLINT_MAX(i + 1, 2 * poly->alloc);
+        poly->coeffs = (uint8_t *)flint_realloc(poly->coeffs, new_alloc * sizeof(uint8_t));
+        memset(poly->coeffs + poly->alloc, 0, (new_alloc - poly->alloc) * sizeof(uint8_t));
+        poly->alloc = new_alloc;
+    }
+
+    if (i >= poly->length) {
+        poly->length = i + 1;
+    }
+
+    poly->coeffs[i] = c & 0x0F;
+    if (poly->coeffs[i] == 0 && i == poly->length - 1) {
+        gf24_poly_normalise(poly);
+    }
+}
+
+void gf24_poly_add(gf24_poly_t res, const gf24_poly_t a, const gf24_poly_t b) {
+    slong max_len = FLINT_MAX(a->length, b->length);
+    slong min_len = FLINT_MIN(a->length, b->length);
+
+    if (max_len == 0) {
+        gf24_poly_zero(res);
+        return;
+    }
+
+    gf24_poly_fit_length(res, max_len);
+    for (slong i = 0; i < min_len; i++) {
+        res->coeffs[i] = a->coeffs[i] ^ b->coeffs[i];
+    }
+
+    if (a->length > b->length) {
+        memcpy(res->coeffs + min_len, a->coeffs + min_len,
+               (a->length - min_len) * sizeof(uint8_t));
+        res->length = a->length;
+    } else if (b->length > a->length) {
+        memcpy(res->coeffs + min_len, b->coeffs + min_len,
+               (b->length - min_len) * sizeof(uint8_t));
+        res->length = b->length;
+    } else {
+        res->length = min_len;
+    }
+
+    gf24_poly_normalise(res);
+}
+
+void gf24_poly_scalar_mul(gf24_poly_t res, const gf24_poly_t poly, uint8_t c) {
+    c &= 0x0F;
+    if (c == 0) {
+        gf24_poly_zero(res);
+        return;
+    }
+    if (c == 1) {
+        gf24_poly_set(res, poly);
+        return;
+    }
+
+    gf24_poly_fit_length(res, poly->length);
+    res->length = poly->length;
+    for (slong i = 0; i < poly->length; i++) {
+        res->coeffs[i] = gf24_mul(poly->coeffs[i], c);
+    }
+    gf24_poly_normalise(res);
+}
+
+void gf24_poly_shift_left(gf24_poly_t res, const gf24_poly_t poly, slong n) {
+    if (n == 0) {
+        gf24_poly_set(res, poly);
+        return;
+    }
+    if (gf24_poly_is_zero(poly)) {
+        gf24_poly_zero(res);
+        return;
+    }
+
+    slong new_len = poly->length + n;
+    gf24_poly_fit_length(res, new_len);
+    memmove(res->coeffs + n, poly->coeffs, poly->length * sizeof(uint8_t));
+    memset(res->coeffs, 0, n * sizeof(uint8_t));
+    res->length = new_len;
+}
+
+void gf24_poly_mul(gf24_poly_t res, const gf24_poly_t a, const gf24_poly_t b) {
+    if (gf24_poly_is_zero(a) || gf24_poly_is_zero(b)) {
+        gf24_poly_zero(res);
+        return;
+    }
+
+    slong rlen = a->length + b->length - 1;
+    if (res != a && res != b) {
+        gf24_poly_fit_length(res, rlen);
+        memset(res->coeffs, 0, rlen * sizeof(uint8_t));
+        gf2x_poly_mul_schoolbook_u8(res->coeffs, a->coeffs, a->length, b->coeffs, b->length,
+                                    gf24_get_scalar_row);
+        res->length = rlen;
+        gf24_poly_normalise(res);
+        return;
+    }
+
+    uint8_t *temp = (uint8_t *)calloc(rlen, sizeof(uint8_t));
+    gf2x_poly_mul_schoolbook_u8(temp, a->coeffs, a->length, b->coeffs, b->length,
+                                gf24_get_scalar_row);
+    gf24_poly_fit_length(res, rlen);
+    memcpy(res->coeffs, temp, rlen * sizeof(uint8_t));
+    res->length = rlen;
+    gf24_poly_normalise(res);
+    free(temp);
+}
+
+/* ============================================================================
    GF(2^8) POLYNOMIAL OPERATIONS IMPLEMENTATION
    ============================================================================ */
 
@@ -156,23 +343,26 @@ void gf28_poly_mul_schoolbook(gf28_poly_t res, const gf28_poly_t a, const gf28_p
         gf28_poly_zero(res);
         return;
     }
-    
+
     slong rlen = a->length + b->length - 1;
-    uint8_t *temp = (uint8_t *)calloc(rlen, sizeof(uint8_t));
-    
-    for (slong i = 0; i < a->length; i++) {
-        if (a->coeffs[i] == 0) continue;
-        for (slong j = 0; j < b->length; j++) {
-            if (b->coeffs[j] == 0) continue;
-            temp[i + j] = gf28_add(temp[i + j], gf28_mul(a->coeffs[i], b->coeffs[j]));
-        }
+
+    if (res != a && res != b) {
+        gf28_poly_fit_length(res, rlen);
+        memset(res->coeffs, 0, rlen * sizeof(uint8_t));
+        gf2x_poly_mul_schoolbook_u8(res->coeffs, a->coeffs, a->length, b->coeffs, b->length,
+                                    gf28_get_scalar_row);
+        res->length = rlen;
+        gf28_poly_normalise(res);
+        return;
     }
-    
+
+    uint8_t *temp = (uint8_t *)calloc(rlen, sizeof(uint8_t));
+    gf2x_poly_mul_schoolbook_u8(temp, a->coeffs, a->length, b->coeffs, b->length,
+                                gf28_get_scalar_row);
     gf28_poly_fit_length(res, rlen);
     memcpy(res->coeffs, temp, rlen * sizeof(uint8_t));
     res->length = rlen;
     gf28_poly_normalise(res);
-    
     free(temp);
 }
 
