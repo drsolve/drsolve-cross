@@ -120,6 +120,9 @@ static void print_usage(const char *prog_name)
     printf("  Elimination / resultant mode:\n");
     printf("    %s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -o output.dr \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
+    printf("    Example: %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
+    printf("    Example: %s -o out/elimination.dr \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> Default output file: %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
     printf("\n");
 
@@ -129,10 +132,17 @@ static void print_usage(const char *prog_name)
     printf("    %s --solve-rational-only \"polynomials\" 0\n", prog_name);
     printf("    %s -v 2 -s \"polynomials\" field_size\n", prog_name);
     printf("    %s -v 3 \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
+    printf("    Example: %s \"x^2-1, y-x\" 257\n", prog_name);
+    printf("    Example: %s -s \"x^2+y^2-1, x-y\" 0\n", prog_name);
+    printf("    Example: %s --solve-rational-only \"x^2-1, y-x\" 0\n", prog_name);
+    printf("    Example: %s -v 2 -s \"x^2-1, y-x\" 257\n", prog_name);
+    printf("    Example: %s -v 3 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
     printf("    -> Writes all solutions to %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
     printf("    -> `-s` / `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
     printf("    -> `-v 2` matches the old debug / verbose solver output\n");
     printf("    -> `-v 3` also dumps small Step 1/2/3 matrices (<= 10 x 10)\n");
+    printf("    -> In extension fields, 't' is the field generator; in Q and prime fields it is an ordinary variable\n");
     printf("\n");
 
     printf("  File input:\n");
@@ -140,6 +150,10 @@ static void print_usage(const char *prog_name)
     printf("    %s -f input_file\n", prog_name);
     printf("    %s -s input_file\n", prog_name);
     printf("    %s -s -f input_file -o output.dr\n", prog_name);
+    printf("    Example: %s example.dr\n", prog_name);
+    printf("    Example: %s -f example.dr\n", prog_name);
+    printf("    Example: %s -s example_solve.dr\n", prog_name);
+    printf("    Example: %s -s -f example_solve.dr -o out/example_solve_copy.dr\n", prog_name);
     printf("    -> Without flags, auto-detects solver mode when line 1 starts with a digit; otherwise uses elimination mode\n");
     printf("    -> If elimination vars count equals equation count n, auto-adjusts to eliminate the first n-1 variables\n");
     printf("    -> Input file may be given directly or with `-f`; output file must be given with `-o` when overriding the default\n");
@@ -162,6 +176,10 @@ static void print_usage(const char *prog_name)
     printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -c    \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --comp -f input.dr\n", prog_name);
+    printf("    Example: %s --comp \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s -c \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --comp -f example.dr\n", prog_name);
+    printf("    Example: %s -r --comp --omega 2.81 \"[2]*3\" 257\n", prog_name);
     printf("    -> Prints complexity info; saves to %s/comp_YYYYMMDD_HHMMSS.dr by default\n",
            DEFAULT_OUTPUT_DIR);
     printf("    Add --omega <value> (or -w <value>) to set omega (default: %.4g)\n",
@@ -172,6 +190,8 @@ static void print_usage(const char *prog_name)
     printf("  Dixon with ideal reduction:\n");
     printf("    %s --ideal \"ideal_generators\" \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --ideal -f input.dr\n", prog_name);
+    printf("    Example: %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
+    printf("    Example: %s --ideal -f example.dr\n", prog_name);
     printf("    -> ideal_generators: comma-separated relations with '=' (e.g. \"a2^3=2*a1+1, a3^3=a1*a2+3\")\n");
     printf("    -> In file mode, lines after the first two lines containing '=' are ideal generators; others are polynomials\n");
     printf("\n");
@@ -180,10 +200,16 @@ static void print_usage(const char *prog_name)
     printf("    %s --field-equation \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --field-equation input_file\n", prog_name);
     printf("    %s --field-equation -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
+    printf("    Example: %s --field-equation \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
+    printf("    Example: %s --field-equation example.dr\n", prog_name);
+    printf("    Example: %s --field-equation -r \"[2]*3\" 257\n", prog_name);
     printf("    -> After each multiplication, reduces x^q -> x for every variable\n");
     printf("    %s --field-equation-s \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --field-equation-s input_file\n", prog_name);
     printf("    %s --field-equation-s -r \"[d1,d2,...,dn]\" field_size\n", prog_name);
+    printf("    Example: %s --field-equation-s \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
+    printf("    Example: %s --field-equation-s example.dr\n", prog_name);
+    printf("    Example: %s --field-equation-s -r \"[2]*3\" 257\n", prog_name);
     printf("    -> Reduce only the final resultant/output via x^q -> x\n");
     printf("\n");
 
@@ -193,6 +219,13 @@ static void print_usage(const char *prog_name)
     printf("    %s -r -n 4 --density 0.5 \"[d]*3\" field_size\n", prog_name);
     printf("    %s -r -s    \"[d1,...,dn]\" field_size\n", prog_name);
     printf("    %s -r --comp  \"[d]*n\"        field_size\n", prog_name);
+    printf("    Example: %s --random \"[3,3,2]\" 257\n", prog_name);
+    printf("    Example: %s -r \"[3]*3\" 257\n", prog_name);
+    printf("    Example: %s -r -n 4 --density 0.5 \"[3]*3\" 257\n", prog_name);
+    printf("    Example: %s -r --seed 12345 \"[3]*3\" 257\n", prog_name);
+    printf("    Example: %s -r \"[2]*4+[3]*2\" 257\n", prog_name);
+    printf("    Example: %s -r -s \"[2]*3\" 257\n", prog_name);
+    printf("    Example: %s -r --comp --omega 2.81 \"[2]*3\" 257\n", prog_name);
     printf("    -> Add -n <num_vars> to set the total variable count (must satisfy num_vars >= #equations-1)\n");
     printf("    -> Add --density <ratio> with 0 <= ratio <= 1 to choose the fraction of all monomials used (default: 1)\n");
     printf("    -> Add --seed <num> to generate the same random system reproducibly across runs\n");
@@ -205,6 +238,10 @@ static void print_usage(const char *prog_name)
     printf("    %s -v 1 <args>\n", prog_name);
     printf("    %s -v 2 <args>\n", prog_name);
     printf("    %s -v 3 <args>\n", prog_name);
+    printf("    Example: %s -v 0 \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
+    printf("    Example: %s -v 1 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s -v 2 -s \"x^2-1, y-x\" 257\n", prog_name);
+    printf("    Example: %s -v 3 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> `-v 0` matches `--silent` and prints nothing\n");
     printf("    -> `-v 1` is the default output level\n");
     printf("    -> `-v 2` matches the old `--debug` output and also enables per-step timing\n");
@@ -217,6 +254,10 @@ static void print_usage(const char *prog_name)
     printf("    %s --complex \"f1, f2\" 0\n", prog_name);
     printf("    %s --time <args>\n", prog_name);
     printf("    %s -v 2 <args>\n", prog_name);
+    printf("    Example: %s --test 0\n", prog_name);
+    printf("    Example: %s --complex \"x^2+y^2-1, x-y\" 0\n", prog_name);
+    printf("    Example: %s --time \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s -v 2 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> --test values: 0 help, 1 matrix size, 2 Bezout bound, 3 solver correctness, 4 solver performance, 5 XHash\n");
     printf("    -> --complex supports Q-only 2x2 solver mode; in elimination mode it prints complex roots when the resultant is univariate\n");
     printf("    -> --time prints per-step timing; interpolation steps also show CPU/Wall/Threads\n");
@@ -227,6 +268,9 @@ static void print_usage(const char *prog_name)
     printf("    %s --rational-root-scan <auto|off|force> <args>\n", prog_name);
     printf("    %s --no-rational-root-scan <args>\n", prog_name);
     printf("    %s --force-rational-root-scan <args>\n", prog_name);
+    printf("    Example: %s --rational-root-scan off \"x^2-1, y-x\" 0\n", prog_name);
+    printf("    Example: %s --no-rational-root-scan \"x^2-1, y-x\" 0\n", prog_name);
+    printf("    Example: %s --force-rational-root-scan \"x^2-1, y-x\" 0\n", prog_name);
     printf("    -> controls the exhaustive Rational Root Theorem scan used before approximate real-root finding\n");
     printf("    -> default `auto` skips the scan when candidate count exceeds %d; `off` disables it; `force` runs it up to the hard cap %d\n",
            FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES,
@@ -237,6 +281,12 @@ static void print_usage(const char *prog_name)
     printf("    %s --method <num> <args>\n", prog_name);
     printf("    %s --fq-det-method <auto|hnf|iter> <args>\n", prog_name);
     printf("    %s --step1 <num> --step4 <num> <args>\n", prog_name);
+    printf("    Example: %s --method 4 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --fq-det-method hnf \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --step1 4 --step4 4 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --cache 256 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --fast-ksy --fast-ksy-col 0 --method 5 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --step3-verify-second \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> Available methods: 0.Minor expansion; 1.HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction; 6.Balanced split Laplace (experimental)\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
     printf("    -> --fq-det-method (auto|hnf|iter) controls the prime-field univariate polynomial-matrix determinant backend used in fq_poly_mat_det\n");
@@ -251,36 +301,17 @@ static void print_usage(const char *prog_name)
     printf("    %s --dixon <args>\n", prog_name);
     printf("    %s --macaulay <args>\n", prog_name);
     printf("    %s --subres <args>\n", prog_name);
+    printf("    Example: %s --dixon \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --macaulay \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --subres \"x^2+y, x+y+1\" \"x\" 257\n", prog_name);
     printf("    -> --dixon / --macaulay / --subres are direct method selectors\n");
     printf("    -> --subres is for exactly 2 polynomials and 1 elimination variable\n");
     printf("\n");
 
     printf("  Parallelism:\n");
     printf("    %s --threads <num> <args>\n", prog_name);
+    printf("    Example: %s --threads 2 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> Set number of threads for parallel computation\n");
-    printf("\n");
-
-    printf("EXAMPLES:\n");
-    printf("  %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
-    printf("  %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
-    printf("  %s -s \"x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1\" 257\n", prog_name);
-    printf("  %s --comp \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
-    printf("  %s --random \"[3,3,2]\" 257\n", prog_name);
-    printf("  %s -r \"[3]*3\" 0\n", prog_name);
-    printf("  %s -r -n 4 --density 0.5 \"[3]*3\" 257\n", prog_name);
-    printf("  %s -r --seed 12345 \"[3]*3\" 257\n", prog_name);
-    printf("  %s -r \"[2]*4+[3]*2\" 257\n", prog_name);
-    printf("  %s -r -s \"[2]*3\" 257\n", prog_name);
-    printf("  %s -r --comp --omega 2.81 \"[4]*4\" 257\n", prog_name);
-    printf("  %s --ideal \"a2^3=2*a1+1, a3^3=a1*a2+3\" \"a1^2+a2^2+a3^2-10, a3^3-a1*a2-3\" \"a3\" 257\n", prog_name);
-    printf("  %s --field-equation \"x0*x2+x1, x0*x1*x2+x2+1, x1*x2+x0+1\" \"x0,x1\" 2\n", prog_name);
-    printf("  %s -v 0 \"x+y^2+t, x*y+t*y+1\" \"y\" 2^8\n", prog_name);
-    printf("  %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
-    printf("  (AES polynomial for GF(2^8), 't' is the field extension generator)\n");
-    printf("  In Q and prime fields, 't' is treated as an ordinary variable; only extension fields reserve it as the generator.\n");
-    printf("  %s example.dr\n", prog_name);
-    printf("  %s -v 2 -f in.dr -o out.dr\n", prog_name);
-    printf("  %s example_solve.dr\n", prog_name);
 }
 
 /* =========================================================================
