@@ -262,6 +262,331 @@ static void merge_solver_logs(polynomial_solutions_t *dst, const polynomial_solu
     }
 }
 
+#define UNDERDETERMINED_FALLBACK_MAX_SUM 4
+
+typedef struct {
+    char **poly_strings;
+    slong num_polys;
+    variable_info_t *sorted_vars;
+    slong num_vars;
+    slong fixed_count;
+    slong keep_count;
+    const fq_nmod_ctx_struct *ctx;
+    polynomial_solutions_t *found;
+} underdetermined_fallback_ctx_t;
+
+static int generate_compositions_recursive(slong parts_left, slong remaining_sum,
+                                           slong *current, slong depth,
+                                           int (*callback)(const slong *, slong, void *),
+                                           void *userdata) {
+    if (parts_left == 1) {
+        current[depth] = remaining_sum;
+        return callback(current, depth + 1, userdata);
+    }
+
+    for (slong value = 0; value <= remaining_sum; value++) {
+        current[depth] = value;
+        if (generate_compositions_recursive(parts_left - 1,
+                                            remaining_sum - value,
+                                            current,
+                                            depth + 1,
+                                            callback,
+                                            userdata)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void set_underdetermined_enum_value(fq_nmod_t out, slong value,
+                                           const fq_nmod_ctx_t ctx);
+
+static char **substitute_fixed_assignments(char **poly_strings, slong num_polys,
+                                           variable_info_t *sorted_vars,
+                                           slong fixed_start, slong fixed_count,
+                                           const slong *fixed_values,
+                                           const fq_nmod_ctx_t ctx) {
+    char **reduced = (char **) calloc((size_t) num_polys, sizeof(char *));
+    if (!reduced) {
+        return NULL;
+    }
+
+    for (slong poly_idx = 0; poly_idx < num_polys; poly_idx++) {
+        char *current = strdup(poly_strings[poly_idx]);
+        if (!current) {
+            goto fail;
+        }
+
+        for (slong fixed_idx = 0; fixed_idx < fixed_count; fixed_idx++) {
+            fq_nmod_t value;
+            fq_nmod_init(value, ctx);
+            set_underdetermined_enum_value(value, fixed_values[fixed_idx], ctx);
+
+            char *substituted = substitute_variable_in_polynomial(
+                current, sorted_vars[fixed_start + fixed_idx].name, value, ctx);
+            fq_nmod_clear(value, ctx);
+
+            free(current);
+            current = substituted;
+            if (!current) {
+                goto fail;
+            }
+        }
+
+        reduced[poly_idx] = current;
+    }
+
+    return reduced;
+
+fail:
+    if (reduced) {
+        for (slong i = 0; i < num_polys; i++) {
+            free(reduced[i]);
+        }
+        free(reduced);
+    }
+    return NULL;
+}
+
+static void set_underdetermined_enum_value(fq_nmod_t out, slong value,
+                                           const fq_nmod_ctx_t ctx) {
+    if (value <= 0) {
+        fq_nmod_zero(out, ctx);
+        return;
+    }
+
+    if (fq_nmod_ctx_degree(ctx) <= 1) {
+        fq_nmod_set_ui(out, (ulong) value, ctx);
+        return;
+    }
+
+    ulong p = fq_nmod_ctx_prime(ctx);
+    ulong remaining = (ulong) value;
+    fq_nmod_t gen, power, term;
+
+    fq_nmod_zero(out, ctx);
+    fq_nmod_init(gen, ctx);
+    fq_nmod_init(power, ctx);
+    fq_nmod_init(term, ctx);
+
+    fq_nmod_gen(gen, ctx);
+    fq_nmod_one(power, ctx);
+
+    while (remaining > 0) {
+        ulong digit = remaining % p;
+        if (digit != 0) {
+            fq_nmod_mul_ui(term, power, digit, ctx);
+            fq_nmod_add(out, out, term, ctx);
+        }
+        remaining /= p;
+        if (remaining > 0) {
+            fq_nmod_mul(power, power, gen, ctx);
+        }
+    }
+
+    fq_nmod_clear(term, ctx);
+    fq_nmod_clear(power, ctx);
+    fq_nmod_clear(gen, ctx);
+}
+
+static polynomial_solutions_t *lift_solution_sets_to_full_system(
+    const polynomial_solutions_t *reduced,
+    variable_info_t *sorted_vars,
+    slong full_num_vars,
+    slong keep_count,
+    slong fixed_count,
+    const slong *fixed_values) {
+    if (!reduced || !reduced->is_valid || reduced->has_no_solutions || reduced->num_solution_sets == 0) {
+        return NULL;
+    }
+
+    polynomial_solutions_t *full = (polynomial_solutions_t *) malloc(sizeof(polynomial_solutions_t));
+    if (!full) {
+        return NULL;
+    }
+    polynomial_solutions_init(full, full_num_vars, reduced->ctx);
+    full->num_equations = reduced->num_equations;
+    full->is_valid = reduced->is_valid;
+    full->has_no_solutions = reduced->has_no_solutions;
+    full->total_combinations = reduced->total_combinations;
+    full->successful_combinations = reduced->successful_combinations;
+    full->num_base_solutions = reduced->num_base_solutions;
+    full->checked_solution_sets = reduced->checked_solution_sets;
+    full->verified_solution_sets = reduced->verified_solution_sets;
+
+    if (reduced->error_message) {
+        full->error_message = strdup(reduced->error_message);
+    }
+
+    full->variable_order = join_variable_names(sorted_vars, full_num_vars);
+
+    for (slong i = 0; i < full_num_vars; i++) {
+        full->variable_names[i] = strdup(sorted_vars[i].name);
+    }
+
+    merge_solver_logs(full, reduced);
+
+    full->num_solution_sets = reduced->num_solution_sets;
+    full->solution_sets = (fq_nmod_t ***) calloc((size_t) full->num_solution_sets, sizeof(fq_nmod_t **));
+    full->solutions_per_var = (slong *) calloc((size_t) full->num_solution_sets * full_num_vars, sizeof(slong));
+
+    if (!full->solution_sets || !full->solutions_per_var) {
+        polynomial_solutions_clear(full);
+        free(full);
+        return NULL;
+    }
+
+    for (slong set = 0; set < reduced->num_solution_sets; set++) {
+        full->solution_sets[set] = (fq_nmod_t **) calloc((size_t) full_num_vars, sizeof(fq_nmod_t *));
+        if (!full->solution_sets[set]) {
+            polynomial_solutions_clear(full);
+            free(full);
+            return NULL;
+        }
+
+        for (slong var = 0; var < keep_count; var++) {
+            slong count = reduced->solutions_per_var[set * keep_count + var];
+            full->solutions_per_var[set * full_num_vars + var] = count;
+            if (count <= 0) {
+                continue;
+            }
+
+            full->solution_sets[set][var] = (fq_nmod_t *) malloc((size_t) count * sizeof(fq_nmod_t));
+            if (!full->solution_sets[set][var]) {
+                polynomial_solutions_clear(full);
+                free(full);
+                return NULL;
+            }
+
+            for (slong sol = 0; sol < count; sol++) {
+                fq_nmod_init(full->solution_sets[set][var][sol], full->ctx);
+                fq_nmod_set(full->solution_sets[set][var][sol],
+                            reduced->solution_sets[set][var][sol], full->ctx);
+            }
+        }
+
+        for (slong fixed_idx = 0; fixed_idx < fixed_count; fixed_idx++) {
+            slong var = keep_count + fixed_idx;
+            full->solutions_per_var[set * full_num_vars + var] = 1;
+            full->solution_sets[set][var] = (fq_nmod_t *) malloc(sizeof(fq_nmod_t));
+            if (!full->solution_sets[set][var]) {
+                polynomial_solutions_clear(full);
+                free(full);
+                return NULL;
+            }
+            fq_nmod_init(full->solution_sets[set][var][0], full->ctx);
+            set_underdetermined_enum_value(full->solution_sets[set][var][0],
+                                           fixed_values[fixed_idx],
+                                           full->ctx);
+        }
+    }
+
+    return full;
+}
+
+static int try_underdetermined_assignment(const slong *values, slong count, void *userdata) {
+    underdetermined_fallback_ctx_t *state = (underdetermined_fallback_ctx_t *) userdata;
+    if (!state || state->found || count != state->fixed_count) {
+        return 0;
+    }
+
+    char **reduced_polys = substitute_fixed_assignments(state->poly_strings,
+                                                        state->num_polys,
+                                                        state->sorted_vars,
+                                                        state->keep_count,
+                                                        state->fixed_count,
+                                                        values,
+                                                        state->ctx);
+    if (!reduced_polys) {
+        return 0;
+    }
+
+    variable_info_t *reduced_vars = (variable_info_t *) malloc((size_t) state->keep_count * sizeof(variable_info_t));
+    if (!reduced_vars) {
+        for (slong i = 0; i < state->num_polys; i++) {
+            free(reduced_polys[i]);
+        }
+        free(reduced_polys);
+        return 0;
+    }
+    for (slong i = 0; i < state->keep_count; i++) {
+        reduced_vars[i] = state->sorted_vars[i];
+    }
+
+    polynomial_solutions_t *reduced = solve_polynomial_system_array_with_vars(
+        reduced_polys,
+        state->num_polys,
+        reduced_vars,
+        state->keep_count,
+        state->ctx);
+
+    for (slong i = 0; i < state->num_polys; i++) {
+        free(reduced_polys[i]);
+    }
+    free(reduced_polys);
+    free(reduced_vars);
+
+    if (reduced && reduced->is_valid && reduced->has_no_solutions == 0 && reduced->num_solution_sets > 0) {
+        state->found = lift_solution_sets_to_full_system(reduced,
+                                                         state->sorted_vars,
+                                                         state->num_vars,
+                                                         state->keep_count,
+                                                         state->fixed_count,
+                                                         values);
+    }
+
+    if (reduced) {
+        polynomial_solutions_clear(reduced);
+        free(reduced);
+    }
+
+    return state->found != NULL;
+}
+
+static polynomial_solutions_t *solve_underdetermined_by_fixed_assignment(
+    char **poly_strings,
+    slong num_polys,
+    variable_info_t *sorted_vars,
+    slong num_vars,
+    const fq_nmod_ctx_t ctx) {
+    if (num_vars <= num_polys) {
+        return NULL;
+    }
+
+    slong fixed_count = num_vars - num_polys;
+    if (fixed_count <= 0) {
+        return NULL;
+    }
+
+    underdetermined_fallback_ctx_t state = {
+        .poly_strings = poly_strings,
+        .num_polys = num_polys,
+        .sorted_vars = sorted_vars,
+        .num_vars = num_vars,
+        .fixed_count = fixed_count,
+        .keep_count = num_polys,
+        .ctx = ctx,
+        .found = NULL
+    };
+
+    slong *values = (slong *) calloc((size_t) fixed_count, sizeof(slong));
+    if (!values) {
+        return NULL;
+    }
+
+    for (slong sum = 0; sum <= UNDERDETERMINED_FALLBACK_MAX_SUM; sum++) {
+        memset(values, 0, (size_t) fixed_count * sizeof(slong));
+        if (generate_compositions_recursive(fixed_count, sum, values, 0,
+                                            try_underdetermined_assignment,
+                                            &state)) {
+            break;
+        }
+    }
+
+    free(values);
+    return state.found;
+}
+
 // ============= BASIC UTILITY FUNCTIONS =============
 
 // Comparison function: sort by maximum degree in ascending order
@@ -2101,7 +2426,36 @@ polynomial_solutions_t* solve_polynomial_system_array(char **poly_strings, slong
     for (slong i = 0; i < num_vars; i++) {
         sols->variable_names[i] = strdup(sorted_vars[i].name);
     }
-    
+
+    if (num_polys > 0 && num_vars > num_polys) {
+        solver_trace_stdout("Underdetermined system detected: %ld variables, %ld equations\n",
+                            num_vars, num_polys);
+        solver_trace_stdout("Trying fixed-variable fallback: fix last %ld variable(s), total value sum <= %d\n",
+                            num_vars - num_polys, UNDERDETERMINED_FALLBACK_MAX_SUM);
+
+        polynomial_solutions_t *fallback_sols = solve_underdetermined_by_fixed_assignment(
+            poly_strings, num_polys, sorted_vars, num_vars, ctx);
+
+        if (fallback_sols) {
+            polynomial_solutions_clear(sols);
+            free(sols);
+            for (slong i = 0; i < num_vars; i++) {
+                free(sorted_vars[i].name);
+            }
+            free(sorted_vars);
+            return fallback_sols;
+        }
+
+        solver_trace_stdout("Underdetermined fixed-variable fallback exhausted without solutions\n");
+        sols->is_valid = 1;
+        sols->has_no_solutions = 1;
+        for (slong i = 0; i < num_vars; i++) {
+            free(sorted_vars[i].name);
+        }
+        free(sorted_vars);
+        return sols;
+    }
+
     // Solve the system
     int success = solve_by_elimination_enhanced(poly_strings, num_polys, sorted_vars, num_vars, sols);
     

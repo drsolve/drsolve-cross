@@ -138,8 +138,10 @@ static void print_usage(const char *prog_name)
     printf("    Example: %s -v 2 -s \"x^2-1, y-x\" 257\n", prog_name);
     printf("    Example: %s -v 3 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s \"x^2 + t*y, x*y + t^2\" \"2^8: t^8 + t^4 + t^3 + t + 1\"\n", prog_name);
+    printf("    Example: %s -s --specialize-vars \"z=0,w=1\" \"x+z, y+w\" 257\n", prog_name);
     printf("    -> Writes all solutions to %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
     printf("    -> `-s` / `--solve` is optional here; `--solve-rational-only` keeps only exact rational solutions\n");
+    printf("    -> `--specialize-vars a=0,b=1` fixes variables before solving; in extension fields integers use the generator expansion (F_2^k: 2=t, 3=1+t, 4=t^2)\n");
     printf("    -> `-v 2` matches the old debug / verbose solver output\n");
     printf("    -> `-v 3` also dumps small Step 1/2/3 matrices (<= 10 x 10)\n");
     printf("    -> In extension fields, 't' is the field generator; in Q and prime fields it is an ordinary variable\n");
@@ -448,6 +450,261 @@ static const char *fq_det_method_name_cli(fq_nmod_poly_det_method_t method)
         default:
             return "auto";
     }
+}
+
+typedef struct {
+    char *name;
+    char *value;
+} cli_specialization_t;
+
+static void free_cli_specializations(cli_specialization_t *items, slong count)
+{
+    if (!items) return;
+    for (slong i = 0; i < count; i++) {
+        free(items[i].name);
+        free(items[i].value);
+    }
+    free(items);
+}
+
+static int parse_cli_specializations(const char *spec,
+                                     cli_specialization_t **items_out,
+                                     slong *count_out,
+                                     int silent_mode)
+{
+    char *work = NULL;
+    char *saveptr = NULL;
+    char *token = NULL;
+    cli_specialization_t *items = NULL;
+    slong count = 0;
+    slong cap = 0;
+
+    if (!spec || !items_out || !count_out) return 0;
+
+    work = strdup(spec);
+    if (!work) return 0;
+
+    for (token = strtok_r(work, ",", &saveptr);
+         token;
+         token = strtok_r(NULL, ",", &saveptr)) {
+        char *eq = NULL;
+        char *name = NULL;
+        char *value = NULL;
+
+        token = trim(token);
+        if (token[0] == '\0') continue;
+
+        eq = strchr(token, '=');
+        if (!eq) {
+            if (!silent_mode)
+                fprintf(stderr, "Error: --specialize-vars entry '%s' is missing '='.\n", token);
+            goto fail;
+        }
+
+        *eq = '\0';
+        name = trim(token);
+        value = trim(eq + 1);
+
+        if (name[0] == '\0' || value[0] == '\0') {
+            if (!silent_mode)
+                fprintf(stderr, "Error: --specialize-vars entries require non-empty variable and value.\n");
+            goto fail;
+        }
+
+        if (count >= cap) {
+            slong new_cap = (cap == 0) ? 4 : cap * 2;
+            cli_specialization_t *grown =
+                (cli_specialization_t *) realloc(items, (size_t) new_cap * sizeof(cli_specialization_t));
+            if (!grown) goto fail;
+            items = grown;
+            cap = new_cap;
+        }
+
+        items[count].name = strdup(name);
+        items[count].value = strdup(value);
+        if (!items[count].name || !items[count].value) goto fail;
+        count++;
+    }
+
+    free(work);
+
+    if (count == 0) {
+        if (!silent_mode)
+            fprintf(stderr, "Error: --specialize-vars did not contain any assignments.\n");
+        free_cli_specializations(items, count);
+        return 0;
+    }
+
+    *items_out = items;
+    *count_out = count;
+    return 1;
+
+fail:
+    free(work);
+    free_cli_specializations(items, count);
+    return 0;
+}
+
+static void set_cli_specialization_fq_value(fq_nmod_t out, slong value,
+                                            const fq_nmod_ctx_t ctx)
+{
+    int negate = 0;
+    ulong remaining;
+
+    if (value < 0) {
+        negate = 1;
+        remaining = (ulong) (-value);
+    } else {
+        remaining = (ulong) value;
+    }
+
+    if (remaining == 0) {
+        fq_nmod_zero(out, ctx);
+        return;
+    }
+
+    if (fq_nmod_ctx_degree(ctx) <= 1) {
+        fq_nmod_set_ui(out, remaining, ctx);
+    } else {
+        ulong p = fq_nmod_ctx_prime(ctx);
+        fq_nmod_t gen, power, term;
+
+        fq_nmod_zero(out, ctx);
+        fq_nmod_init(gen, ctx);
+        fq_nmod_init(power, ctx);
+        fq_nmod_init(term, ctx);
+
+        fq_nmod_gen(gen, ctx);
+        fq_nmod_one(power, ctx);
+
+        while (remaining > 0) {
+            ulong digit = remaining % p;
+            if (digit != 0) {
+                fq_nmod_mul_ui(term, power, digit, ctx);
+                fq_nmod_add(out, out, term, ctx);
+            }
+            remaining /= p;
+            if (remaining > 0) {
+                fq_nmod_mul(power, power, gen, ctx);
+            }
+        }
+
+        fq_nmod_clear(term, ctx);
+        fq_nmod_clear(power, ctx);
+        fq_nmod_clear(gen, ctx);
+    }
+
+    if (negate) {
+        fq_nmod_neg(out, out, ctx);
+    }
+}
+
+static char *apply_specializations_fq_string(const char *input,
+                                             const char *spec_arg,
+                                             const fq_nmod_ctx_t ctx,
+                                             int silent_mode)
+{
+    cli_specialization_t *items = NULL;
+    slong count = 0;
+    char *current = NULL;
+
+    if (!input) return NULL;
+    if (!parse_cli_specializations(spec_arg, &items, &count, silent_mode)) {
+        return NULL;
+    }
+
+    current = strdup(input);
+    if (!current) goto fail;
+
+    for (slong i = 0; i < count; i++) {
+        char *endptr = NULL;
+        long parsed = strtol(items[i].value, &endptr, 10);
+        fq_nmod_t value;
+        char *next = NULL;
+
+        if (!endptr || *endptr != '\0') {
+            if (!silent_mode)
+                fprintf(stderr,
+                        "Error: finite-field --specialize-vars value '%s' is not an integer.\n",
+                        items[i].value);
+            goto fail;
+        }
+
+        fq_nmod_init(value, ctx);
+        set_cli_specialization_fq_value(value, (slong) parsed, ctx);
+        next = substitute_variable_in_polynomial(current, items[i].name, value, ctx);
+        fq_nmod_clear(value, ctx);
+
+        if (!next) goto fail;
+        free(current);
+        current = next;
+    }
+
+    free_cli_specializations(items, count);
+    return current;
+
+fail:
+    free(current);
+    free_cli_specializations(items, count);
+    return NULL;
+}
+
+static char *apply_specializations_rational_string(const char *input,
+                                                   const char *spec_arg,
+                                                   int require_integer_values,
+                                                   int silent_mode)
+{
+    cli_specialization_t *items = NULL;
+    slong count = 0;
+    char *current = NULL;
+
+    if (!input) return NULL;
+    if (!parse_cli_specializations(spec_arg, &items, &count, silent_mode)) {
+        return NULL;
+    }
+
+    current = strdup(input);
+    if (!current) goto fail;
+
+    for (slong i = 0; i < count; i++) {
+        fmpq_t value;
+        char *next = NULL;
+
+        fmpq_init(value);
+        if (fmpq_set_str(value, items[i].value, 10) != 0) {
+            if (!silent_mode)
+                fprintf(stderr,
+                        "Error: rational --specialize-vars value '%s' is invalid.\n",
+                        items[i].value);
+            fmpq_clear(value);
+            goto fail;
+        }
+        fmpq_canonicalise(value);
+
+        if (require_integer_values && !fmpz_is_one(fmpq_denref(value))) {
+            if (!silent_mode)
+                fprintf(stderr,
+                        "Error: large-prime --specialize-vars value '%s' is not an integer.\n",
+                        items[i].value);
+            fmpq_clear(value);
+            goto fail;
+        }
+
+        next = rational_substitute_variable_in_polynomial(current, items[i].name, value);
+        fmpq_clear(value);
+
+        if (!next) goto fail;
+        free(current);
+        current = next;
+    }
+
+    free_cli_specializations(items, count);
+    return current;
+
+fail:
+    free(current);
+    free_cli_specializations(items, count);
+    return NULL;
 }
 
 static const char *resultant_method_heading(resultant_method_t method)
@@ -2569,6 +2826,7 @@ int main(int argc, char *argv[])
     ulong random_seed = 0;
     int random_seed_given = 0;
     int complex_mode = 0;
+    const char *specialize_vars_arg = NULL;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -2808,6 +3066,12 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--seed") == 0) {
             fprintf(stderr, "Error: --seed requires a non-negative integer argument.\n");
             return 1;
+        } else if (strcmp(argv[i], "--specialize-vars") == 0 && i + 1 < argc) {
+            specialize_vars_arg = argv[i + 1];
+            i++;
+        } else if (strcmp(argv[i], "--specialize-vars") == 0) {
+            fprintf(stderr, "Error: --specialize-vars requires assignments such as x=0,y=1.\n");
+            return 1;
         } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
             cli_input_filename = argv[i + 1];
             i++;
@@ -2870,6 +3134,8 @@ int main(int argc, char *argv[])
     char *allvars_str   = NULL;
     char *field_str     = NULL;
     char *vars_str_override = NULL;
+    char *specialized_polys_str = NULL;
+    const char *effective_polys_str = NULL;
     int   vars_str_generated = 0;
     int   need_free     = 0;
     int   rand_generated = 0;  /* 1 = polys_str/vars_str were malloc'd by random gen */
@@ -3556,6 +3822,8 @@ int main(int argc, char *argv[])
     complex_solver_solution_list_t complex_solutions;
     int complex_solutions_initialized = 0;
 
+    effective_polys_str = polys_str;
+
     dixon_clear_last_root_report();
     dixon_set_print_complex_roots(complex_mode);
     complex_solver_solution_list_init(&complex_solutions);
@@ -3592,8 +3860,30 @@ int main(int argc, char *argv[])
 
     } else if (solve_mode) {
         /* ---- Polynomial system solver ---- */
+        if (specialize_vars_arg) {
+            if (rational_mode) {
+                specialized_polys_str =
+                    apply_specializations_rational_string(polys_str, specialize_vars_arg, 0, silent_mode);
+            } else if (large_prime_mode) {
+                specialized_polys_str =
+                    apply_specializations_rational_string(polys_str, specialize_vars_arg, 1, silent_mode);
+            } else {
+                specialized_polys_str =
+                    apply_specializations_fq_string(polys_str, specialize_vars_arg, ctx, silent_mode);
+            }
+
+            if (!specialized_polys_str) {
+                goto cleanup_fail;
+            }
+            effective_polys_str = specialized_polys_str;
+
+            if (!silent_mode) {
+                printf("Specialized variables: %s\n", specialize_vars_arg);
+            }
+        }
+
         if (!silent_mode) {
-            int poly_count = count_comma_separated_items(polys_str);
+            int poly_count = count_comma_separated_items(effective_polys_str);
             printf("\nEquations: %d\n", poly_count);
             printf("--------------------------------\n");
         }
@@ -3606,7 +3896,7 @@ int main(int argc, char *argv[])
         if (rational_mode) {
             if (complex_mode) {
                 slong num_polys = 0, num_vars = 0;
-                char **poly_parts = split_string(polys_str, &num_polys);
+                char **poly_parts = split_string(effective_polys_str, &num_polys);
                 char **var_names = rational_extract_variables_improved(poly_parts, num_polys, &num_vars);
 
                 if (!poly_parts || num_polys != 2 || !var_names || num_vars != 2) {
@@ -3621,7 +3911,7 @@ int main(int argc, char *argv[])
                     goto cleanup_fail;
                 }
 
-                if (!complex_solver_solve_bivariate_2x2_from_string(polys_str, 128, &complex_solutions) &&
+                if (!complex_solver_solve_bivariate_2x2_from_string(effective_polys_str, 128, &complex_solutions) &&
                     !silent_mode) {
                     fprintf(stderr, "\nError: Complex 2x2 polynomial system solving failed\n");
                 }
@@ -3641,7 +3931,7 @@ int main(int argc, char *argv[])
                     redirect_fd_to_devnull(STDERR_FILENO, &orig_stderr);
                 }
 
-                rational_solutions = solve_rational_polynomial_system_string(polys_str);
+                rational_solutions = solve_rational_polynomial_system_string(effective_polys_str);
 
                 if (suppress_solver_stdout) {
                     restore_fd(STDOUT_FILENO, orig_stdout);
@@ -3660,7 +3950,7 @@ int main(int argc, char *argv[])
                 redirect_fd_to_devnull(STDERR_FILENO, &orig_stderr);
             }
 
-            large_prime_solutions = solve_large_prime_polynomial_system_string(polys_str, p_fmpz);
+            large_prime_solutions = solve_large_prime_polynomial_system_string(effective_polys_str, p_fmpz);
 
             if (suppress_solver_stdout) {
                 restore_fd(STDOUT_FILENO, orig_stdout);
@@ -3679,7 +3969,7 @@ int main(int argc, char *argv[])
                 redirect_fd_to_devnull(STDERR_FILENO, &orig_stderr);
             }
 
-            solutions = solve_polynomial_system_string(polys_str, ctx);
+            solutions = solve_polynomial_system_string(effective_polys_str, ctx);
 
             if (suppress_solver_stdout) {
                 restore_fd(STDOUT_FILENO, orig_stdout);
@@ -3795,7 +4085,7 @@ int main(int argc, char *argv[])
                     }
 
                     if (output_filename) {
-                        save_complex_solver_result_to_file(output_filename, polys_str,
+                        save_complex_solver_result_to_file(output_filename, effective_polys_str,
                                                            &complex_solutions, wall_time);
                         if (!silent_mode)
                             printf("Result saved to: %s\n", output_filename);
@@ -3809,7 +4099,7 @@ int main(int argc, char *argv[])
                 }
 
                 if (output_filename) {
-                    save_rational_solver_result_to_file(output_filename, polys_str,
+                    save_rational_solver_result_to_file(output_filename, effective_polys_str,
                                                        rational_solutions,
                                                        cpu_time, wall_time, total_threads);
                     if (!silent_mode)
@@ -3828,7 +4118,7 @@ int main(int argc, char *argv[])
                 }
 
                 if (output_filename) {
-                    save_large_prime_solver_result_to_file(output_filename, polys_str,
+                    save_large_prime_solver_result_to_file(output_filename, effective_polys_str,
                                                            p_fmpz, large_prime_solutions,
                                                            cpu_time, wall_time, total_threads);
                     if (!silent_mode)
@@ -3847,7 +4137,7 @@ int main(int argc, char *argv[])
                 }
 
                 if (output_filename) {
-                    save_solver_result_to_file(output_filename, polys_str,
+                    save_solver_result_to_file(output_filename, effective_polys_str,
                                                p_fmpz, power, solutions,
                                                cpu_time, wall_time, total_threads);
                     if (!silent_mode)
@@ -3932,6 +4222,7 @@ int main(int argc, char *argv[])
         free(vars_str_override);
     if (!need_free && !rand_generated && vars_str_generated && vars_str)
         free(vars_str);
+    free(specialized_polys_str);
     free(rand_comp_degrees);
     free(rand_comp_spec);
     if (input_filename)  free(input_filename);
@@ -3965,6 +4256,7 @@ cleanup_fail:
         free(vars_str_override);
     if (!need_free && !rand_generated && vars_str_generated && vars_str)
         free(vars_str);
+    free(specialized_polys_str);
     free(rand_comp_degrees);
     free(rand_comp_spec);
     if (input_filename)  free(input_filename);
