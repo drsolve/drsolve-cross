@@ -1126,46 +1126,37 @@ gf2128_t gf2128_sqr(const gf2128_t *a) {
 /* Forward declaration for conversion function */
 gf2128_t fq_nmod_to_gf2128(const fq_nmod_t elem, const fq_nmod_ctx_t ctx);
 
-/* Inversion using repeated squaring - optimized for GF(2^128) */
+/* Inversion using FLINT as a correctness-preserving fallback. */
 gf2128_t gf2128_inv(const gf2128_t *a) {
     if (gf2128_is_zero(a)) {
         return gf2128_zero();
     }
-    
-    /* For debugging: use FLINT to compute the correct inverse */
-    /* Create GF(2^128) context */
+
     fq_nmod_ctx_t ctx;
     nmod_poly_t mod;
     nmod_poly_init(mod, 2);
-    
-    /* Set modulus to x^128 + x^7 + x^2 + x + 1 */
     nmod_poly_set_coeff_ui(mod, 0, 1);
     nmod_poly_set_coeff_ui(mod, 1, 1);
     nmod_poly_set_coeff_ui(mod, 2, 1);
     nmod_poly_set_coeff_ui(mod, 7, 1);
     nmod_poly_set_coeff_ui(mod, 128, 1);
-    
+
     fq_nmod_ctx_init_modulus(ctx, mod, "t");
-    
-    /* Convert to FLINT format */
+
     fq_nmod_t a_flint, inv_flint;
     fq_nmod_init(a_flint, ctx);
     fq_nmod_init(inv_flint, ctx);
-    
+
     gf2128_to_fq_nmod(a_flint, a, ctx);
-    
-    /* Compute inverse using FLINT */
     fq_nmod_inv(inv_flint, a_flint, ctx);
-    
-    /* Convert back */
+
     gf2128_t result = fq_nmod_to_gf2128(inv_flint, ctx);
-    
-    /* Cleanup */
+
     fq_nmod_clear(a_flint, ctx);
     fq_nmod_clear(inv_flint, ctx);
     fq_nmod_ctx_clear(ctx);
     nmod_poly_clear(mod);
-    
+
     return result;
 }
 
@@ -1261,6 +1252,7 @@ void cleanup_all_gf2n_fields(void) {
     cleanup_gf216_conversion();
     cleanup_gf232_conversion();
     cleanup_gf264_conversion();
+    cleanup_gf2128_conversion();
 }
 
 /* ============================================================================
@@ -1363,6 +1355,13 @@ void init_gf2128_conversion(const fq_nmod_ctx_t ctx) {
     
     // For now, just mark as initialized
     g_gf2128_conversion->initialized = 1;
+}
+
+void cleanup_gf2128_conversion(void) {
+    if (g_gf2128_conversion) {
+        free(g_gf2128_conversion);
+        g_gf2128_conversion = NULL;
+    }
 }
 
 /* Convert between fq_nmod and native GF(2^128) - IMPLEMENTATION */

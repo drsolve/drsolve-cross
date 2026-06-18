@@ -1855,6 +1855,128 @@ void gf28_mpoly_to_fq_nmod_mpoly(fq_nmod_mpoly_t res, const gf28_mpoly_t poly,
    GF(2^4) native mpoly multiplication
    ============================================================================ */
 
+static int gf24_mpoly_divides_monomial(gf24_mpoly_t Q, const gf24_mpoly_t A,
+    const gf24_mpoly_t B, const gf24_mpoly_ctx_t ctx)
+{
+    slong nvars = ctx->minfo->nvars;
+    ulong *eb = (ulong *)malloc(nvars * sizeof(ulong));
+    ulong *ea = (ulong *)malloc(nvars * sizeof(ulong));
+    ulong *eq = (ulong *)malloc(nvars * sizeof(ulong));
+    uint8_t cb = gf28_mpoly_get_monomial_coeff(B) & 0x0F;
+    if (cb == 0) { free(eb); free(ea); free(eq); return 0; }
+    uint8_t cbi = gf24_inv(cb);
+    gf28_mpoly_get_monomial_exp(eb, B, ctx);
+    flint_bitcnt_t bits = FLINT_MAX(A->bits, B->bits);
+    if (bits < 16) bits = 16;
+    gf28_mpoly_fit_length_reset_bits(Q, A->length, bits, ctx);
+    Q->length = 0;
+    slong N = mpoly_words_per_exp(bits, ctx->minfo);
+    for (slong i = 0; i < A->length; i++) {
+        mpoly_get_monomial_ui(ea, A->exps + N*i, A->bits, ctx->minfo);
+        int ok = 1;
+        for (slong j = 0; j < nvars; j++) {
+            if (ea[j] < eb[j]) { ok = 0; break; }
+            eq[j] = ea[j] - eb[j];
+        }
+        if (!ok) { free(eb); free(ea); free(eq); gf24_mpoly_zero(Q, ctx); return 0; }
+        uint8_t cq = gf24_mul(A->coeffs[i] & 0x0F, cbi);
+        if (cq != 0) {
+            mpoly_set_monomial_ui(Q->exps + N*Q->length, eq, bits, ctx->minfo);
+            Q->coeffs[Q->length] = cq;
+            Q->length++;
+        }
+    }
+    free(eb);
+    free(ea);
+    free(eq);
+    return 1;
+}
+
+static int gf24_mpoly_divides_dense(gf24_mpoly_t Q, const gf24_mpoly_t A,
+    const gf24_mpoly_t B, const gf24_mpoly_ctx_t ctx)
+{
+    slong nvars = ctx->minfo->nvars;
+    int success = 0;
+    slong *dA = (slong *)malloc(nvars * sizeof(slong));
+    slong *dB = (slong *)malloc(nvars * sizeof(slong));
+    slong *bo = (slong *)malloc(nvars * sizeof(slong));
+    mpoly_degrees_si(dA, A->exps, A->length, A->bits, ctx->minfo);
+    mpoly_degrees_si(dB, B->exps, B->length, B->bits, ctx->minfo);
+    for (slong i = 0; i < nvars; i++) {
+        if (dA[i] < dB[i]) { free(dA); free(dB); free(bo); gf24_mpoly_zero(Q, ctx); return 0; }
+        bo[i] = dA[i] + 1;
+    }
+
+    gf24_mpolyd_t Ad, Bd, Qd, Rd;
+    gf28_mpolyd_init(Ad, nvars);
+    gf28_mpolyd_init(Bd, nvars);
+    gf28_mpolyd_init(Qd, nvars);
+    gf28_mpolyd_init(Rd, nvars);
+    if (!gf28_mpolyd_set_degbounds(Ad, bo) || !gf28_mpolyd_set_degbounds(Bd, bo) ||
+        !gf28_mpolyd_set_degbounds(Qd, bo) || !gf28_mpolyd_set_degbounds(Rd, bo))
+        goto cleanup;
+
+    gf28_mpoly_to_mpolyd(Ad, A, ctx);
+    gf28_mpoly_to_mpolyd(Bd, B, ctx);
+
+    slong n = Ad->alloc;
+    memcpy(Rd->coeffs, Ad->coeffs, n * sizeof(uint8_t));
+    memset(Qd->coeffs, 0, Qd->alloc * sizeof(uint8_t));
+    slong degB = -1;
+    for (slong i = n - 1; i >= 0; i--) {
+        if ((Bd->coeffs[i] & 0x0F) != 0) { degB = i; break; }
+    }
+    if (degB < 0) goto cleanup;
+    uint8_t lc_B_inv = gf24_inv(Bd->coeffs[degB] & 0x0F);
+    slong bwidth = degB + 1;
+    uint8_t *Bm = (uint8_t *)malloc(16 * bwidth * sizeof(uint8_t));
+    if (!Bm) goto cleanup;
+    for (int k = 0; k < 16; k++) {
+        const uint8_t *row = gf24_get_scalar_row((uint8_t)k);
+        for (slong j = 0; j <= degB; j++) Bm[k*bwidth + j] = row[Bd->coeffs[j] & 0x0F];
+    }
+    for (slong i = n - 1; i >= degB; i--) {
+        uint8_t lead = Rd->coeffs[i] & 0x0F;
+        if (lead != 0) {
+            uint8_t q = gf24_mul(lead, lc_B_inv);
+            if (i - degB < Qd->alloc) Qd->coeffs[i - degB] = q;
+            const uint8_t *Bq = Bm + q*bwidth;
+            slong len = FLINT_MIN(degB + 1, n - (i - degB));
+            for (slong j = 0; j < len; j++) {
+                Rd->coeffs[i - degB + j] = (Rd->coeffs[i - degB + j] ^ Bq[j]) & 0x0F;
+            }
+        }
+    }
+    free(Bm);
+
+    if (gf28_mpolyd_is_zero(Rd)) {
+        gf28_mpolyd_to_mpoly_fast(Q, Qd, ctx);
+        success = 1;
+    } else {
+        gf24_mpoly_zero(Q, ctx);
+        success = 0;
+    }
+
+cleanup:
+    gf28_mpolyd_clear(Ad);
+    gf28_mpolyd_clear(Bd);
+    gf28_mpolyd_clear(Qd);
+    gf28_mpolyd_clear(Rd);
+    free(dA);
+    free(dB);
+    free(bo);
+    return success;
+}
+
+int gf24_mpoly_divides(gf24_mpoly_t Q, const gf24_mpoly_t A,
+    const gf24_mpoly_t B, const gf24_mpoly_ctx_t ctx)
+{
+    if (B->length == 0) return A->length == 0;
+    if (A->length == 0) { gf24_mpoly_zero(Q, ctx); return 1; }
+    if (gf28_mpoly_is_monomial(B)) return gf24_mpoly_divides_monomial(Q, A, B, ctx);
+    return gf24_mpoly_divides_dense(Q, A, B, ctx);
+}
+
 void gf24_mpoly_init(gf24_mpoly_t poly, const gf24_mpoly_ctx_t ctx) {
     gf28_mpoly_init(poly, ctx);
 }

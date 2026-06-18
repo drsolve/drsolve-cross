@@ -337,6 +337,7 @@ void gf264_to_fq_nmod(fq_nmod_t res, const gf264_t *elem, const fq_nmod_ctx_t ct
 
 /* GF(2^128) conversions */
 void init_gf2128_conversion(const fq_nmod_ctx_t ctx);
+void cleanup_gf2128_conversion(void);
 gf2128_t fq_nmod_to_gf2128(const fq_nmod_t elem, const fq_nmod_ctx_t ctx);
 void gf2128_to_fq_nmod(fq_nmod_t res, const gf2128_t *elem, const fq_nmod_ctx_t ctx);
 

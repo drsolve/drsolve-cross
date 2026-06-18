@@ -767,6 +767,7 @@ int unified_mpoly_mul(unified_mpoly_t poly1, const unified_mpoly_t poly2,
    ============================================================================ */
 
 /* Global flags for division optimizations */
+static int use_gf24_div_opt = 1;
 static int use_gf28_div_opt = 1;
 static int use_gf216_div_opt = 1;
 static int use_gf232_div_opt = 1;
@@ -777,6 +778,10 @@ static int use_zech_div = 1;
 /* Enable/disable division optimizations */
 void unified_mpoly_enable_div_optimizations(field_id_t field_id, int enable) {
     switch (field_id) {
+        case FIELD_ID_GF24:
+            use_gf24_div_opt = enable;
+            printf("GF(2^4) optimized division: %s\n", enable ? "enabled" : "disabled");
+            break;
         case FIELD_ID_GF28:
             use_gf28_div_opt = enable;
             printf("GF(2^8) optimized division: %s\n", enable ? "enabled" : "disabled");
@@ -823,7 +828,39 @@ int unified_mpoly_divides(unified_mpoly_t Q, const unified_mpoly_t A,
                 printf("Zech division disabled, this shouldn't happen\n");
                 return 0;
             }
-            
+
+        case FIELD_ID_GF24:
+            if (use_gf24_div_opt) {
+                gf24_mpoly_t A_native, B_native, Q_native;
+                gf24_mpoly_ctx_t native_ctx;
+
+                gf24_mpoly_ctx_init(native_ctx, ctx->nvars, ctx->ord);
+                gf24_mpoly_init(A_native, native_ctx);
+                gf24_mpoly_init(B_native, native_ctx);
+                gf24_mpoly_init(Q_native, native_ctx);
+
+                fq_nmod_mpoly_to_gf24_mpoly(A_native, GET_FQ_POLY(A),
+                                            ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
+                fq_nmod_mpoly_to_gf24_mpoly(B_native, GET_FQ_POLY(B),
+                                            ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
+
+                int success = gf24_mpoly_divides(Q_native, A_native, B_native, native_ctx);
+
+                if (success) {
+                    gf24_mpoly_to_fq_nmod_mpoly(GET_FQ_POLY(Q), Q_native,
+                                                ctx->field_ctx->ctx.fq_ctx, GET_FQ_CTX(ctx));
+                }
+
+                gf24_mpoly_clear(A_native, native_ctx);
+                gf24_mpoly_clear(B_native, native_ctx);
+                gf24_mpoly_clear(Q_native, native_ctx);
+                gf24_mpoly_ctx_clear(native_ctx);
+
+                return success;
+            }
+            return fq_nmod_mpoly_divides(GET_FQ_POLY(Q), GET_FQ_POLY(A),
+                                        GET_FQ_POLY(B), GET_FQ_CTX(ctx));
+
         case FIELD_ID_GF28:
             if (use_gf28_div_opt) {
                 gf28_mpoly_t A_native, B_native, Q_native;

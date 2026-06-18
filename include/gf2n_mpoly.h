@@ -248,6 +248,8 @@ int gf24_mpoly_mul_array(gf24_mpoly_t A, const gf24_mpoly_t B,
                          const gf24_mpoly_t C, const gf24_mpoly_ctx_t ctx);
 int gf24_mpoly_can_use_array_mul(const gf24_mpoly_t B, const gf24_mpoly_t C,
                                  const gf24_mpoly_ctx_t ctx);
+int gf24_mpoly_divides(gf24_mpoly_t Q, const gf24_mpoly_t A,
+                       const gf24_mpoly_t B, const gf24_mpoly_ctx_t ctx);
 void fq_nmod_mpoly_to_gf24_mpoly(gf24_mpoly_t res, const fq_nmod_mpoly_t poly,
                                  const fq_nmod_ctx_t fqctx,
                                  const fq_nmod_mpoly_ctx_t fq_mpoly_ctx);
