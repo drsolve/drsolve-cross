@@ -1407,9 +1407,10 @@ void divide_by_fq_linear_factor_improved(fq_mvpoly_t *quotient, const fq_mvpoly_
 // Division using FLINT's built-in functions (alternative approach)
 void divide_by_fq_linear_factor_flint(fq_mvpoly_t *quotient, const fq_mvpoly_t *dividend,
                                      slong var_idx, slong nvars, slong npars) {
-    fq_mvpoly_init(quotient, nvars, npars, dividend->ctx);
-    
-    if (dividend->nterms == 0) return;
+    if (dividend->nterms == 0) {
+        fq_mvpoly_init(quotient, nvars, npars, dividend->ctx);
+        return;
+    }
     
     slong total_vars = nvars + npars;
     fq_nmod_mpoly_ctx_t mpoly_ctx;
@@ -1449,21 +1450,17 @@ void divide_by_fq_linear_factor_flint(fq_mvpoly_t *quotient, const fq_mvpoly_t *
     int divides = fq_nmod_mpoly_divides(quotient_mpoly, dividend_mpoly, divisor, mpoly_ctx);
     
     if (divides) {
-
-        fq_mvpoly_clear(quotient);
         fq_nmod_mpoly_to_fq_mvpoly(quotient, quotient_mpoly, nvars, npars, mpoly_ctx, dividend->ctx);
     } else {
         fq_nmod_mpoly_t remainder;
         fq_nmod_mpoly_init(remainder, mpoly_ctx);
         
         fq_nmod_mpoly_divrem(quotient_mpoly, remainder, dividend_mpoly, divisor, mpoly_ctx);
-        
+
         if (fq_nmod_mpoly_is_zero(remainder, mpoly_ctx)) {
-            fq_mvpoly_clear(quotient);
             fq_nmod_mpoly_to_fq_mvpoly(quotient, quotient_mpoly, nvars, npars, mpoly_ctx, dividend->ctx);
         } else {
             printf("    Warning: FLINT division not exact, falling back to direct method\n");
-            fq_mvpoly_clear(quotient);
             divide_by_fq_linear_factor_improved(quotient, dividend, var_idx, nvars, npars);
         }
         

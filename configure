@@ -614,14 +614,14 @@ if [ "$ENABLE_ASAN" = "yes" ]; then
     printf "checking for -fsanitize=address support... "
     _asan_tmp=".configure_asan_test.c"
     echo "int main(){return 0;}" > "$_asan_tmp"
-    if $CC -fsanitize=address -static-libasan -o /dev/null "$_asan_tmp" >/dev/null 2>&1; then
+    if $CC -fsanitize=address -o /dev/null "$_asan_tmp" >/dev/null 2>&1; then
         echo "yes"
-        ASAN_CFLAGS="-fsanitize=address -static-libasan"
-        ASAN_LDFLAGS="-fsanitize=address -static-libasan"
-    elif $CC -fsanitize=address -o /dev/null "$_asan_tmp" >/dev/null 2>&1; then
-        echo "yes (without static-libasan)"
         ASAN_CFLAGS="-fsanitize=address"
         ASAN_LDFLAGS="-fsanitize=address"
+    elif $CC -fsanitize=address -static-libasan -o /dev/null "$_asan_tmp" >/dev/null 2>&1; then
+        echo "yes (with static-libasan)"
+        ASAN_CFLAGS="-fsanitize=address -static-libasan"
+        ASAN_LDFLAGS="-fsanitize=address -static-libasan"
     else
         echo "no"
         echo "configure: warning: compiler does not support -fsanitize=address, ASan disabled"

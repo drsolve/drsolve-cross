@@ -1114,8 +1114,7 @@ void perform_fq_matrix_row_operations_mvpoly(fq_mvpoly_t ***new_matrix, fq_mvpol
     
     for (slong i = 1; i < n; i++) {
         for (slong j = 0; j < n; j++) {
-            fq_mvpoly_t diff;
-            fq_mvpoly_init(&diff, 2 * nvars, npars, (*original_matrix)[i][j].ctx);
+            fq_mvpoly_t diff = {0};
             if (g_dixon_verbose_level >= 3) {
                 dixon_debug_log("    RowOp[%ld,%ld]: top terms=%ld, bottom terms=%ld\n",
                                 i, j,

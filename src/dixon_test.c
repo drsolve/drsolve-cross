@@ -1614,7 +1614,7 @@ int test_bezout_bound() {
         print_degree_check_summary();
         cleanup_degree_check_results();
         flint_rand_clear(state);
-        flint_cleanup();
+        flint_cleanup_master();
         return 0;
     }
     
@@ -1652,7 +1652,7 @@ int test_bezout_bound() {
     // Cleanup
     cleanup_degree_check_results();
     flint_rand_clear(state);
-    flint_cleanup();
+    flint_cleanup_master();
     
     return 0;
 }

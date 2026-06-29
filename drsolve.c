@@ -4232,7 +4232,7 @@ int main(int argc, char *argv[])
     }
 
     cleanup_unified_workspace();
-    flint_cleanup();
+    flint_cleanup_master();
     return 0;
 
 cleanup_fail:
@@ -4264,6 +4264,6 @@ cleanup_fail:
     if (complex_solutions_initialized) {
         complex_solver_solution_list_clear(&complex_solutions);
     }
-    flint_cleanup();
+    flint_cleanup_master();
     return 1;
 }

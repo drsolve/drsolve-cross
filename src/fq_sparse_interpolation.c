@@ -3280,6 +3280,6 @@ int huang_test(void)
     test_random_polynomial();
 
     clear_global_state_if_needed();
-    flint_cleanup();
+    flint_cleanup_master();
     return 0;
 }
