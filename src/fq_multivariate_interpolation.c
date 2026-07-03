@@ -186,8 +186,10 @@ void fq_evaluate_matrix_at_point_batch(fq_nmod_mat_t result_mat,
     // Initialize unified context
     field_ctx_t unified_ctx;
     field_ctx_init(&unified_ctx, ctx);
-    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ? 
-                   (void*)&unified_ctx.ctx.nmod_ctx : 
+    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ?
+                   (void*)&unified_ctx.ctx.nmod_ctx :
+                   (unified_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)unified_ctx.ctx.zech_ctx :
                    (void*)unified_ctx.ctx.fq_ctx;
     
     //printf("Using %s for matrix evaluation\n", unified_ctx.description);
@@ -348,6 +350,8 @@ void fq_evaluate_matrix_at_point_batch(fq_nmod_mat_t result_mat,
         }
         free(par_powers_unified);
     }
+
+    field_ctx_clear(&unified_ctx);
 }
 // ============= Keep all other functions unchanged =============
 
@@ -458,8 +462,10 @@ void fq_lagrange_interpolation_optimized(fq_nmod_poly_t result,
     field_ctx_t unified_ctx;
     field_ctx_init(&unified_ctx, ctx);
     
-    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ? 
-                   (void*)&unified_ctx.ctx.nmod_ctx : 
+    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ?
+                   (void*)&unified_ctx.ctx.nmod_ctx :
+                   (unified_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)unified_ctx.ctx.zech_ctx :
                    (void*)unified_ctx.ctx.fq_ctx;
     
     //printf("Using optimized %s for Lagrange interpolation\n", unified_ctx.description);
@@ -644,6 +650,7 @@ cleanup:
     // Calculate and update timing
     double total_time = get_time() - start_time;
     g_stats.lagrange_time += total_time;
+    field_ctx_clear(&unified_ctx);
     
     /*
     printf("\nUnified Lagrange interpolation optimization results:\n");
@@ -864,8 +871,10 @@ void fq_tensor_interpolation_recursive_optimized(fq_mvpoly_t *result,
     
     field_ctx_t unified_ctx;
     field_ctx_init(&unified_ctx, ctx);
-    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ? 
-                   (void*)&unified_ctx.ctx.nmod_ctx : 
+    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ?
+                   (void*)&unified_ctx.ctx.nmod_ctx :
+                   (unified_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)unified_ctx.ctx.zech_ctx :
                    (void*)unified_ctx.ctx.fq_ctx;
     
     typedef struct term_node {
@@ -1017,6 +1026,7 @@ void fq_tensor_interpolation_recursive_optimized(fq_mvpoly_t *result,
                                local_monomial_collect_time + local_monomial_interp_time + 
                                local_lagrange_time;
     g_stats.other_time += total_local_time - tracked_local_time;
+    field_ctx_clear(&unified_ctx);
 }
 
 void fq_tensor_interpolation_all_vars_optimized(fq_mvpoly_t *result,

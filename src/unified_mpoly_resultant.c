@@ -154,7 +154,6 @@ void unified_mpoly_get_term_coeff_ui(field_elem_u *coeff, const unified_mpoly_t 
         case FIELD_ID_FQ_ZECH:
             {
                 /* Now we can properly get the coefficient using our new function */
-                fq_zech_init(&coeff->fq_zech, ctx->field_ctx->ctx.zech_ctx);
                 fq_zech_mpoly_get_term_coeff_fq_zech(&coeff->fq_zech, 
                                                     GET_ZECH_POLY(poly), i, 
                                                     GET_ZECH_CTX(ctx));

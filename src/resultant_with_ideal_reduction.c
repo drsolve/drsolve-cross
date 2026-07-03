@@ -261,6 +261,12 @@ char* resultant_with_ideal_reduction(const char *poly1_string, const char *poly2
         field_elem_u coeff;
         ulong *exp = (ulong*) calloc(total_vars, sizeof(ulong));
         
+        void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ?
+                       (void*)&field_ctx.ctx.nmod_ctx :
+                       (field_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                       (void*)field_ctx.ctx.zech_ctx :
+                       (void*)field_ctx.ctx.fq_ctx;
+        field_init_elem(&coeff, field_ctx.field_id, ctx_ptr);
         fq_nmod_to_field_elem(&coeff, poly1.terms[i].coeff, &field_ctx);
         
         // Set elimination variable exponent
@@ -276,6 +282,7 @@ char* resultant_with_ideal_reduction(const char *poly1_string, const char *poly2
         }
         
         unified_mpoly_set_coeff_ui(A, &coeff, exp);
+        field_clear_elem(&coeff, field_ctx.field_id, ctx_ptr);
         free(exp);
     }
     
@@ -285,6 +292,12 @@ char* resultant_with_ideal_reduction(const char *poly1_string, const char *poly2
         field_elem_u coeff;
         ulong *exp = (ulong*) calloc(total_vars, sizeof(ulong));
         
+        void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ?
+                       (void*)&field_ctx.ctx.nmod_ctx :
+                       (field_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                       (void*)field_ctx.ctx.zech_ctx :
+                       (void*)field_ctx.ctx.fq_ctx;
+        field_init_elem(&coeff, field_ctx.field_id, ctx_ptr);
         fq_nmod_to_field_elem(&coeff, poly2.terms[i].coeff, &field_ctx);
         
         // Set elimination variable exponent
@@ -300,6 +313,7 @@ char* resultant_with_ideal_reduction(const char *poly1_string, const char *poly2
         }
         
         unified_mpoly_set_coeff_ui(B, &coeff, exp);
+        field_clear_elem(&coeff, field_ctx.field_id, ctx_ptr);
         free(exp);
     }
     
@@ -319,6 +333,7 @@ char* resultant_with_ideal_reduction(const char *poly1_string, const char *poly2
         unified_mpoly_clear(B);
         unified_mpoly_clear(R);
         unified_mpoly_ctx_clear(unified_ctx);
+        field_ctx_clear(&field_ctx);
         
         // Cleanup
         for (slong i = 0; i < state.nvars; i++) {
@@ -686,6 +701,7 @@ char* resultant_with_ideal_reduction(const char *poly1_string, const char *poly2
     unified_mpoly_clear(B);
     unified_mpoly_clear(R);
     unified_mpoly_ctx_clear(unified_ctx);
+    field_ctx_clear(&field_ctx);
     fq_mvpoly_clear(&poly1);
     fq_mvpoly_clear(&poly2);
     fq_mvpoly_clear(&result_mvpoly);

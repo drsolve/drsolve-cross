@@ -712,6 +712,8 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
             unified_poly_mat_clear(unified_mat);
             free(pivind);
             free(perm);
+            cleanup_unified_workspace();
+            field_ctx_clear(&field_ctx);
             fq_nmod_poly_zero(det, ctx);
             
             if (_show_progress || g_show_progress) {
@@ -742,13 +744,17 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
         unified_poly_mat_clear(unified_mat);
         free(pivind);
         free(perm);
+        cleanup_unified_workspace();
+        field_ctx_clear(&field_ctx);
         fq_nmod_poly_zero(det, ctx);
         return;
     }
     
     /* Get context pointer */
-    void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ? 
-                   (void*)&field_ctx.ctx.nmod_ctx : 
+    void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ?
+                   (void*)&field_ctx.ctx.nmod_ctx :
+                   (field_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)field_ctx.ctx.zech_ctx :
                    (void*)field_ctx.ctx.fq_ctx;
     
     if (udet == -1) {
@@ -780,6 +786,8 @@ void fq_nmod_poly_mat_det_iter(fq_nmod_poly_t det,
     unified_poly_mat_clear(unified_mat);
     free(pivind);
     free(perm);
+    cleanup_unified_workspace();
+    field_ctx_clear(&field_ctx);
     
     clock_t end_time = clock();
     double total_time = ((double)(end_time - start_time)) / CLOCKS_PER_SEC;

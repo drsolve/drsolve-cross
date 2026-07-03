@@ -4201,6 +4201,7 @@ int main(int argc, char *argv[])
     }
 
     /* ---- cleanup ---- */
+    cleanup_unified_workspace();
     if (ctx_initialized) fq_nmod_ctx_clear(ctx);
     if (field_poly_str) free(field_poly_str);
     if (gen_var_name)   free(gen_var_name);
@@ -4231,11 +4232,11 @@ int main(int argc, char *argv[])
         complex_solver_solution_list_clear(&complex_solutions);
     }
 
-    cleanup_unified_workspace();
     flint_cleanup_master();
     return 0;
 
 cleanup_fail:
+    cleanup_unified_workspace();
     if (field_poly_str) free(field_poly_str);
     if (gen_var_name)   free(gen_var_name);
     fmpz_clear(p_fmpz);

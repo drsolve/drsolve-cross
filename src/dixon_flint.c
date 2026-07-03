@@ -1381,8 +1381,10 @@ static void unified_row_basis_tracker_init(unified_row_basis_tracker_t *tracker,
     tracker->initialized = 1;
     tracker->workspace_initialized = 0;
     
-    void *ctx_ptr = (ctx->field_id == FIELD_ID_NMOD) ? 
-                   (void*)&ctx->ctx.nmod_ctx : 
+    void *ctx_ptr = (ctx->field_id == FIELD_ID_NMOD) ?
+                   (void*)&ctx->ctx.nmod_ctx :
+                   // (ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                   // (void*)ctx->ctx.zech_ctx :
                    (void*)ctx->ctx.fq_ctx;
     
     // Allocate main storage
@@ -1420,8 +1422,10 @@ static void unified_row_basis_tracker_init(unified_row_basis_tracker_t *tracker,
 static void unified_row_basis_tracker_clear(unified_row_basis_tracker_t *tracker) {
     if (!tracker->initialized) return;
     
-    void *ctx_ptr = (tracker->ctx->field_id == FIELD_ID_NMOD) ? 
-                   (void*)&tracker->ctx->ctx.nmod_ctx : 
+    void *ctx_ptr = (tracker->ctx->field_id == FIELD_ID_NMOD) ?
+                   (void*)&tracker->ctx->ctx.nmod_ctx :
+                   // (tracker->ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                   // (void*)tracker->ctx->ctx.zech_ctx :
                    (void*)tracker->ctx->ctx.fq_ctx;
     
     // Clear main storage
@@ -1459,8 +1463,10 @@ static int unified_try_add_row_to_basis(unified_row_basis_tracker_t *tracker,
         return 0;
     }
     
-    void *ctx_ptr = (tracker->ctx->field_id == FIELD_ID_NMOD) ? 
-                   (void*)&tracker->ctx->ctx.nmod_ctx : 
+    void *ctx_ptr = (tracker->ctx->field_id == FIELD_ID_NMOD) ?
+                   (void*)&tracker->ctx->ctx.nmod_ctx :
+                   // (tracker->ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                   // (void*)tracker->ctx->ctx.zech_ctx :
                    (void*)tracker->ctx->ctx.fq_ctx;
     
     // Use pre-allocated work row to avoid allocation each time
@@ -2143,8 +2149,8 @@ void find_pivot_rows_simple(slong **selected_rows_out, slong *num_selected,
     // ============================================================================
     //printf("Using unified interface for non-prime field computation\n");
     
-    void *ctx_ptr = (ctx->field_id == FIELD_ID_FQ_ZECH) ? 
-                   (void*)ctx->ctx.zech_ctx : 
+    void *ctx_ptr = // (ctx->field_id == FIELD_ID_FQ_ZECH) ? 
+                   // (void*)ctx->ctx.zech_ctx : 
                    (void*)ctx->ctx.fq_ctx;
     
     slong max_rank = FLINT_MIN(nrows, ncols);
@@ -2291,11 +2297,14 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         fmpz_clear(selection_prime);
         field_ctx_init(&selection_ctx, extension_eval_ctx);
     } else {
-        field_ctx_init(&selection_ctx, ctx);
+        /* Step 3 rank selection is faster with plain fq_nmod than Zech on medium extension fields. */
+        field_ctx_init_enhanced(&selection_ctx, ctx, 0);
     }
 
     void *ctx_ptr = (selection_ctx.field_id == FIELD_ID_NMOD) ?
                    (void*)&selection_ctx.ctx.nmod_ctx :
+                   // (selection_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                   // (void*)selection_ctx.ctx.zech_ctx :
                    (void*)selection_ctx.ctx.fq_ctx;
 
     slong accepted_size = 0;

@@ -1690,6 +1690,7 @@ void test_unified_mpoly_det(void) {
     unified_mpoly_clear(det);
     unified_mpoly_mat_clear(mat, size, size);
     unified_mpoly_ctx_clear(ctx);
+    field_ctx_clear(&field_ctx);
     fq_nmod_ctx_clear(fq_ctx);
     
     /* Test with larger matrix */
@@ -1736,5 +1737,6 @@ void test_unified_mpoly_det(void) {
     unified_mpoly_clear(det);
     unified_mpoly_mat_clear(mat, size, size);
     unified_mpoly_ctx_clear(ctx);
+    field_ctx_clear(&field_ctx);
     fq_nmod_ctx_clear(fq_ctx);
 }

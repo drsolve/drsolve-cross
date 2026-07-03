@@ -11,7 +11,7 @@ static void field_ctx_report_backend_once(const field_ctx_t *ctx, ulong prime, s
     static __thread slong last_degree = -1;
     static __thread const void *last_ctx_ptr = NULL;
 
-    if (g_dixon_verbose_level < 2 || ctx == NULL || ctx->description == NULL)
+    if (g_dixon_verbose_level < 3 || ctx == NULL || ctx->description == NULL)
         return;
 
     if (last_field_id == ctx->field_id &&
@@ -286,9 +286,6 @@ void field_neg(field_elem_u *res, const field_elem_u *a,
             res->nmod = nmod_neg(a->nmod, *(const nmod_t*)ctx);
             break;
         case FIELD_ID_FQ_ZECH:
-            if (res != a) {
-                fq_zech_init(&res->fq_zech, (const fq_zech_ctx_struct *)ctx);
-            }
             fq_zech_neg(&res->fq_zech, &a->fq_zech, (const fq_zech_ctx_struct *)ctx);
             break;
         case FIELD_ID_FQ:
@@ -322,9 +319,6 @@ void field_inv(field_elem_u *res, const field_elem_u *a,
             res->nmod = n_invmod(a->nmod, ((const nmod_t*)ctx)->n);
             break;
         case FIELD_ID_FQ_ZECH:
-            if (res != a) {
-                fq_zech_init(&res->fq_zech, (const fq_zech_ctx_struct *)ctx);
-            }
             fq_zech_inv(&res->fq_zech, &a->fq_zech, (const fq_zech_ctx_struct *)ctx);
             break;
         case FIELD_ID_FQ:
@@ -517,15 +511,9 @@ void field_sub(field_elem_u *res, const field_elem_u *a, const field_elem_u *b,
             res->nmod = nmod_sub(a->nmod, b->nmod, *(const nmod_t*)ctx);
             break;
         case FIELD_ID_FQ_ZECH:
-            if (res != a && res != b) {
-                fq_zech_init(&res->fq_zech, (const fq_zech_ctx_struct *)ctx);
-            }
             fq_zech_sub(&res->fq_zech, &a->fq_zech, &b->fq_zech, (const fq_zech_ctx_struct *)ctx);
             break;
         case FIELD_ID_FQ:
-            if (res != a && res != b) {
-                fq_nmod_init(&res->fq, (const fq_nmod_ctx_struct *)ctx);
-            }
             fq_nmod_sub(&res->fq, &a->fq, &b->fq, (const fq_nmod_ctx_struct *)ctx);
             break;
     }
@@ -560,11 +548,9 @@ void fq_nmod_to_field_elem(field_elem_u *res, const fq_nmod_t elem,
             res->gf2128 = fq_nmod_to_gf2128(elem, ctx->ctx.fq_ctx);
             break;
         case FIELD_ID_FQ_ZECH:
-            fq_zech_init(&res->fq_zech, ctx->ctx.zech_ctx);
             fq_zech_set_fq_nmod(&res->fq_zech, elem, ctx->ctx.zech_ctx);
             break;
         case FIELD_ID_FQ:
-            fq_nmod_init(&res->fq, ctx->ctx.fq_ctx);
             fq_nmod_set(&res->fq, elem, ctx->ctx.fq_ctx);
             break;
     }
@@ -815,7 +801,7 @@ void unified_poly_add(unified_poly_t res, const unified_poly_t a, const unified_
 }
 
 void unified_poly_scalar_mul(unified_poly_t res, const unified_poly_t poly, 
-                            const field_elem_u *c) {
+                             const field_elem_u *c) {
     void *ctx_ptr = NULL;
     switch (poly->ctx->field_id) {
         case FIELD_ID_NMOD:
@@ -836,6 +822,23 @@ void unified_poly_scalar_mul(unified_poly_t res, const unified_poly_t poly,
     
     if (field_is_one(c, poly->ctx->field_id, ctx_ptr)) {
         unified_poly_set(res, poly);
+        return;
+    }
+
+    if (res == poly &&
+        (poly->ctx->field_id == FIELD_ID_FQ || poly->ctx->field_id == FIELD_ID_FQ_ZECH)) {
+        unified_poly_struct temp;
+        unified_poly_init(&temp, poly->ctx);
+        unified_poly_fit_length(&temp, poly->length);
+        temp.length = poly->length;
+
+        for (slong i = 0; i < poly->length; i++) {
+            field_mul(&temp.coeffs[i], &poly->coeffs[i], c, poly->ctx->field_id, ctx_ptr);
+        }
+
+        unified_poly_normalise(&temp);
+        unified_poly_set(res, &temp);
+        unified_poly_clear(&temp);
         return;
     }
     

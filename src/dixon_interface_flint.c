@@ -2795,6 +2795,12 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         ulong *exp = (ulong*) calloc(total_vars, sizeof(ulong));
         
         // Convert coefficient
+        void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ?
+                       (void*)&field_ctx.ctx.nmod_ctx :
+                       (field_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                       (void*)field_ctx.ctx.zech_ctx :
+                       (void*)field_ctx.ctx.fq_ctx;
+        field_init_elem(&coeff, field_ctx.field_id, ctx_ptr);
         fq_nmod_to_field_elem(&coeff, poly1.terms[i].coeff, &field_ctx);
         
         // Set exponents
@@ -2808,6 +2814,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         }
         
         unified_mpoly_set_coeff_ui(A, &coeff, exp);
+        field_clear_elem(&coeff, field_ctx.field_id, ctx_ptr);
         free(exp);
     }
 
@@ -2817,6 +2824,12 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         ulong *exp = (ulong*) calloc(total_vars, sizeof(ulong));
         
         // Convert coefficient
+        void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ?
+                       (void*)&field_ctx.ctx.nmod_ctx :
+                       (field_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                       (void*)field_ctx.ctx.zech_ctx :
+                       (void*)field_ctx.ctx.fq_ctx;
+        field_init_elem(&coeff, field_ctx.field_id, ctx_ptr);
         fq_nmod_to_field_elem(&coeff, poly2.terms[i].coeff, &field_ctx);
         
         // Set exponents
@@ -2830,6 +2843,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         }
         
         unified_mpoly_set_coeff_ui(B, &coeff, exp);
+        field_clear_elem(&coeff, field_ctx.field_id, ctx_ptr);
         free(exp);
     }
 
@@ -2890,6 +2904,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         unified_mpoly_clear(B);
         unified_mpoly_clear(R);
         unified_mpoly_ctx_clear(unified_ctx);
+        field_ctx_clear(&field_ctx);
         free(a_degs);
         free(b_degs);
         free(result_par_degs);
@@ -3081,6 +3096,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     unified_mpoly_clear(B);
     unified_mpoly_clear(R);
     unified_mpoly_ctx_clear(unified_ctx);
+    field_ctx_clear(&field_ctx);
     fq_mvpoly_clear(&poly1);
     fq_mvpoly_clear(&poly2);
     fq_mvpoly_clear(&result_mvpoly);

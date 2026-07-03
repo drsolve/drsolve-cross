@@ -13,8 +13,10 @@ void unified_mat_init(unified_mat_t mat, slong rows, slong cols, field_ctx_t *ct
     mat->ctx = ctx;
     
     /* Initialize all entries */
-    void *ctx_ptr = (ctx->field_id == FIELD_ID_NMOD) ? 
-                   (void*)&ctx->ctx.nmod_ctx : 
+    void *ctx_ptr = (ctx->field_id == FIELD_ID_NMOD) ?
+                   (void*)&ctx->ctx.nmod_ctx :
+                   (ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)ctx->ctx.zech_ctx :
                    (void*)ctx->ctx.fq_ctx;
     
     for (slong i = 0; i < rows * cols; i++) {
@@ -23,8 +25,10 @@ void unified_mat_init(unified_mat_t mat, slong rows, slong cols, field_ctx_t *ct
 }
 
 void unified_mat_clear(unified_mat_t mat) {
-    void *ctx_ptr = (mat->ctx->field_id == FIELD_ID_NMOD) ? 
-                   (void*)&mat->ctx->ctx.nmod_ctx : 
+    void *ctx_ptr = (mat->ctx->field_id == FIELD_ID_NMOD) ?
+                   (void*)&mat->ctx->ctx.nmod_ctx :
+                   (mat->ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)mat->ctx->ctx.zech_ctx :
                    (void*)mat->ctx->ctx.fq_ctx;
     
     for (slong i = 0; i < mat->r * mat->c; i++) {
@@ -43,8 +47,10 @@ const field_elem_u* unified_mat_entry_const(const unified_mat_t mat, slong i, sl
 
 void unified_mat_swap_rows(unified_mat_t mat, slong r, slong s) {
     if (r != s) {
-        void *ctx_ptr = (mat->ctx->field_id == FIELD_ID_NMOD) ? 
-                       (void*)&mat->ctx->ctx.nmod_ctx : 
+        void *ctx_ptr = (mat->ctx->field_id == FIELD_ID_NMOD) ?
+                       (void*)&mat->ctx->ctx.nmod_ctx :
+                       (mat->ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                       (void*)mat->ctx->ctx.zech_ctx :
                        (void*)mat->ctx->ctx.fq_ctx;
         
         for (slong j = 0; j < mat->c; j++) {
@@ -81,8 +87,10 @@ void unified_mat_swap_rows(unified_mat_t mat, slong r, slong s) {
 void unified_mat_det_lu(field_elem_u *det, const unified_mat_t mat) {
     slong n = mat->r;
     field_ctx_t *ctx = mat->ctx;
-    void *ctx_ptr = (ctx->field_id == FIELD_ID_NMOD) ? 
-                   (void*)&ctx->ctx.nmod_ctx : 
+    void *ctx_ptr = (ctx->field_id == FIELD_ID_NMOD) ?
+                   (void*)&ctx->ctx.nmod_ctx :
+                   (ctx->field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)ctx->ctx.zech_ctx :
                    (void*)ctx->ctx.fq_ctx;
     
     if (n != mat->c) {
@@ -250,8 +258,10 @@ void fq_nmod_mat_det(fq_nmod_t det, const fq_nmod_mat_t mat, const fq_nmod_ctx_t
     /* Initialize unified context */
     field_ctx_t unified_ctx;
     field_ctx_init(&unified_ctx, ctx);
-    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ? 
-                   (void*)&unified_ctx.ctx.nmod_ctx : 
+    void *ctx_ptr = (unified_ctx.field_id == FIELD_ID_NMOD) ?
+                   (void*)&unified_ctx.ctx.nmod_ctx :
+                   (unified_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                   (void*)unified_ctx.ctx.zech_ctx :
                    (void*)unified_ctx.ctx.fq_ctx;
     
     /* Create unified matrix */
@@ -279,6 +289,7 @@ void fq_nmod_mat_det(fq_nmod_t det, const fq_nmod_mat_t mat, const fq_nmod_ctx_t
     /* Cleanup */
     field_clear_elem(&det_unified, unified_ctx.field_id, ctx_ptr);
     unified_mat_clear(mat_unified);
+    field_ctx_clear(&unified_ctx);
 }
 
 /* Alternative: using characteristic polynomial method */

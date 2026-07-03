@@ -2174,6 +2174,7 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
     unified_mpoly_ctx_t unified_ctx = unified_mpoly_ctx_init(total_vars, ORD_LEX, &field_ctx);
     if (!unified_ctx) {
         printf("ERROR: Failed to create unified context\n");
+        field_ctx_clear(&field_ctx);
         return;
     }
     // Step 3: Allocate unified polynomial matrix
@@ -2184,6 +2185,16 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
             unified_matrix[i][j] = unified_mpoly_init(unified_ctx);
             if (!unified_matrix[i][j]) {
                 printf("ERROR: Failed to initialize unified polynomial at (%ld,%ld)\n", i, j);
+                for (slong ii = 0; ii <= i; ii++) {
+                    slong limit = (ii == i) ? j : size;
+                    for (slong jj = 0; jj < limit; jj++) {
+                        unified_mpoly_clear(unified_matrix[ii][jj]);
+                    }
+                    free(unified_matrix[ii]);
+                }
+                free(unified_matrix);
+                unified_mpoly_ctx_clear(unified_ctx);
+                field_ctx_clear(&field_ctx);
                 return;
             }
         }
@@ -2258,12 +2269,19 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
                 
                 // Convert coefficient to field element
                 field_elem_u field_coeff;
+                void *ctx_ptr = (field_ctx.field_id == FIELD_ID_NMOD) ?
+                               (void*)&field_ctx.ctx.nmod_ctx :
+                               (field_ctx.field_id == FIELD_ID_FQ_ZECH) ?
+                               (void*)field_ctx.ctx.zech_ctx :
+                               (void*)field_ctx.ctx.fq_ctx;
+                field_init_elem(&field_coeff, field_ctx.field_id, ctx_ptr);
                 fq_nmod_to_field_elem(&field_coeff, coeff, &field_ctx);
                 
                 // Set in unified polynomial
                 unified_mpoly_set_coeff_ui(unified_matrix[i][j], &field_coeff, exp);
                 
                 // Cleanup
+                field_clear_elem(&field_coeff, field_ctx.field_id, ctx_ptr);
                 fq_nmod_clear(coeff, ctx);
                 flint_free(exp);
             }
@@ -2290,6 +2308,15 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
     unified_mpoly_t det_unified = unified_mpoly_init(unified_ctx);
     if (!det_unified) {
         printf("ERROR: Failed to initialize determinant polynomial\n");
+        for (slong i = 0; i < size; i++) {
+            for (slong j = 0; j < size; j++) {
+                unified_mpoly_clear(unified_matrix[i][j]);
+            }
+            free(unified_matrix[i]);
+        }
+        free(unified_matrix);
+        unified_mpoly_ctx_clear(unified_ctx);
+        field_ctx_clear(&field_ctx);
         return;
     }
 
@@ -2462,6 +2489,7 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
 
         if (nterms > 0) {
             // Use existing conversion function
+            fq_mvpoly_clear(result);
             fq_nmod_mpoly_to_fq_mvpoly(result, fq_poly, nvars, npars, fq_ctx, ctx);
         }
     }
@@ -2494,6 +2522,7 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
     // Clear unified polynomial and context
     unified_mpoly_clear(det_unified);
     unified_mpoly_ctx_clear(unified_ctx);
+    field_ctx_clear(&field_ctx);
     
     timing_info_t total_elapsed = end_timing(total_start);
     (void) total_elapsed;
