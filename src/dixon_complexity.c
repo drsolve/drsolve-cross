@@ -5,7 +5,6 @@
 static double log2_fmpz_upper_bound(const fmpz_t x);
 static void degree_sum_fmpz(fmpz_t sum, const long *degrees, slong len);
 static void bezout_bound_fmpz(fmpz_t result, const long *degrees, slong len);
-static long prefix_degree_bound(const long *prefix, slong count);
 static double log2_add_exp(double a, double b);
 static double log2_kronecker_degree_from_bounds(const long *var_degree_bounds,
                                                 slong num_vars);
@@ -412,39 +411,6 @@ static void bezout_bound_fmpz(fmpz_t result, const long *degrees, slong len) {
     }
 }
 
-static int compare_long_desc_qsort(const void *a, const void *b) {
-    long av = *(const long *) a;
-    long bv = *(const long *) b;
-    if (av < bv) return 1;
-    if (av > bv) return -1;
-    return 0;
-}
-
-static void build_sorted_degree_prefix(long **sorted_out,
-                                       long **prefix_out,
-                                       const long *degrees,
-                                       slong num_polys) {
-    long *sorted = NULL;
-    long *prefix = NULL;
-
-    if (num_polys > 0) {
-        sorted = (long *) malloc((size_t) num_polys * sizeof(long));
-        prefix = (long *) calloc((size_t) (num_polys + 1), sizeof(long));
-    }
-
-    for (slong i = 0; i < num_polys; i++) {
-        sorted[i] = degrees[i] > 0 ? degrees[i] : 0;
-    }
-    qsort(sorted, (size_t) num_polys, sizeof(long), compare_long_desc_qsort);
-
-    for (slong i = 0; i < num_polys; i++) {
-        prefix[i + 1] = prefix[i] + sorted[i];
-    }
-
-    *sorted_out = sorted;
-    *prefix_out = prefix;
-}
-
 static void step1_reconstruct_bounds(long **var_bounds_out,
                                      double *kronecker_log2_out,
                                      double *row_avg_log2_out,
@@ -485,15 +451,20 @@ static void step1_reconstruct_bounds(long **var_bounds_out,
     }
 
     if (standard_shape) {
-        long *sorted = NULL;
-        long *prefix = NULL;
-        build_sorted_degree_prefix(&sorted, &prefix, degrees, num_polys);
+        long d = 0;
+        long param_bound = step1_det_total_degree;
+
+        for (slong i = 0; i < num_polys; i++) {
+            long di = degrees[i] > 0 ? degrees[i] : 0;
+            if (di > d) {
+                d = di;
+            }
+        }
+        if (param_bound < 0) param_bound = 0;
 
         for (slong i = 0; i < num_elim_vars; i++) {
-            slong count_orig = i + 1;
-            slong count_dual = num_elim_vars - i;
-            long orig_bound = prefix_degree_bound(prefix, count_orig);
-            long dual_bound = prefix_degree_bound(prefix, count_dual);
+            long orig_bound = ((long) i + 2) * d - 1;
+            long dual_bound = (num_polys - i - 1) * d - 1;
             if (orig_bound < 0) orig_bound = 0;
             if (dual_bound < 0) dual_bound = 0;
             var_bounds[i] = orig_bound;
@@ -501,13 +472,8 @@ static void step1_reconstruct_bounds(long **var_bounds_out,
         }
 
         for (slong i = 0; i < num_parameter_vars; i++) {
-            long param_bound = step1_det_total_degree;
-            if (param_bound < 0) param_bound = 0;
             var_bounds[2 * num_elim_vars + i] = param_bound;
         }
-
-        free(sorted);
-        free(prefix);
     } else {
         long fallback_bound = step1_det_total_degree > 0 ? step1_det_total_degree : 0;
         for (slong i = 0; i < step1_var_count; i++) {
@@ -584,17 +550,6 @@ static void step1_reconstruct_bounds(long **var_bounds_out,
     } else {
         free(var_bounds);
     }
-}
-
-static long prefix_degree_bound(const long *prefix, slong count) {
-    long bound;
-
-    if (count <= 0) {
-        return 0;
-    }
-
-    bound = prefix[count] - (long) count;
-    return bound > 0 ? bound : 0;
 }
 
 static double log2_kronecker_degree_from_bounds(const long *var_degree_bounds,
@@ -762,8 +717,6 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
              num_elim_vars >= 0 &&
              num_polys == num_elim_vars + 1 &&
              report->step1_var_count >= 0);
-        long *sorted = NULL;
-        long *prefix = NULL;
         long *var_degree_bounds = NULL;
         double *var_weight_log2 = NULL;
         double log2_col_sum = -INFINITY;
@@ -785,7 +738,6 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             report->step1_det_total_degree += di;
         }
 
-        report->step1_det_total_degree -= (num_elim_vars > 0 ? num_elim_vars : 0);
         if (report->step1_det_total_degree < 0) {
             report->step1_det_total_degree = 0;
         }
@@ -846,8 +798,6 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                     report->step1_hnf_degree_density_log2;
             }
         } else {
-            build_sorted_degree_prefix(&sorted, &prefix, degrees, num_polys);
-
             if (report->step1_var_count > 0) {
                 var_degree_bounds = (long *) calloc((size_t) report->step1_var_count,
                                                     sizeof(long));
@@ -856,10 +806,9 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             }
 
             for (slong i = 0; i < num_elim_vars; i++) {
-                slong count_orig = i + 1;
-                slong count_dual = num_elim_vars - i;
-                long orig_bound = prefix_degree_bound(prefix, count_orig);
-                long dual_bound = prefix_degree_bound(prefix, count_dual);
+                long d = report->common_degree;
+                long orig_bound = ((long) i + 2) * d - 1;
+                long dual_bound = (num_polys - i - 1) * d - 1;
 
                 if (orig_bound < 0) orig_bound = 0;
                 if (dual_bound < 0) dual_bound = 0;
@@ -984,8 +933,6 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                     report->step1_hnf_degree_density_log2;
             }
 
-            free(sorted);
-            free(prefix);
             free(var_degree_bounds);
             free(var_weight_log2);
         }
@@ -1012,8 +959,13 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         if (isfinite(dixon_matrix_size_log2) && dixon_matrix_size_log2 >= 0.0) {
             structural_term_log2 = 2.0 * dixon_matrix_size_log2;
             if (num_parameter_vars > 0) {
-                double param_factor_log2 = log2((double) total_degree_sum + 1.0);
-                structural_term_log2 += ((double) num_parameter_vars) * param_factor_log2;
+                slong binom_n = saturated_add_slong((slong) total_degree_sum,
+                                                    num_parameter_vars);
+                double param_factor_log2 =
+                    (binom_n >= WORD_MAX)
+                    ? INFINITY
+                    : log2_binomial_upper(binom_n, num_parameter_vars);
+                structural_term_log2 += param_factor_log2;
             }
         }
 
@@ -1100,7 +1052,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         report->step1_ordinary_interp_log2 = report->step1_ordinary_probe_cost_log2;
     }
     report->step1_direct_mpoly_mul_proxy_log2 =
-        2.0 * report->det_size_log2 +
+        report->step1_sparse_term_bound_log2 +
         log2_dense_monomial_count_upper(report->common_degree,
                                         report->num_all_vars);
     report->step1_direct_mpoly_log2 =
@@ -1560,7 +1512,7 @@ static void dixon_complexity_write_report_body(
                 report->step1_sparse_term_bound_log2);
     }
     if (verbose_level >= 2) {
-        fprintf(fp, "Step 1 sparse structural model: T <= M^2 (B+1)^r with M=");
+        fprintf(fp, "Step 1 sparse structural model: S1 <= M^2 * binom(B+r,r) with M=");
         fmpz_fprint(fp, matrix_size);
         fprintf(fp, ", B=%ld, r=%ld (#parameter vars)\n",
                 report->step1_sparse_param_degree_bound, report->num_parameter_vars);
@@ -1582,8 +1534,8 @@ static void dixon_complexity_write_report_body(
     fprintf(fp, "Step 1 direct multivariate cofactor expansion (naive, log2): %.6f\n",
             report->step1_direct_mpoly_log2);
     if (verbose_level >= 2) {
-        fprintf(fp, "  Formula: log2(n!) + log2(M_mpoly), with M_mpoly ~= M^2 * binom(v + d, d)\n");
-        fprintf(fp, "  Values : n=%ld, v=%ld, log2(n!)=%.6f, log2(M^2 * binom(v+d,d))=%.6f\n",
+        fprintf(fp, "  Formula: log2(n!) + log2(mu1*S1), with mu1 <= binom(v + d, d)\n");
+        fprintf(fp, "  Values : n=%ld, v=%ld, log2(n!)=%.6f, log2(mu1*S1)=%.6f\n",
                 num_polys,
                 num_all_vars,
                 report->step1_direct_factorial_log2,
@@ -1592,8 +1544,8 @@ static void dixon_complexity_write_report_body(
     fprintf(fp, "Step 1 direct multivariate cached Laplace surrogate (n*2^n, log2): %.6f\n",
             report->step1_direct_mpoly_split_log2);
     if (verbose_level >= 2) {
-        fprintf(fp, "  Formula: log2(n) + n + log2(M_mpoly), using n*2^n in place of n!\n");
-        fprintf(fp, "  Values : n=%ld, log2(n*2^n)=%.6f, log2(M^2 * binom(v+d,d))=%.6f\n",
+        fprintf(fp, "  Formula: log2(n) + n + log2(mu1*S1), matching the paper's n*2^n*mu1*S1 model\n");
+        fprintf(fp, "  Values : n=%ld, log2(n*2^n)=%.6f, log2(mu1*S1)=%.6f\n",
                 num_polys,
                 ((num_polys > 0) ? (log2((double) num_polys) + (double) num_polys) : 0.0),
                 report->step1_direct_mpoly_mul_proxy_log2);
@@ -1823,12 +1775,12 @@ static void dixon_complexity_write_report_body(
                 report->step1_ordinary_tensor_phase_log2);
 
         fprintf(fp, "Step 1 direct multivariate cofactor expansion proxy details:\n");
-        fprintf(fp, "  Formula: n! * M^2 * binom(v + d, d)\n");
-        fprintf(fp, "  Meaning: determinant cofactor count n!; each multiplication costs current max term count M^2 times initial polynomial term count binom(v+d,d).\n");
-        fprintf(fp, "  Values : v=%ld, d=%ld, log2(M^2 * binom(v+d,d))=%.6f\n",
+        fprintf(fp, "  Formula: n! * mu1 * S1\n");
+        fprintf(fp, "  Meaning: determinant cofactor count n!; each multiplication uses the paper's support proxy S1 and entry dense proxy mu1=binom(v+d,d).\n");
+        fprintf(fp, "  Values : v=%ld, d=%ld, log2(mu1*S1)=%.6f\n",
                 num_all_vars, report->common_degree,
                 report->step1_direct_mpoly_mul_proxy_log2);
-        fprintf(fp, "    log2(M^2)=%.6f\n", 2.0 * report->det_size_log2);
+        fprintf(fp, "    log2(S1)=%.6f\n", report->step1_sparse_term_bound_log2);
         fprintf(fp, "    log2(binom(v+d,d))<=%.6f\n",
                 log2_dense_monomial_count_upper(report->common_degree, num_all_vars));
         fprintf(fp, "  Cached Laplace surrogate: replace n! by n*2^n, giving log2 estimate %.6f\n",
