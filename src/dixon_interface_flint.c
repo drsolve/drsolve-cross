@@ -3071,6 +3071,16 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
         }
     }
 
+    if (g_dixon_verbose_level >= 1) {
+        if (result_mvpoly.nterms <= 100) {
+            fq_mvpoly_print_with_names(&result_mvpoly, "  Final Resultant",
+                                       NULL, state.par_names, gen_name, 0);
+        } else {
+            printf("  Final resultant too large to display (%ld terms)\n",
+                   result_mvpoly.nterms);
+        }
+    }
+
     // If it's a univariate polynomial, try to find roots
     find_and_print_roots_of_univariate_resultant(&result_mvpoly, &state);
     //printf("fq_mvpoly_to_string\n");

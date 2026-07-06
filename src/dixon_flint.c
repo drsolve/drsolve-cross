@@ -1677,6 +1677,108 @@ static int nmod_try_add_row_to_basis(nmod_row_basis_tracker_t *tracker,
     return 1;
 }
 
+static int nmod_try_add_row_to_basis_raw(nmod_row_basis_tracker_t *tracker,
+                                         const mp_limb_t *mat,
+                                         slong new_row_idx)
+{
+    if (!tracker->initialized || tracker->current_rank >= tracker->max_size) {
+        return 0;
+    }
+
+    const mp_limb_t mod_n = tracker->mod.n;
+    const ulong mod_ninv = tracker->mod.ninv;
+    mp_limb_t *work_row = tracker->work_row;
+    for (slong j = 0; j < tracker->ncols; j++) {
+        work_row[j] = mat[new_row_idx * tracker->ncols + j];
+    }
+
+    for (slong i = 0; i < tracker->current_rank; i++) {
+        slong pivot_col = tracker->pivot_cols[i];
+        mp_limb_t factor;
+        mp_limb_t neg_factor;
+        mp_limb_t *basis_row;
+
+        if (pivot_col < 0 || pivot_col >= tracker->ncols) {
+            continue;
+        }
+        factor = work_row[pivot_col];
+        if (factor == 0) {
+            continue;
+        }
+
+        basis_row = tracker->reduced_rows + i * tracker->ncols;
+        neg_factor = nmod_neg(factor, tracker->mod);
+        _nmod_vec_scalar_addmul_nmod(work_row + pivot_col,
+                                     basis_row + pivot_col,
+                                     tracker->ncols - pivot_col,
+                                     neg_factor,
+                                     tracker->mod);
+    }
+
+    slong first_nonzero = -1;
+    for (slong j = 0; j < tracker->ncols; j++) {
+        if (work_row[j] != 0) {
+            first_nonzero = j;
+            break;
+        }
+    }
+    if (first_nonzero < 0) {
+        return 0;
+    }
+
+    mp_limb_t pivot = work_row[first_nonzero];
+    mp_limb_t pivot_inv = n_invmod(pivot, mod_n);
+    mp_limb_t *dest = tracker->reduced_rows + tracker->current_rank * tracker->ncols;
+
+    for (slong j = 0; j < first_nonzero; j++) {
+        dest[j] = 0;
+    }
+    for (slong j = first_nonzero; j < tracker->ncols; j++) {
+        dest[j] = n_mulmod2_preinv(work_row[j], pivot_inv, mod_n, mod_ninv);
+    }
+
+    tracker->pivot_cols[tracker->current_rank] = first_nonzero;
+    tracker->selected_indices[tracker->current_rank] = new_row_idx;
+    tracker->current_rank++;
+    return 1;
+}
+
+static void find_pivot_rows_nmod_dense(slong **selected_rows_out,
+                                       slong *num_selected,
+                                       const mp_limb_t *mat,
+                                       slong nrows,
+                                       slong ncols,
+                                       const nmod_t *mod)
+{
+    slong max_rank = FLINT_MIN(nrows, ncols);
+    slong rank = 0;
+    slong *selected_rows;
+    nmod_row_basis_tracker_t tracker;
+
+    if (nrows == 0 || ncols == 0) {
+        *selected_rows_out = NULL;
+        *num_selected = 0;
+        return;
+    }
+
+    selected_rows = (slong *) flint_malloc((size_t) max_rank * sizeof(slong));
+    nmod_row_basis_tracker_init(&tracker, max_rank, ncols, mod);
+    for (slong row = 0; row < nrows && tracker.current_rank < max_rank; row++) {
+        if (nmod_try_add_row_to_basis_raw(&tracker, mat, row)) {
+            selected_rows[rank++] = row;
+        }
+    }
+    nmod_row_basis_tracker_clear(&tracker);
+
+    if (rank > 0) {
+        *selected_rows_out = (slong *) flint_realloc(selected_rows, (size_t) rank * sizeof(slong));
+    } else {
+        flint_free(selected_rows);
+        *selected_rows_out = NULL;
+    }
+    *num_selected = rank;
+}
+
 // Helper function to compute maximum degree (not total degree) of a polynomial
 static slong compute_fq_polynomial_total_degree(fq_mvpoly_t *poly, slong npars) {
     if (poly == NULL || poly->nterms == 0) {
@@ -1989,6 +2091,89 @@ static int select_ksy_columns_from_transposed(slong **selected_cols_out,
     *num_selected_cols_out = output_size;
     return 1;
 }
+
+static int select_ksy_columns_from_transposed_nmod(slong **selected_cols_out,
+                                                   slong *num_selected_cols_out,
+                                                   int *ksy_condition_met,
+                                                   const mp_limb_t *transposed,
+                                                   slong ncols,
+                                                   slong target_rank,
+                                                   const fq_index_degree_pair *col_degrees,
+                                                   slong ksy_constant_col,
+                                                   const nmod_t *mod)
+{
+    nmod_row_basis_tracker_t nonconst_tracker;
+    nmod_row_basis_tracker_t verify_tracker;
+    slong *candidate_cols;
+    slong nonconst_rank;
+    slong output_size = 0;
+    int constant_independent = 0;
+
+    *selected_cols_out = NULL;
+    *num_selected_cols_out = 0;
+    *ksy_condition_met = 0;
+
+    if (ksy_constant_col < 0 || ksy_constant_col >= ncols || target_rank <= 0) {
+        return 0;
+    }
+
+    candidate_cols = (slong *) flint_malloc((size_t) target_rank * sizeof(slong));
+    nmod_row_basis_tracker_init(&nonconst_tracker, target_rank, target_rank, mod);
+
+    for (slong j = 0; j < ncols && nonconst_tracker.current_rank < target_rank; j++) {
+        slong col_idx = col_degrees[j].index;
+        if (col_idx == ksy_constant_col) {
+            continue;
+        }
+        nmod_try_add_row_to_basis_raw(&nonconst_tracker, transposed, col_idx);
+    }
+
+    nonconst_rank = nonconst_tracker.current_rank;
+    nmod_row_basis_tracker_init(&verify_tracker,
+                                FLINT_MIN(nonconst_rank + 1, target_rank),
+                                target_rank,
+                                mod);
+    for (slong i = 0; i < nonconst_rank && verify_tracker.current_rank < nonconst_rank; i++) {
+        nmod_try_add_row_to_basis_raw(&verify_tracker,
+                                      transposed,
+                                      nonconst_tracker.selected_indices[i]);
+    }
+    if (verify_tracker.current_rank == nonconst_rank) {
+        constant_independent = nmod_try_add_row_to_basis_raw(&verify_tracker,
+                                                             transposed,
+                                                             ksy_constant_col);
+    }
+
+    nmod_row_basis_tracker_clear(&verify_tracker);
+    if (constant_independent) {
+        output_size = nonconst_rank + 1;
+        candidate_cols[0] = ksy_constant_col;
+        if (nonconst_rank > 0) {
+            memcpy(candidate_cols + 1,
+                   nonconst_tracker.selected_indices,
+                   (size_t) nonconst_rank * sizeof(slong));
+        }
+        *ksy_condition_met = 1;
+    } else {
+        output_size = FLINT_MIN(nonconst_rank, target_rank - 1);
+        if (output_size > 0) {
+            memcpy(candidate_cols,
+                   nonconst_tracker.selected_indices,
+                   (size_t) output_size * sizeof(slong));
+        }
+    }
+
+    nmod_row_basis_tracker_clear(&nonconst_tracker);
+
+    if (output_size <= 0) {
+        flint_free(candidate_cols);
+        return 0;
+    }
+
+    *selected_cols_out = candidate_cols;
+    *num_selected_cols_out = output_size;
+    return 1;
+}
 // Find pivot rows for maximal rank submatrix - ensure linear independence
 // More efficient version: using incremental rank checking
 void find_pivot_rows_nmod_fixed(slong **selected_rows_out, slong *num_selected,
@@ -2267,6 +2452,429 @@ void find_pivot_rows_simple(slong **selected_rows_out, slong *num_selected,
 
 
 // Optimized find_fq_optimal_maximal_rank_submatrix
+static void find_fq_optimal_maximal_rank_submatrix_nmod(fq_mvpoly_t ***full_matrix,
+                                                        slong nrows,
+                                                        slong ncols,
+                                                        slong **row_indices_out,
+                                                        slong **col_indices_out,
+                                                        slong *num_rows,
+                                                        slong *num_cols,
+                                                        slong npars,
+                                                        slong ksy_constant_col,
+                                                        const fq_nmod_ctx_t ctx,
+                                                        slong max_selection_attempts)
+{
+    slong accepted_size = 0;
+    slong *accepted_rows = NULL;
+    slong *accepted_cols = NULL;
+    slong accepted_score = -1;
+    int selection_stable = 0;
+    const int require_ksy_precondition = (ksy_constant_col >= 0);
+    nmod_t mod = ctx->mod;
+
+    for (slong selection_attempt = 0;
+         selection_attempt < max_selection_attempts && !selection_stable;
+         selection_attempt++) {
+        fq_nmod_t *param_vals = (fq_nmod_t *) flint_malloc((size_t) npars * sizeof(fq_nmod_t));
+        mp_limb_t *unified_mat = (mp_limb_t *) flint_malloc((size_t) nrows * ncols * sizeof(mp_limb_t));
+        slong *current_row_indices = NULL;
+        slong *current_col_indices = NULL;
+        slong *prev_row_indices = NULL;
+        slong *prev_col_indices = NULL;
+        slong current_size = 0;
+        slong prev_size = 0;
+        const slong MAX_ITERATIONS = 10;
+        slong iteration = 0;
+        int converged = 0;
+        int ksy_condition_met = 0;
+        clock_t degree_cache_cpu_start = clock();
+        double degree_cache_wall_start = get_wall_time();
+        slong **entry_degree_cache;
+
+        init_evaluation_parameters(param_vals, npars, ctx, selection_attempt);
+        entry_degree_cache = build_entry_degree_cache(full_matrix, nrows, ncols, npars);
+        dixon_maybe_print_step_detail_time("Step 3 degree-cache build",
+                                           degree_cache_cpu_start,
+                                           degree_cache_wall_start);
+
+        clock_t unified_mat_cpu_start = clock();
+        double unified_mat_wall_start = get_wall_time();
+#ifdef _OPENMP
+        #pragma omp parallel
+        {
+            fq_nmod_t val;
+            fq_nmod_init(val, ctx);
+            #pragma omp for schedule(static)
+            for (slong i = 0; i < nrows; i++) {
+                for (slong j = 0; j < ncols; j++) {
+                    slong idx = i * ncols + j;
+                    if (full_matrix[i][j] == NULL) {
+                        unified_mat[idx] = 0;
+                    } else {
+                        evaluate_fq_mvpoly_at_nmod_params_direct(val, full_matrix[i][j], param_vals, ctx);
+                        unified_mat[idx] = nmod_poly_get_coeff_ui(val, 0);
+                    }
+                }
+            }
+            fq_nmod_clear(val, ctx);
+        }
+#else
+        {
+            fq_nmod_t val;
+            fq_nmod_init(val, ctx);
+            for (slong i = 0; i < nrows; i++) {
+                for (slong j = 0; j < ncols; j++) {
+                    slong idx = i * ncols + j;
+                    if (full_matrix[i][j] == NULL) {
+                        unified_mat[idx] = 0;
+                    } else {
+                        evaluate_fq_mvpoly_at_nmod_params_direct(val, full_matrix[i][j], param_vals, ctx);
+                        unified_mat[idx] = nmod_poly_get_coeff_ui(val, 0);
+                    }
+                }
+            }
+            fq_nmod_clear(val, ctx);
+        }
+#endif
+        dixon_maybe_print_step_detail_time("Step 3 unified matrix build",
+                                           unified_mat_cpu_start,
+                                           unified_mat_wall_start);
+
+        while (iteration < MAX_ITERATIONS && !converged) {
+            slong row_rank_selected = 0;
+
+            if (iteration > 0) {
+                prev_row_indices = (slong *) flint_malloc((size_t) current_size * sizeof(slong));
+                prev_col_indices = (slong *) flint_malloc((size_t) current_size * sizeof(slong));
+                memcpy(prev_row_indices, current_row_indices, (size_t) current_size * sizeof(slong));
+                memcpy(prev_col_indices, current_col_indices, (size_t) current_size * sizeof(slong));
+                prev_size = current_size;
+            }
+
+            if (iteration == 0) {
+                slong *selected_rows = NULL;
+                slong num_selected = 0;
+                clock_t initial_row_select_cpu_start = clock();
+                double initial_row_select_wall_start = get_wall_time();
+
+                find_pivot_rows_nmod_dense(&selected_rows, &num_selected, unified_mat, nrows, ncols, &mod);
+                dixon_maybe_print_step_detail_time("Step 3 initial row selection",
+                                                   initial_row_select_cpu_start,
+                                                   initial_row_select_wall_start);
+
+                current_size = num_selected;
+                row_rank_selected = num_selected;
+                current_row_indices = (slong *) flint_malloc((size_t) current_size * sizeof(slong));
+                memcpy(current_row_indices, selected_rows, (size_t) current_size * sizeof(slong));
+
+                if (current_size > g_matrix_transpose_threshold) {
+                    mp_limb_t *transposed_mat = (mp_limb_t *) flint_malloc((size_t) ncols * current_size * sizeof(mp_limb_t));
+                    slong *selected_cols = NULL;
+                    slong num_selected_cols = 0;
+                    clock_t large_transpose_cpu_start = clock();
+                    double large_transpose_wall_start = get_wall_time();
+
+#ifdef _OPENMP
+                    #pragma omp parallel for schedule(static)
+#endif
+                    for (slong i = 0; i < current_size; i++) {
+                        slong orig_row = current_row_indices[i];
+                        for (slong j = 0; j < ncols; j++) {
+                            transposed_mat[j * current_size + i] = unified_mat[orig_row * ncols + j];
+                        }
+                    }
+                    dixon_maybe_print_step_detail_time("Step 3 large transpose build",
+                                                       large_transpose_cpu_start,
+                                                       large_transpose_wall_start);
+
+                    clock_t initial_col_select_cpu_start = clock();
+                    double initial_col_select_wall_start = get_wall_time();
+                    find_pivot_rows_nmod_dense(&selected_cols, &num_selected_cols,
+                                               transposed_mat, ncols, current_size, &mod);
+                    dixon_maybe_print_step_detail_time("Step 3 initial column selection",
+                                                       initial_col_select_cpu_start,
+                                                       initial_col_select_wall_start);
+
+                    current_col_indices = (slong *) flint_malloc((size_t) num_selected_cols * sizeof(slong));
+                    memcpy(current_col_indices, selected_cols, (size_t) num_selected_cols * sizeof(slong));
+                    current_size = FLINT_MIN(current_size, num_selected_cols);
+
+                    flint_free(transposed_mat);
+                    flint_free(selected_rows);
+                    flint_free(selected_cols);
+
+                    converged = 1;
+                    break;
+                }
+
+                flint_free(selected_rows);
+            } else {
+                fq_index_degree_pair *row_degrees = (fq_index_degree_pair *) flint_malloc((size_t) nrows * sizeof(fq_index_degree_pair));
+                mp_limb_t *col_submat = (mp_limb_t *) flint_malloc((size_t) nrows * current_size * sizeof(mp_limb_t));
+                slong selected_rank = 0;
+                slong *selected_rank_indices = NULL;
+                clock_t row_degree_cpu_start = clock();
+                double row_degree_wall_start = get_wall_time();
+
+#ifdef _OPENMP
+                #pragma omp parallel for schedule(static)
+#endif
+                for (slong i = 0; i < nrows; i++) {
+                    row_degrees[i].index = i;
+                    row_degrees[i].degree = -1;
+                    for (slong j = 0; j < current_size; j++) {
+                        slong col_idx = current_col_indices[j];
+                        if (entry_degree_cache[i][col_idx] > row_degrees[i].degree) {
+                            row_degrees[i].degree = entry_degree_cache[i][col_idx];
+                        }
+                    }
+                }
+                dixon_maybe_print_step_detail_time("Step 3 row-degree scan",
+                                                   row_degree_cpu_start,
+                                                   row_degree_wall_start);
+
+                qsort(row_degrees, (size_t) nrows, sizeof(fq_index_degree_pair), compare_fq_degrees);
+
+                clock_t col_submat_cpu_start = clock();
+                double col_submat_wall_start = get_wall_time();
+#ifdef _OPENMP
+                #pragma omp parallel for schedule(static)
+#endif
+                for (slong i = 0; i < nrows; i++) {
+                    for (slong j = 0; j < current_size; j++) {
+                        col_submat[i * current_size + j] = unified_mat[i * ncols + current_col_indices[j]];
+                    }
+                }
+                dixon_maybe_print_step_detail_time("Step 3 column submatrix build",
+                                                   col_submat_cpu_start,
+                                                   col_submat_wall_start);
+
+                clock_t row_basis_cpu_start = clock();
+                double row_basis_wall_start = get_wall_time();
+                nmod_row_basis_tracker_t row_tracker_nmod;
+                nmod_row_basis_tracker_init(&row_tracker_nmod, current_size, current_size, &mod);
+                for (slong i = 0; i < nrows && row_tracker_nmod.current_rank < current_size; i++) {
+                    slong row_idx = row_degrees[i].index;
+                    nmod_try_add_row_to_basis_raw(&row_tracker_nmod, col_submat, row_idx);
+                }
+                selected_rank = row_tracker_nmod.current_rank;
+                selected_rank_indices = (slong *) flint_malloc((size_t) selected_rank * sizeof(slong));
+                memcpy(selected_rank_indices,
+                       row_tracker_nmod.selected_indices,
+                       (size_t) selected_rank * sizeof(slong));
+                nmod_row_basis_tracker_clear(&row_tracker_nmod);
+                dixon_maybe_print_step_detail_time("Step 3 row basis selection",
+                                                   row_basis_cpu_start,
+                                                   row_basis_wall_start);
+
+                flint_free(current_row_indices);
+                current_row_indices = selected_rank_indices;
+                row_rank_selected = selected_rank;
+                current_size = selected_rank;
+
+                flint_free(col_submat);
+                flint_free(row_degrees);
+            }
+
+            fq_index_degree_pair *col_degrees = (fq_index_degree_pair *) flint_malloc((size_t) ncols * sizeof(fq_index_degree_pair));
+            mp_limb_t *transposed = (mp_limb_t *) flint_malloc((size_t) ncols * current_size * sizeof(mp_limb_t));
+            slong transposed_rows = current_size;
+            slong col_rank_selected = 0;
+            slong *selected_cols = NULL;
+            clock_t col_degree_cpu_start = clock();
+            double col_degree_wall_start = get_wall_time();
+
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+#endif
+            for (slong j = 0; j < ncols; j++) {
+                col_degrees[j].index = j;
+                col_degrees[j].degree = -1;
+                for (slong i = 0; i < current_size; i++) {
+                    slong row_idx = current_row_indices[i];
+                    if (entry_degree_cache[row_idx][j] > col_degrees[j].degree) {
+                        col_degrees[j].degree = entry_degree_cache[row_idx][j];
+                    }
+                }
+            }
+            dixon_maybe_print_step_detail_time("Step 3 column-degree scan",
+                                               col_degree_cpu_start,
+                                               col_degree_wall_start);
+
+            qsort(col_degrees, (size_t) ncols, sizeof(fq_index_degree_pair), compare_fq_degrees);
+
+            clock_t transposed_cpu_start = clock();
+            double transposed_wall_start = get_wall_time();
+#ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+#endif
+            for (slong i = 0; i < current_size; i++) {
+                for (slong j = 0; j < ncols; j++) {
+                    transposed[j * current_size + i] = unified_mat[current_row_indices[i] * ncols + j];
+                }
+            }
+            dixon_maybe_print_step_detail_time("Step 3 transposed build",
+                                               transposed_cpu_start,
+                                               transposed_wall_start);
+
+            if (require_ksy_precondition && current_size > 0) {
+                int helper_ksy_met = 0;
+                if (select_ksy_columns_from_transposed_nmod(&selected_cols,
+                                                            &col_rank_selected,
+                                                            &helper_ksy_met,
+                                                            transposed,
+                                                            ncols,
+                                                            current_size,
+                                                            col_degrees,
+                                                            ksy_constant_col,
+                                                            &mod)) {
+                    ksy_condition_met = helper_ksy_met;
+                }
+            }
+
+            if (!ksy_condition_met) {
+                clock_t col_basis_cpu_start = clock();
+                double col_basis_wall_start = get_wall_time();
+                nmod_row_basis_tracker_t col_tracker_nmod;
+                nmod_row_basis_tracker_init(&col_tracker_nmod, ncols, current_size, &mod);
+                for (slong j = 0; j < ncols && col_tracker_nmod.current_rank < current_size; j++) {
+                    slong col_idx = col_degrees[j].index;
+                    nmod_try_add_row_to_basis_raw(&col_tracker_nmod, transposed, col_idx);
+                }
+                col_rank_selected = col_tracker_nmod.current_rank;
+                selected_cols = (slong *) flint_malloc((size_t) col_rank_selected * sizeof(slong));
+                memcpy(selected_cols,
+                       col_tracker_nmod.selected_indices,
+                       (size_t) col_rank_selected * sizeof(slong));
+                nmod_row_basis_tracker_clear(&col_tracker_nmod);
+                dixon_maybe_print_step_detail_time("Step 3 column basis selection",
+                                                   col_basis_cpu_start,
+                                                   col_basis_wall_start);
+            }
+
+            if (iteration == 0) {
+                current_col_indices = (slong *) flint_malloc((size_t) col_rank_selected * sizeof(slong));
+            } else {
+                flint_free(current_col_indices);
+                current_col_indices = (slong *) flint_malloc((size_t) col_rank_selected * sizeof(slong));
+            }
+            memcpy(current_col_indices, selected_cols, (size_t) col_rank_selected * sizeof(slong));
+            current_size = FLINT_MIN(current_size, col_rank_selected);
+            flint_free(selected_cols);
+            flint_free(transposed);
+            flint_free(col_degrees);
+
+            if (iteration > 0) {
+                if (current_size == prev_size &&
+                    current_size == FLINT_MIN(col_rank_selected, row_rank_selected) &&
+                    indices_equal(current_row_indices, prev_row_indices, current_size) &&
+                    indices_equal(current_col_indices, prev_col_indices, current_size)) {
+                    converged = 1;
+                }
+
+                flint_free(prev_row_indices);
+                flint_free(prev_col_indices);
+                prev_row_indices = NULL;
+                prev_col_indices = NULL;
+            }
+
+            iteration++;
+            (void) transposed_rows;
+        }
+
+        free_entry_degree_cache(entry_degree_cache, nrows);
+
+        slong final_rank = evaluate_selected_submatrix_rank_nmod(
+            full_matrix, current_row_indices, current_col_indices, current_size, param_vals, ctx);
+        slong verify_rank = current_size;
+        int final_ksy_ok = !require_ksy_precondition;
+        int verify_ksy_ok = !require_ksy_precondition;
+        clock_t verification_cpu_start = clock();
+        double verification_wall_start = get_wall_time();
+
+        if (g_dixon_step3_second_verification) {
+            fq_nmod_t *verify_vals = (fq_nmod_t *) flint_malloc((size_t) npars * sizeof(fq_nmod_t));
+            init_evaluation_parameters(verify_vals, npars, ctx, selection_attempt + 1);
+            verify_rank = evaluate_selected_submatrix_rank_nmod(
+                full_matrix, current_row_indices, current_col_indices, current_size, verify_vals, ctx);
+            if (require_ksy_precondition) {
+                final_ksy_ok = selected_rows_satisfy_ksy_precondition_nmod(
+                    full_matrix, current_row_indices, current_size, ncols, ksy_constant_col, param_vals, ctx);
+                verify_ksy_ok = selected_rows_satisfy_ksy_precondition_nmod(
+                    full_matrix, current_row_indices, current_size, ncols, ksy_constant_col, verify_vals, ctx);
+            }
+            clear_evaluation_parameters(verify_vals, npars, ctx);
+        } else if (require_ksy_precondition) {
+            final_ksy_ok = selected_rows_satisfy_ksy_precondition_nmod(
+                full_matrix, current_row_indices, current_size, ncols, ksy_constant_col, param_vals, ctx);
+            verify_ksy_ok = final_ksy_ok;
+        }
+        dixon_maybe_print_step_detail_time("Step 3 verification",
+                                           verification_cpu_start,
+                                           verification_wall_start);
+
+        slong candidate_score = 0;
+        if (final_rank == current_size) candidate_score++;
+        if (g_dixon_step3_second_verification && verify_rank == current_size) candidate_score++;
+        if (require_ksy_precondition) {
+            if (final_ksy_ok) candidate_score += 2;
+            if (g_dixon_step3_second_verification && verify_ksy_ok) candidate_score += 2;
+        }
+
+        if (current_size > accepted_size ||
+            (current_size == accepted_size && candidate_score > accepted_score)) {
+            if (accepted_rows) flint_free(accepted_rows);
+            if (accepted_cols) flint_free(accepted_cols);
+            accepted_rows = (slong *) flint_malloc((size_t) current_size * sizeof(slong));
+            accepted_cols = (slong *) flint_malloc((size_t) current_size * sizeof(slong));
+            memcpy(accepted_rows, current_row_indices, (size_t) current_size * sizeof(slong));
+            memcpy(accepted_cols, current_col_indices, (size_t) current_size * sizeof(slong));
+            accepted_size = current_size;
+            accepted_score = candidate_score;
+        }
+
+        if (candidate_score == (require_ksy_precondition
+                                ? (g_dixon_step3_second_verification ? 6 : 2)
+                                : (g_dixon_step3_second_verification ? 2 : 1))) {
+            selection_stable = 1;
+        } else if (require_ksy_precondition && (!final_ksy_ok || !verify_ksy_ok)) {
+            dixon_debug_log("  Candidate submatrix failed the KSY precondition; retrying with a new specialization.\n");
+        } else {
+            dixon_debug_log("  Submatrix verification failed; retrying with a new specialization.\n");
+        }
+
+        if (prev_row_indices) flint_free(prev_row_indices);
+        if (prev_col_indices) flint_free(prev_col_indices);
+        flint_free(current_row_indices);
+        flint_free(current_col_indices);
+        clear_evaluation_parameters(param_vals, npars, ctx);
+        flint_free(unified_mat);
+    }
+
+    if (!accepted_rows || !accepted_cols) {
+        *row_indices_out = NULL;
+        *col_indices_out = NULL;
+        *num_rows = 0;
+        *num_cols = 0;
+        return;
+    }
+
+    if (!selection_stable) {
+        if (require_ksy_precondition) {
+            dixon_info_log("Warning: using best available submatrix after %ld attempts (KSY precondition not certified for every test).\n",
+                           max_selection_attempts);
+        } else {
+            dixon_info_log("Warning: using best available submatrix after %ld attempts.\n",
+                           max_selection_attempts);
+        }
+    }
+
+    *row_indices_out = accepted_rows;
+    *col_indices_out = accepted_cols;
+    *num_rows = accepted_size;
+    *num_cols = accepted_size;
+}
+
 void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix, 
                                            slong nrows, slong ncols,
                                            slong **row_indices_out, 
@@ -2299,6 +2907,19 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
     } else {
         /* Step 3 rank selection is faster with plain fq_nmod than Zech on medium extension fields. */
         field_ctx_init_enhanced(&selection_ctx, ctx, 0);
+    }
+
+    if (selection_ctx.field_id == FIELD_ID_NMOD) {
+        find_fq_optimal_maximal_rank_submatrix_nmod(full_matrix, nrows, ncols,
+                                                    row_indices_out, col_indices_out,
+                                                    num_rows, num_cols,
+                                                    npars, ksy_constant_col,
+                                                    ctx, MAX_SELECTION_ATTEMPTS);
+        field_ctx_clear(&selection_ctx);
+        if (use_extension_specialization) {
+            fq_nmod_ctx_clear(extension_eval_ctx);
+        }
+        return;
     }
 
     void *ctx_ptr = (selection_ctx.field_id == FIELD_ID_NMOD) ?
@@ -3393,15 +4014,16 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     clock_t copy_cpu_start = clock();
     double copy_wall_start = get_wall_time();
     *coeff_matrix = (fq_mvpoly_t**) flint_malloc(submat_rank * sizeof(fq_mvpoly_t*));
-#ifdef _OPENMP
-    #pragma omp parallel for schedule(static)
-#endif
     for (slong i = 0; i < submat_rank; i++) {
+        slong src_row = row_idx_array[i];
         (*coeff_matrix)[i] = (fq_mvpoly_t*) flint_malloc(submat_rank * sizeof(fq_mvpoly_t));
         for (slong j = 0; j < submat_rank; j++) {
-            fq_mvpoly_t *source = full_matrix[row_idx_array[i]][col_idx_array[j]];
+            slong src_col = col_idx_array[j];
+            fq_mvpoly_t *source = full_matrix[src_row][src_col];
             if (source != NULL) {
-                fq_mvpoly_copy(&(*coeff_matrix)[i][j], source);
+                (*coeff_matrix)[i][j] = *source;
+                flint_free(source);
+                full_matrix[src_row][src_col] = NULL;
             } else {
                 fq_mvpoly_init(&(*coeff_matrix)[i][j], 0, npars, dixon_poly->ctx);
             }
