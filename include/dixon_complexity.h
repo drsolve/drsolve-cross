@@ -116,6 +116,13 @@ typedef struct {
     double step4_sparse_log2;
     double step4_sparse_term_bound_log2;
     double step4_sparse_slp_length_log2;
+    int step4_rank_model_applicable;
+    slong step4_rank_size;
+    double step4_rank_size_log2;
+    double step4_rank_hnf_log2;
+    double step4_rank_hnf_degree_density_log2;
+    int step4_rank_model_is_mixed;
+    double rank_adjusted_overall_log2;
     const char *step4_best_method;
     double step4_log2;
     double overall_log2;

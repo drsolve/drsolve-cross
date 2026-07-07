@@ -36,6 +36,30 @@ static int sparse_model_applicable_fmpz(const fmpz_t field_characteristic,
 static double log2_step4_hnf_density_from_matrix_size(const fmpz_t matrix_size,
                                                       long entry_degree_bound,
                                                       slong param_count);
+static int uniform_positive_degree(const long *degrees, slong len, long *degree_out);
+static slong hilbert_truncated_uniform(fmpz **values_out,
+                                       slong num_forms,
+                                       slong num_vars,
+                                       long degree);
+static slong iterated_simplex_strata_uniform(fmpz **values_out,
+                                             slong num_vars,
+                                             long degree);
+static int dixon_rank_model_uniform(fmpz_t rank_out,
+                                    slong num_polys,
+                                    slong num_elim_vars,
+                                    long degree);
+static slong hilbert_truncated_mixed(fmpz **values_out,
+                                     const long *degrees,
+                                     slong num_forms,
+                                     slong num_vars);
+static slong iterated_simplex_strata_mixed(fmpz **values_out,
+                                           const long *degrees,
+                                           slong num_polys,
+                                           slong degree_count);
+static int dixon_rank_model_mixed(fmpz_t rank_out,
+                                  const long *degrees,
+                                  slong num_polys,
+                                  slong num_elim_vars);
 
 // Comparison function for descending order sorting
 int compare_desc(const void *a, const void *b) {
@@ -621,6 +645,514 @@ static double log2_step4_hnf_density_from_matrix_size(const fmpz_t matrix_size,
     return result;
 }
 
+static int uniform_positive_degree(const long *degrees, slong len, long *degree_out) {
+    long d;
+
+    if (degrees == NULL || len <= 0) {
+        return 0;
+    }
+
+    d = degrees[0];
+    if (d <= 0) {
+        return 0;
+    }
+
+    for (slong i = 1; i < len; i++) {
+        if (degrees[i] != d) {
+            return 0;
+        }
+    }
+
+    if (degree_out != NULL) {
+        *degree_out = d;
+    }
+    return 1;
+}
+
+static slong hilbert_truncated_uniform(fmpz **values_out,
+                                       slong num_forms,
+                                       slong num_vars,
+                                       long degree) {
+    fmpz *values = NULL;
+    slong len = 0;
+    slong cap = 16;
+    fmpz_t coeff;
+
+    if (values_out == NULL) {
+        return 0;
+    }
+    *values_out = NULL;
+    if (num_forms <= 0 || num_vars <= 0 || degree <= 0) {
+        return 0;
+    }
+
+    values = (fmpz *) flint_malloc((size_t) cap * sizeof(fmpz));
+    if (values == NULL) {
+        return 0;
+    }
+    for (slong i = 0; i < cap; i++) {
+        fmpz_init(values + i);
+    }
+
+    fmpz_init(coeff);
+    for (slong e = 0; ; e++) {
+        fmpz_zero(coeff);
+        for (slong k = 0; k <= e / degree && k <= num_forms; k++) {
+            slong rem = e - k * degree;
+            fmpz_t term;
+            fmpz_t bin;
+
+            fmpz_init(term);
+            fmpz_init(bin);
+            fmpz_bin_uiui(term, (ulong) num_forms, (ulong) k);
+            fmpz_bin_uiui(bin, (ulong) (num_vars - 1 + rem), (ulong) rem);
+            fmpz_mul(term, term, bin);
+            if (k % 2) {
+                fmpz_sub(coeff, coeff, term);
+            } else {
+                fmpz_add(coeff, coeff, term);
+            }
+            fmpz_clear(bin);
+            fmpz_clear(term);
+        }
+
+        if (fmpz_sgn(coeff) <= 0) {
+            break;
+        }
+
+        if (len >= cap) {
+            slong old_cap = cap;
+            fmpz *grown;
+
+            cap *= 2;
+            grown = (fmpz *) flint_realloc(values, (size_t) cap * sizeof(fmpz));
+            if (grown == NULL) {
+                for (slong i = 0; i < old_cap; i++) {
+                    fmpz_clear(values + i);
+                }
+                flint_free(values);
+                fmpz_clear(coeff);
+                return 0;
+            }
+            values = grown;
+            for (slong i = old_cap; i < cap; i++) {
+                fmpz_init(values + i);
+            }
+        }
+
+        fmpz_set(values + len, coeff);
+        len++;
+    }
+    fmpz_clear(coeff);
+
+    *values_out = values;
+    return len;
+}
+
+static slong iterated_simplex_strata_uniform(fmpz **values_out,
+                                             slong num_vars,
+                                             long degree) {
+    slong max_total;
+    fmpz *dp = NULL;
+    fmpz *next = NULL;
+
+    if (values_out == NULL) {
+        return 0;
+    }
+    *values_out = NULL;
+    if (num_vars <= 0 || degree <= 0) {
+        return 0;
+    }
+
+    max_total = num_vars * (degree - 1);
+    dp = (fmpz *) flint_malloc((size_t) (max_total + 1) * sizeof(fmpz));
+    next = (fmpz *) flint_malloc((size_t) (max_total + 1) * sizeof(fmpz));
+    if (dp == NULL || next == NULL) {
+        flint_free(dp);
+        flint_free(next);
+        return 0;
+    }
+    for (slong i = 0; i <= max_total; i++) {
+        fmpz_init(dp + i);
+        fmpz_init(next + i);
+        fmpz_zero(dp + i);
+        fmpz_zero(next + i);
+    }
+    fmpz_one(dp + 0);
+
+    for (slong k = 1; k <= num_vars; k++) {
+        slong prev_cap = (k - 1) * (degree - 1);
+        slong cap = k * (degree - 1);
+
+        for (slong i = 0; i <= max_total; i++) {
+            fmpz_zero(next + i);
+        }
+        for (slong s = 0; s <= prev_cap; s++) {
+            if (fmpz_is_zero(dp + s)) {
+                continue;
+            }
+            for (slong b = 0; b <= cap - s; b++) {
+                fmpz_add(next + s + b, next + s + b, dp + s);
+            }
+        }
+        for (slong i = 0; i <= max_total; i++) {
+            fmpz_set(dp + i, next + i);
+        }
+    }
+
+    for (slong i = 0; i <= max_total; i++) {
+        fmpz_clear(next + i);
+    }
+    flint_free(next);
+    *values_out = dp;
+    return max_total + 1;
+}
+
+static int dixon_rank_model_uniform(fmpz_t rank_out,
+                                    slong num_polys,
+                                    slong num_elim_vars,
+                                    long degree) {
+    fmpz *R = NULL;
+    fmpz *H = NULL;
+    slong r_len;
+    slong h_len;
+    slong sigma;
+    fmpz_t tmp;
+
+    fmpz_zero(rank_out);
+    if (num_polys <= 0 || num_elim_vars <= 0 ||
+        num_polys != num_elim_vars + 1 || degree < 2) {
+        return 0;
+    }
+
+    r_len = iterated_simplex_strata_uniform(&R, num_elim_vars, degree);
+    h_len = hilbert_truncated_uniform(&H, num_polys, num_elim_vars, degree);
+    if (r_len <= 0 || h_len <= 0 || R == NULL || H == NULL) {
+        if (R != NULL) {
+            for (slong i = 0; i < r_len; i++) fmpz_clear(R + i);
+            flint_free(R);
+        }
+        if (H != NULL) {
+            for (slong i = 0; i < h_len; i++) fmpz_clear(H + i);
+            flint_free(H);
+        }
+        return 0;
+    }
+
+    fmpz_init(tmp);
+    sigma = num_polys * (degree - 1) + 1;
+    for (slong q = 0; q < r_len; q++) {
+        slong p = sigma - q;
+        slong h_idx = FLINT_MIN(p, q);
+
+        if (p < 0 || p >= r_len) {
+            continue;
+        }
+
+        if (fmpz_cmp(R + p, R + q) <= 0) {
+            fmpz_set(tmp, R + p);
+        } else {
+            fmpz_set(tmp, R + q);
+        }
+        if (h_idx >= 0 && h_idx < h_len) {
+            fmpz_sub(tmp, tmp, H + h_idx);
+        }
+        if (fmpz_sgn(tmp) > 0) {
+            fmpz_add(rank_out, rank_out, tmp);
+        }
+    }
+
+    for (slong i = 0; i < h_len; i++) {
+        fmpz_add(rank_out, rank_out, H + i);
+    }
+
+    fmpz_clear(tmp);
+    for (slong i = 0; i < r_len; i++) fmpz_clear(R + i);
+    for (slong i = 0; i < h_len; i++) fmpz_clear(H + i);
+    flint_free(R);
+    flint_free(H);
+    return 1;
+}
+
+static slong hilbert_truncated_mixed(fmpz **values_out,
+                                     const long *degrees,
+                                     slong num_forms,
+                                     slong num_vars) {
+    long total_degree = 0;
+    fmpz *num = NULL;
+    fmpz *values = NULL;
+    slong len = 0;
+    slong cap = 16;
+    fmpz_t coeff;
+
+    if (values_out == NULL) {
+        return 0;
+    }
+    *values_out = NULL;
+    if (degrees == NULL || num_forms <= 0 || num_vars <= 0) {
+        return 0;
+    }
+
+    for (slong i = 0; i < num_forms; i++) {
+        if (degrees[i] <= 0 || total_degree > LONG_MAX - degrees[i]) {
+            return 0;
+        }
+        total_degree += degrees[i];
+    }
+
+    num = (fmpz *) flint_malloc((size_t) (total_degree + 1) * sizeof(fmpz));
+    values = (fmpz *) flint_malloc((size_t) cap * sizeof(fmpz));
+    if (num == NULL || values == NULL) {
+        flint_free(num);
+        flint_free(values);
+        return 0;
+    }
+    for (long i = 0; i <= total_degree; i++) {
+        fmpz_init(num + i);
+        fmpz_zero(num + i);
+    }
+    for (slong i = 0; i < cap; i++) {
+        fmpz_init(values + i);
+    }
+    fmpz_one(num + 0);
+
+    {
+        long current_max = 0;
+        for (slong i = 0; i < num_forms; i++) {
+            long di = degrees[i];
+            for (long s = current_max; s >= 0; s--) {
+                if (!fmpz_is_zero(num + s)) {
+                    fmpz_sub(num + s + di, num + s + di, num + s);
+                }
+            }
+            current_max += di;
+        }
+    }
+
+    fmpz_init(coeff);
+    for (slong e = 0; ; e++) {
+        fmpz_zero(coeff);
+        for (slong s = 0; s <= e && s <= total_degree; s++) {
+            fmpz_t bin;
+            fmpz_t term;
+
+            if (fmpz_is_zero(num + s)) {
+                continue;
+            }
+            fmpz_init(bin);
+            fmpz_init(term);
+            fmpz_bin_uiui(bin, (ulong) (num_vars - 1 + e - s), (ulong) (e - s));
+            fmpz_mul(term, num + s, bin);
+            fmpz_add(coeff, coeff, term);
+            fmpz_clear(term);
+            fmpz_clear(bin);
+        }
+
+        if (fmpz_sgn(coeff) <= 0) {
+            break;
+        }
+
+        if (len >= cap) {
+            slong old_cap = cap;
+            fmpz *grown;
+
+            cap *= 2;
+            grown = (fmpz *) flint_realloc(values, (size_t) cap * sizeof(fmpz));
+            if (grown == NULL) {
+                for (slong i = 0; i < old_cap; i++) fmpz_clear(values + i);
+                for (long i = 0; i <= total_degree; i++) fmpz_clear(num + i);
+                flint_free(values);
+                flint_free(num);
+                fmpz_clear(coeff);
+                return 0;
+            }
+            values = grown;
+            for (slong i = old_cap; i < cap; i++) {
+                fmpz_init(values + i);
+            }
+        }
+        fmpz_set(values + len, coeff);
+        len++;
+    }
+
+    fmpz_clear(coeff);
+    for (long i = 0; i <= total_degree; i++) {
+        fmpz_clear(num + i);
+    }
+    flint_free(num);
+    *values_out = values;
+    return len;
+}
+
+static slong iterated_simplex_strata_mixed(fmpz **values_out,
+                                           const long *degrees,
+                                           slong num_polys,
+                                           slong degree_count) {
+    long *slopes = NULL;
+    long max_total = 0;
+    fmpz *dp = NULL;
+    fmpz *next = NULL;
+
+    if (values_out == NULL) {
+        return 0;
+    }
+    *values_out = NULL;
+    if (degrees == NULL || num_polys <= 0 || degree_count <= 0 ||
+        degree_count > num_polys) {
+        return 0;
+    }
+
+    slopes = (long *) flint_malloc((size_t) num_polys * sizeof(long));
+    if (slopes == NULL) {
+        return 0;
+    }
+    for (slong i = 0; i < num_polys; i++) {
+        if (degrees[i] <= 0) {
+            flint_free(slopes);
+            return 0;
+        }
+        slopes[i] = degrees[i] - 1;
+    }
+    qsort(slopes, (size_t) num_polys, sizeof(long), compare_desc);
+    for (slong i = 0; i < degree_count; i++) {
+        if (max_total > LONG_MAX - slopes[i]) {
+            flint_free(slopes);
+            return 0;
+        }
+        max_total += slopes[i];
+    }
+
+    dp = (fmpz *) flint_malloc((size_t) (max_total + 1) * sizeof(fmpz));
+    next = (fmpz *) flint_malloc((size_t) (max_total + 1) * sizeof(fmpz));
+    if (dp == NULL || next == NULL) {
+        flint_free(slopes);
+        flint_free(dp);
+        flint_free(next);
+        return 0;
+    }
+    for (long i = 0; i <= max_total; i++) {
+        fmpz_init(dp + i);
+        fmpz_init(next + i);
+        fmpz_zero(dp + i);
+        fmpz_zero(next + i);
+    }
+    fmpz_one(dp + 0);
+
+    {
+        long cap = 0;
+        long prev_cap = 0;
+        for (slong k = 0; k < degree_count; k++) {
+            cap += slopes[k];
+            for (long i = 0; i <= max_total; i++) {
+                fmpz_zero(next + i);
+            }
+            for (long s = 0; s <= prev_cap; s++) {
+                if (fmpz_is_zero(dp + s)) {
+                    continue;
+                }
+                for (long b = 0; b <= cap - s; b++) {
+                    fmpz_add(next + s + b, next + s + b, dp + s);
+                }
+            }
+            for (long i = 0; i <= max_total; i++) {
+                fmpz_set(dp + i, next + i);
+            }
+            prev_cap = cap;
+        }
+    }
+
+    for (long i = 0; i <= max_total; i++) {
+        fmpz_clear(next + i);
+    }
+    flint_free(next);
+    flint_free(slopes);
+    *values_out = dp;
+    return max_total + 1;
+}
+
+static int dixon_rank_model_from_strata(fmpz_t rank_out,
+                                        fmpz *R,
+                                        slong r_len,
+                                        fmpz *H,
+                                        slong h_len,
+                                        slong sigma) {
+    fmpz_t tmp;
+
+    fmpz_zero(rank_out);
+    if (R == NULL || H == NULL || r_len <= 0 || h_len <= 0) {
+        return 0;
+    }
+
+    fmpz_init(tmp);
+    for (slong q = 0; q < r_len; q++) {
+        slong p = sigma - q;
+        slong h_idx = FLINT_MIN(p, q);
+
+        if (p < 0 || p >= r_len) {
+            continue;
+        }
+        if (fmpz_cmp(R + p, R + q) <= 0) {
+            fmpz_set(tmp, R + p);
+        } else {
+            fmpz_set(tmp, R + q);
+        }
+        if (h_idx >= 0 && h_idx < h_len) {
+            fmpz_sub(tmp, tmp, H + h_idx);
+        }
+        if (fmpz_sgn(tmp) > 0) {
+            fmpz_add(rank_out, rank_out, tmp);
+        }
+    }
+    for (slong i = 0; i < h_len; i++) {
+        fmpz_add(rank_out, rank_out, H + i);
+    }
+    fmpz_clear(tmp);
+    return 1;
+}
+
+static int dixon_rank_model_mixed(fmpz_t rank_out,
+                                  const long *degrees,
+                                  slong num_polys,
+                                  slong num_elim_vars) {
+    fmpz *R = NULL;
+    fmpz *H = NULL;
+    slong r_len = 0;
+    slong h_len = 0;
+    slong sigma = 1;
+    int ok = 0;
+
+    fmpz_zero(rank_out);
+    if (degrees == NULL || num_polys <= 0 || num_elim_vars <= 0 ||
+        num_polys != num_elim_vars + 1) {
+        return 0;
+    }
+    for (slong i = 0; i < num_polys; i++) {
+        if (degrees[i] <= 0) {
+            return 0;
+        }
+    }
+
+    r_len = iterated_simplex_strata_mixed(&R, degrees, num_polys, num_elim_vars);
+    h_len = hilbert_truncated_mixed(&H, degrees, num_polys, num_elim_vars);
+    for (slong i = 0; i < num_polys; i++) {
+        sigma += degrees[i] - 1;
+    }
+
+    if (r_len > 0 && h_len > 0 && R != NULL && H != NULL) {
+        ok = dixon_rank_model_from_strata(rank_out, R, r_len, H, h_len, sigma);
+    }
+
+    if (R != NULL) {
+        for (slong i = 0; i < r_len; i++) fmpz_clear(R + i);
+        flint_free(R);
+    }
+    if (H != NULL) {
+        for (slong i = 0; i < h_len; i++) fmpz_clear(H + i);
+        flint_free(H);
+    }
+    return ok;
+}
+
 static int step1_row_highest_active_var_index(slong row_idx,
                                               slong num_elim_vars,
                                               slong num_parameter_vars) {
@@ -679,6 +1211,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
 
     fmpz_t matrix_size;
     fmpz_t bezout_step4;
+    fmpz_t rank_size;
     long total_degree_sum = 0;
     int degree_sum_saturated = 0;
     long step1_partial_degree_bound = 0;
@@ -688,6 +1221,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
 
     fmpz_init(matrix_size);
     fmpz_init(bezout_step4);
+    fmpz_init(rank_size);
     dixon_size(matrix_size, degrees, (int) num_polys, 0);
     dixon_matrix_size_log2 = log2_fmpz_upper_bound(matrix_size);
     if (fmpz_fits_si(matrix_size)) {
@@ -1178,10 +1712,18 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         double log2_bezout = log2_fmpz_upper_bound(bezout_step4);
         long entry_degree_bound = total_degree_sum > 0 ? total_degree_sum : 0;
         slong param_count = num_parameter_vars > 0 ? num_parameter_vars : 0;
+        long uniform_d = 0;
 
         report->step4_hnf_linear_algebra_log2 = log2_M_la;
         report->step4_ordinary_probe_cost_log2 = log2_M_la;
         report->step4_sparse_slp_length_log2 = log2_M_la;
+        report->step4_rank_model_applicable = 0;
+        report->step4_rank_size = 0;
+        report->step4_rank_size_log2 = 0.0;
+        report->step4_rank_hnf_log2 = INFINITY;
+        report->step4_rank_hnf_degree_density_log2 = 0.0;
+        report->step4_rank_model_is_mixed = 0;
+        report->rank_adjusted_overall_log2 = INFINITY;
 
         if (param_count <= 0) {
             report->step4_hnf_degree_density_log2 = 0.0;
@@ -1249,6 +1791,44 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
             report->step4_sparse_log2 = step4_sparse_log2;
         }
 
+        if (uniform_positive_degree(degrees, num_polys, &uniform_d) &&
+            dixon_rank_model_uniform(rank_size, num_polys, num_elim_vars, uniform_d)) {
+            double rank_log2 = log2_fmpz_upper_bound(rank_size);
+
+            report->step4_rank_model_applicable = 1;
+            report->step4_rank_size_log2 =
+                (isfinite(rank_log2) && rank_log2 > 0.0) ? rank_log2 : 0.0;
+            if (fmpz_fits_si(rank_size)) {
+                report->step4_rank_size = fmpz_get_si(rank_size);
+            } else {
+                report->step4_rank_size = WORD_MAX;
+            }
+            report->step4_rank_hnf_degree_density_log2 =
+                log2_step4_hnf_density_from_matrix_size(rank_size,
+                                                        entry_degree_bound,
+                                                        param_count);
+            report->step4_rank_hnf_log2 =
+                ((rank_log2 > 0.0) ? omega * rank_log2 : 0.0) +
+                report->step4_rank_hnf_degree_density_log2;
+        } else if (dixon_rank_model_mixed(rank_size, degrees,
+                                          num_polys, num_elim_vars)) {
+            double rank_log2 = log2_fmpz_upper_bound(rank_size);
+
+            report->step4_rank_model_is_mixed = 1;
+            report->step4_rank_model_applicable = 1;
+            report->step4_rank_size_log2 =
+                (isfinite(rank_log2) && rank_log2 > 0.0) ? rank_log2 : 0.0;
+            report->step4_rank_size =
+                fmpz_fits_si(rank_size) ? fmpz_get_si(rank_size) : WORD_MAX;
+            report->step4_rank_hnf_degree_density_log2 =
+                log2_step4_hnf_density_from_matrix_size(rank_size,
+                                                        entry_degree_bound,
+                                                        param_count);
+            report->step4_rank_hnf_log2 =
+                ((rank_log2 > 0.0) ? omega * rank_log2 : 0.0) +
+                report->step4_rank_hnf_degree_density_log2;
+        }
+
         if (num_parameter_vars == 1) {
             double log2_var_count = (num_all_vars > 0)
                 ? log2((double) num_all_vars)
@@ -1281,6 +1861,12 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         (report->step1_best_log2 > report->step4_log2)
         ? report->step1_best_log2
         : report->step4_log2;
+    if (report->step4_rank_model_applicable) {
+        report->rank_adjusted_overall_log2 =
+            (report->step1_best_log2 > report->step4_rank_hnf_log2)
+            ? report->step1_best_log2
+            : report->step4_rank_hnf_log2;
+    }
 
     report->total_direct_log2 = log2_add_exp(report->step1_direct_log2, report->step4_log2);
     report->total_direct_mpoly_log2 =
@@ -1295,6 +1881,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
     report->total_sparse_log2 = log2_add_exp(report->step1_sparse_log2, report->step4_log2);
     fmpz_clear(bezout_step4);
     fmpz_clear(matrix_size);
+    fmpz_clear(rank_size);
 }
 
 static int complexity_is_elimination_var(const char *var_name,
@@ -1466,6 +2053,11 @@ static void dixon_complexity_write_report_body(
                 report->step1_best_method ? report->step1_best_method : "unknown",
                 report->step4_best_method ? report->step4_best_method : "unknown",
                 dixon_complexity_best_total_log2(report));
+        if (report->step4_rank_model_applicable) {
+            fprintf(fp,
+                    "Rank prediction Dixon complexity (heuristic Step 4 rank prediction, log2): %.6f\n",
+                    report->rank_adjusted_overall_log2);
+        }
         return;
     }
 
@@ -1887,6 +2479,16 @@ static void dixon_complexity_write_report_body(
         fprintf(fp, "Step 4 %s (log2, omega=%.4g): %.6f\n",
                 (num_parameter_vars == 1) ? "HNF" : "Kronecker + HNF",
                 omega, report->step4_hnf_log2);
+        if (report->step4_rank_model_applicable) {
+            fprintf(fp, "Step 4 rank prediction%s matrix size: %ld (log2: %.6f)\n",
+                    report->step4_rank_model_is_mixed ? " (mixed)" : " (uniform)",
+                    report->step4_rank_size,
+                    report->step4_rank_size_log2);
+            fprintf(fp, "Step 4 rank-predicted HNF estimate (heuristic/conjectural, log2): %.6f\n",
+                    report->step4_rank_hnf_log2);
+        } else {
+            fprintf(fp, "Step 4 rank prediction: unavailable (requires #polys = #elim + 1 and positive degrees)\n");
+        }
         fprintf(fp, "Step 4 ordinary dense interpolation (log2): %.6f\n",
                 report->step4_ordinary_interp_log2);
         fprintf(fp, "Step 4 sparse interpolation (log2): %.6f\n",
@@ -1904,6 +2506,18 @@ static void dixon_complexity_write_report_body(
                     report->step4_hnf_degree_density_log2);
             fprintf(fp, "               s_4 is estimated from delta4 = E4*(M*E4+1)^(k-1) with E4 <= %ld\n",
                     step4_entry_degree_bound);
+            if (report->step4_rank_model_applicable) {
+                fprintf(fp, "  Rank prediction formula: omega*log2(r_D) + log2(E4*(r_D*E4+1)^(k-1))\n");
+                fprintf(fp, "  Rank prediction source : %s\n",
+                        report->step4_rank_model_is_mixed
+                        ? "mixed degrees: R_q from Dixon tail degrees, H_e from all equation degrees, sigma=sum_i(d_i-1)+1"
+                        : "uniform degrees");
+                fprintf(fp, "  Rank prediction values : r_D=%ld, omega*log2(r_D)=%.6f, log2(s_4(r_D))=%.6f\n",
+                        report->step4_rank_size,
+                        omega * report->step4_rank_size_log2,
+                        report->step4_rank_hnf_degree_density_log2);
+                fprintf(fp, "  Rank prediction status: experimental/conjectural; the original M-based estimate remains the rigorous upper-bound template.\n");
+            }
 
             fprintf(fp, "  Ordinary formula: soft-O(N_4*M^omega + N_4*sum_i soft-FFT(b_i))\n");
             fprintf(fp, "  Ordinary values : log2(N_4)=%.6f, log2(M^omega)=%.6f, log2(sum_i soft-FFT(b_i))=%.6f\n",
@@ -1965,6 +2579,10 @@ static void dixon_complexity_write_report_body(
             report->step4_log2);
     fprintf(fp, "Overall complexity = max(step1/2, step4) (log2): %.6f\n",
             dixon_complexity_best_total_log2(report));
+    if (report->step4_rank_model_applicable) {
+        fprintf(fp, "Rank-predicted overall complexity = max(step1/2, rank-predicted step4 HNF) (log2): %.6f\n",
+                report->rank_adjusted_overall_log2);
+    }
 
     fprintf(fp, "\n--- Comparison: Macaulay / Groebner ---\n");
     fprintf(fp, "Macaulay degree: %ld\n", report->macaulay_degree);
