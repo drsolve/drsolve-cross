@@ -94,7 +94,7 @@ if(DRSOLVE_WINDOWS_CROSS AND NOT DRSOLVE_USE_BUNDLED_DEPS)
   list(APPEND MSYS2_PACKAGES
     "mingw-w64-x86_64-flint"
     "3.6.0-3"
-    "f0d9ee145432bf393db5a3b20d93df0bfd97be123d50e1db653c9183ac0e59af"
+    "d1addcf78ff723cb34f2e29a50ec538e4dd5d26318431473fbaea45f09d985d6"
   )
   
   # GMP (GNU Multiple Precision Arithmetic Library)
