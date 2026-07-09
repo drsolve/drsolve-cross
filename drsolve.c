@@ -3708,11 +3708,10 @@ int main(int argc, char *argv[])
                 printf("Hint: detected 2 equations with 1 elimination variable; auto-enabling --subres.\n");
             }
         } else if (!rational_mode && !large_prime_mode &&
-                   (poly_count == 3) && // || poly_count == 4
+                   (poly_count == 3) &&
                    var_count == poly_count - 1) {
-            resultant_method = RESULTANT_METHOD_DIXON_RECURSIVE;
             if (!silent_mode) {
-                printf("Hint: detected %d equations; auto-enabling recursive Dixon construction (--method 5).\n",
+                printf("Hint: detected %d equations; using --method 5 may perform better than the default Dixon method.\n",
                        poly_count);
             }
         }
