@@ -93,8 +93,8 @@ if(DRSOLVE_WINDOWS_CROSS AND NOT DRSOLVE_USE_BUNDLED_DEPS)
   # FLINT (Fast Library for Number Theory)
   list(APPEND MSYS2_PACKAGES
     "mingw-w64-x86_64-flint"
-    "3.5.0-1"
-    "9194082fcafbdf6e7a3f6c722f428f7e9948927d3e2b440525e0582a42ab0ad9"
+    "3.6.0-3"
+    "f0d9ee145432bf393db5a3b20d93df0bfd97be123d50e1db653c9183ac0e59af"
   )
   
   # GMP (GNU Multiple Precision Arithmetic Library)

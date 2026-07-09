@@ -53,7 +53,7 @@ static void print_version()
 {
     printf("===============================================\n");
     printf("DRSolve v%s\n", PROGRAM_VERSION);
-    printf("FLINT version: %s (Recommended: 3.5.0)\n", FLINT_VERSION);
+    printf("FLINT version: %s (Recommended: 3.6.0)\n", FLINT_VERSION);
 #ifdef HAVE_PML
     printf("PML support: ENABLED\n");
 #else
