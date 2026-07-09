@@ -1,6 +1,7 @@
 #include "fq_sparse_interpolation.h"
 #include "nmod_vec_extra.h"
 #include <flint/nmod_vec.h>
+#include <flint/nmod_poly.h>  /* nmod_poly_divrem/mul/sub for Euclidean BM */
 
 #include <limits.h>
 #include <stdarg.h>
@@ -57,7 +58,12 @@ typedef struct {
     mp_limb_t* coeffs;
     mp_limb_t* roots;
     mp_limb_t* powers;
-    ulong* exps;
+    /* OPT: packed nonzero exponents per term, pre-reduced mod p.
+       Term t touches variables nz_var[k] with exponent nz_exp[k]
+       for k in [nz_off[t], nz_off[t+1]). */
+    slong* nz_off;
+    slong* nz_var;
+    mp_limb_t* nz_exp;
 } geometric_poly_cache_t;
 
 typedef struct {
@@ -159,6 +165,7 @@ static double timer_seconds_since(clock_t start);
 static void sparse_multipoint_tree_init_empty(sparse_multipoint_tree_t* tree);
 static int sparse_bm_inner_timing_enabled(void);
 static int sparse_bm_hist_enabled(void);
+static int sparse_bm_quadratic_enabled(void);
 static inline void sparse_bm_axpy(mp_limb_t* res, const mp_limb_t* vec, slong len, mp_limb_t negcoef, nmod_t mod);
 static int sparse_bm_hist_bin(slong len);
 static void sparse_print_bm_histogram(const sparse_interpolation_timing_t* timing, const char* prefix);
@@ -609,6 +616,92 @@ static void BM_timed_incremental(nmod_poly_t C,
         return;
     }
 
+    /* Fast(er) Berlekamp-Massey via the extended-Euclidean formulation.
+       Given the 2N sequence terms s[0..2N-1], form S(x) = sum s[i] x^i and run
+       the extended Euclidean algorithm on (x^{2N}, S) until the remainder drops
+       below degree N; the accumulated cofactor is the connection polynomial.
+       This uses only nmod_poly_divrem / mul / add / sub, all of which exist in
+       every FLINT version.  With FLINT's sub-quadratic divrem it is faster than
+       the hand-rolled iterative loop, and it removes the dependency on the
+       (nonexistent) nmod_poly_minpoly.
+       Lambda(z) = prod(z - v_k) is the reverse of the connection polynomial;
+       the rest of this file expects "relation" C(x) with constant term 1, which
+       is exactly the (normalized) connection polynomial itself. */
+    if (!sparse_bm_quadratic_enabled()) {
+        nmod_poly_t r0, r1, v0, v1, quot, tmp, S;
+        nmod_poly_init(r0, mod.n);
+        nmod_poly_init(r1, mod.n);
+        nmod_poly_init(v0, mod.n);
+        nmod_poly_init(v1, mod.n);
+        nmod_poly_init(quot, mod.n);
+        nmod_poly_init(tmp, mod.n);
+        nmod_poly_init(S, mod.n);
+
+        /* r0 = x^{2N} */
+        nmod_poly_set_coeff_ui(r0, 2 * N, 1);
+        /* r1 = S(x) */
+        for (slong i = 0; i < 2 * N; i++) {
+            if (s[i] != 0) nmod_poly_set_coeff_ui(S, i, s[i]);
+        }
+        nmod_poly_set(r1, S);
+
+        /* v0 = 0, v1 = 1 (Bezout cofactors of the second argument) */
+        nmod_poly_zero(v0);
+        nmod_poly_set_coeff_ui(v1, 0, 1);
+
+        /* Euclid until deg(r1) < N */
+        while (nmod_poly_degree(r1) >= N) {
+            nmod_poly_divrem(quot, tmp, r0, r1);   /* r0 = quot*r1 + tmp */
+            nmod_poly_set(r0, r1);
+            nmod_poly_set(r1, tmp);
+
+            /* v_next = v0 - quot*v1 */
+            nmod_poly_mul(tmp, quot, v1);
+            nmod_poly_sub(tmp, v0, tmp);
+            nmod_poly_set(v0, v1);
+            nmod_poly_set(v1, tmp);
+        }
+
+        /* Connection polynomial = v1, normalized to constant term 1. */
+        slong t = nmod_poly_degree(v1);
+        if (t < 0) t = 0;
+
+        nmod_poly_zero(C);
+        mp_limb_t c0 = nmod_poly_get_coeff_ui(v1, 0);
+        if (t == 0 || c0 == 0) {
+            /* Degenerate: either no recurrence found or v1(0)=0, which cannot
+               occur for a genuine t-sparse geometric sequence (all roots v_k
+               are nonzero).  Signal saturation so the driver escalates. */
+            nmod_poly_set_coeff_ui(C, 0, 1);
+            if (t != 0) nmod_poly_set_coeff_ui(C, N, 1);
+        } else {
+            mp_limb_t c0_inv = nmod_inv(c0, mod);
+            for (slong i = 0; i <= t; i++) {
+                mp_limb_t ci = nmod_poly_get_coeff_ui(v1, i);
+                if (ci != 0) {
+                    nmod_poly_set_coeff_ui(C, i, nmod_mul(ci, c0_inv, mod));
+                }
+            }
+        }
+
+        nmod_poly_clear(r0);
+        nmod_poly_clear(r1);
+        nmod_poly_clear(v0);
+        nmod_poly_clear(v1);
+        nmod_poly_clear(quot);
+        nmod_poly_clear(tmp);
+        nmod_poly_clear(S);
+
+        if (state != NULL) {
+            state->processed_terms = 2 * N;
+        }
+        if (DETAILED_TIMING) {
+            timer_stop(&timer);
+            timer_print(&timer, "    BM algorithm (euclid)");
+        }
+        return;
+    }
+
     if (state == NULL || !sparse_bm_state_ensure_capacity(state, N)) {
         BM_reference(C, s, N, mod);
         return;
@@ -802,27 +895,71 @@ void Vinvert(mp_limb_t* c1, const nmod_poly_t c, const mp_limb_t* v,
     }
 }
 
+static void sparse_multipoint_tree_evaluate(mp_limb_t* values,
+                                            sparse_multipoint_tree_t* tree,
+                                            const nmod_poly_t poly,
+                                            nmod_t mod);
+
+/* OPT: was O(t^2) — t Horner evaluations of a degree-t derivative plus t
+   modular inversions.  Now: one fast multipoint evaluation down the already
+   built subproduct tree, O~(t), plus a single inversion via Montgomery's
+   batch-inversion trick (1 inv + 3t muls). */
 static int precompute_locator_inverse_denominators(mp_limb_t* denom_inv,
                                                    const nmod_poly_t c,
                                                    const mp_limb_t* v,
+                                                   sparse_multipoint_tree_t* eval_tree,
                                                    slong n,
                                                    nmod_t mod)
 {
     nmod_poly_t deriv;
+    mp_limb_t* vals;
+    mp_limb_t* prefix;
+    int ok = 1;
+
+    if (n <= 0) return 1;
+
+    vals = (mp_limb_t*) malloc((size_t) n * sizeof(mp_limb_t));
+    prefix = (mp_limb_t*) malloc((size_t) n * sizeof(mp_limb_t));
+    if (vals == NULL || prefix == NULL) {
+        free(vals);
+        free(prefix);
+        return 0;
+    }
+
     nmod_poly_init(deriv, mod.n);
     nmod_poly_derivative(deriv, c);
 
-    for (slong i = 0; i < n; i++) {
-        mp_limb_t q2_val = nmod_poly_evaluate_nmod(deriv, v[i]);
-        if (q2_val == 0) {
-            nmod_poly_clear(deriv);
-            return 0;
+    if (eval_tree != NULL && eval_tree->npoints == n) {
+        sparse_multipoint_tree_evaluate(vals, eval_tree, deriv, mod);
+    } else {
+        for (slong i = 0; i < n; i++) {
+            vals[i] = nmod_poly_evaluate_nmod(deriv, v[i]);
         }
-        denom_inv[i] = nmod_inv(q2_val, mod);
+    }
+
+    /* Montgomery batch inversion */
+    prefix[0] = vals[0];
+    for (slong i = 1; i < n && ok; i++) {
+        prefix[i] = nmod_mul(prefix[i - 1], vals[i], mod);
+    }
+    for (slong i = 0; i < n; i++) {
+        if (vals[i] == 0) { ok = 0; break; }
+    }
+    if (ok && prefix[n - 1] == 0) ok = 0;
+
+    if (ok) {
+        mp_limb_t inv_running = nmod_inv(prefix[n - 1], mod);
+        for (slong i = n - 1; i > 0; i--) {
+            denom_inv[i] = nmod_mul(inv_running, prefix[i - 1], mod);
+            inv_running = nmod_mul(inv_running, vals[i], mod);
+        }
+        denom_inv[0] = inv_running;
     }
 
     nmod_poly_clear(deriv);
-    return 1;
+    free(vals);
+    free(prefix);
+    return ok;
 }
 
 static int sparse_multipoint_tree_init(sparse_multipoint_tree_t* tree,
@@ -1076,6 +1213,22 @@ static int sparse_bm_inner_timing_enabled(void)
     static int enabled = 0;
     if (!initialized) {
         enabled = (int) sparse_get_env_slong("DIXON_SPARSE_BM_INNER_TIMING", 0, 0);
+        initialized = 1;
+    }
+    return enabled;
+}
+
+/* Euclidean BM turned out ~5x SLOWER than the iterative path at N~1e5
+   (schoolbook nmod_poly_mul + full-poly copies -> huge-constant O(N^2), never
+   reaching a sub-quadratic regime).  So the iterative BM below is now the
+   DEFAULT.  Set DIXON_SPARSE_BM_EUCLID=1 to opt into the Euclidean version. */
+static int sparse_bm_quadratic_enabled(void)
+{
+    static int initialized = 0;
+    static int enabled = 1; /* default: use iterative BM */
+    if (!initialized) {
+        /* opt into Euclidean only if explicitly requested */
+        enabled = (sparse_get_env_slong("DIXON_SPARSE_BM_EUCLID", 0, 0) != 0) ? 0 : 1;
         initialized = 1;
     }
     return enabled;
@@ -1357,6 +1510,9 @@ static int sparse_extract_linear_root(mp_limb_t* root, const nmod_poly_t poly, n
     return 1;
 }
 
+/* NOTE: parallelizing this recursion (OpenMP tasks + disjoint root ranges)
+   was tried and made things SLOWER at N~1e5 (task overhead + unbalanced
+   splits), so it is reverted to the original serial form. */
 static int sparse_collect_linear_roots_recursive(mp_limb_t* roots,
                                                  slong* count,
                                                  const nmod_poly_t poly,
@@ -1597,7 +1753,9 @@ static int geometric_poly_cache_init(geometric_poly_cache_t* cache,
     cache->coeffs = NULL;
     cache->roots = NULL;
     cache->powers = NULL;
-    cache->exps = NULL;
+    cache->nz_off = NULL;
+    cache->nz_var = NULL;
+    cache->nz_exp = NULL;
 
     if (cache->len <= 0) {
         return 1;
@@ -1606,18 +1764,30 @@ static int geometric_poly_cache_init(geometric_poly_cache_t* cache,
     cache->coeffs = (mp_limb_t*) malloc((size_t) cache->len * sizeof(mp_limb_t));
     cache->roots = (mp_limb_t*) malloc((size_t) cache->len * sizeof(mp_limb_t));
     cache->powers = (mp_limb_t*) malloc((size_t) cache->len * sizeof(mp_limb_t));
-    cache->exps = (ulong*) malloc((size_t) cache->len * (size_t) nvars * sizeof(ulong));
-    if (cache->coeffs == NULL || cache->roots == NULL || cache->powers == NULL || cache->exps == NULL) {
+    cache->nz_off = (slong*) malloc((size_t) (cache->len + 1) * sizeof(slong));
+    cache->nz_var = (slong*) malloc((size_t) cache->len * (size_t) nvars * sizeof(slong));
+    cache->nz_exp = (mp_limb_t*) malloc((size_t) cache->len * (size_t) nvars * sizeof(mp_limb_t));
+    if (cache->coeffs == NULL || cache->roots == NULL || cache->powers == NULL ||
+        cache->nz_off == NULL || cache->nz_var == NULL || cache->nz_exp == NULL) {
         return 0;
     }
 
+    slong k = 0;
     for (slong term = 0; term < cache->len; term++) {
         nmod_mpoly_get_term_exp_ui(exp_scratch, poly, term, mctx);
         cache->coeffs[term] = nmod_mpoly_get_term_coeff_ui(poly, term, mctx);
         cache->roots[term] = evaluate_root_from_alpha(alpha, exp_scratch, nvars, mod);
         cache->powers[term] = 1;
-        memcpy(cache->exps + (size_t) term * (size_t) nvars, exp_scratch, (size_t) nvars * sizeof(ulong));
+        cache->nz_off[term] = k;
+        for (slong i = 0; i < nvars; i++) {
+            ulong e = exp_scratch[i];
+            if (e == 0) continue;
+            cache->nz_var[k] = i;
+            cache->nz_exp[k] = (mp_limb_t) (e % mod.n); /* reduce once, not per point */
+            k++;
+        }
     }
+    cache->nz_off[cache->len] = k;
 
     return 1;
 }
@@ -1628,11 +1798,15 @@ static void geometric_poly_cache_clear(geometric_poly_cache_t* cache)
     free(cache->coeffs);
     free(cache->roots);
     free(cache->powers);
-    free(cache->exps);
+    free(cache->nz_off);
+    free(cache->nz_var);
+    free(cache->nz_exp);
     cache->coeffs = NULL;
     cache->roots = NULL;
     cache->powers = NULL;
-    cache->exps = NULL;
+    cache->nz_off = NULL;
+    cache->nz_var = NULL;
+    cache->nz_exp = NULL;
     cache->len = 0;
 }
 
@@ -1647,16 +1821,16 @@ static void geometric_poly_cache_accumulate_and_advance(mp_limb_t* value,
         scaled_derivs[i] = 0;
     }
 
+    const slong* nz_off = cache->nz_off;
+    const slong* nz_var = cache->nz_var;
+    const mp_limb_t* nz_exp = cache->nz_exp;
     for (slong term = 0; term < cache->len; term++) {
         mp_limb_t term_value = nmod_mul(cache->coeffs[term], cache->powers[term], mod);
         *value = nmod_add(*value, term_value, mod);
-        ulong* exp = cache->exps + (size_t) term * (size_t) nvars;
-        for (slong i = 0; i < nvars; i++) {
-            ulong e = exp[i];
-            if (e == 0) continue;
-            scaled_derivs[i] = nmod_add(scaled_derivs[i],
-                                        nmod_mul(term_value, e % mod.n, mod),
-                                        mod);
+        for (slong k = nz_off[term]; k < nz_off[term + 1]; k++) {
+            scaled_derivs[nz_var[k]] = nmod_add(scaled_derivs[nz_var[k]],
+                                                nmod_mul(term_value, nz_exp[k], mod),
+                                                mod);
         }
         cache->powers[term] = nmod_mul(cache->powers[term], cache->roots[term], mod);
     }
@@ -2247,7 +2421,7 @@ static int SparseInterpolateFromProbes(nmod_mpoly_t result,
 
         clock_t vinvert_start = clock();
         clock_t denom_start = clock();
-        if (!precompute_locator_inverse_denominators(denom_inv, locator, roots, t, mod)) {
+        if (!precompute_locator_inverse_denominators(denom_inv, locator, roots, &eval_tree, t, mod)) {
             sparse_recovery_info_set_reason(info,
                                             "failed to precompute locator derivative inverses for %ld roots",
                                             t);
@@ -2501,7 +2675,7 @@ static int SparseInterpolateScoutBudgetReuse(nmod_mpoly_t result,
 
     clock_t vinvert_start = clock();
     clock_t denom_start = clock();
-    if (!precompute_locator_inverse_denominators(denom_inv, locator, roots, t, mod)) {
+    if (!precompute_locator_inverse_denominators(denom_inv, locator, roots, &eval_tree, t, mod)) {
         sparse_recovery_info_set_reason(info,
                                         "failed to precompute locator derivative inverses for %ld roots",
                                         t);

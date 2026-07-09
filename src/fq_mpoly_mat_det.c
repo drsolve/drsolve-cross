@@ -7,6 +7,7 @@
 extern int g_field_equation_reduction;
 extern int g_dixon_debug_mode;
 extern int g_dixon_verbose_level;
+extern slong g_dixon_det_cache_limit;
 static inline ulong reduce_exp_field_ui(ulong e, ulong q);
 static ulong field_size_q_from_fq_ctx(const fq_nmod_ctx_t ctx);
 static void fq_nmod_poly_reduce_field_equation_inplace(fq_nmod_poly_t poly, const fq_nmod_ctx_t ctx);
@@ -1454,6 +1455,544 @@ void compute_nmod_mpoly_det_parallel_optimized(nmod_mpoly_t det_result,
     flint_free(partial_results);
 }
 
+typedef struct {
+    ulong mask;
+    nmod_mpoly_struct value;
+} nmod_det_minor_cache_entry_t;
+
+typedef struct {
+    nmod_det_minor_cache_entry_t *entries;
+    slong *buckets;
+    slong *next;
+    slong count;
+    slong capacity;
+    slong bucket_count;
+    slong hits;
+    slong misses;
+    int enabled;
+    nmod_mpoly_ctx_struct *ctx;
+    slong max_possible_entries;
+#ifdef _OPENMP
+    omp_lock_t *bucket_locks;
+    omp_lock_t count_lock;
+#endif
+} nmod_det_minor_cache_t;
+
+static ulong nmod_det_minor_cache_hash_mask(ulong mask)
+{
+    mask ^= mask >> 30;
+    mask *= 0xbf58476d1ce4e5b9UL;
+    mask ^= mask >> 27;
+    mask *= 0x94d049bb133111ebUL;
+    mask ^= mask >> 31;
+    return mask;
+}
+
+static slong nmod_det_minor_cache_next_pow2(slong n)
+{
+    slong p = 1;
+    while (p < n) p <<= 1;
+    return p;
+}
+
+static slong nmod_det_minor_cache_max_possible_entries(slong size)
+{
+    if (size <= 0) return 0;
+    if (size >= (slong) (8 * sizeof(ulong))) return -1;
+    return (slong) ((1UL << size) - 1UL);
+}
+
+static void nmod_det_minor_cache_init(nmod_det_minor_cache_t *cache,
+                                      nmod_mpoly_ctx_t ctx,
+                                      slong capacity,
+                                      slong max_possible_entries)
+{
+    cache->entries = NULL;
+    cache->buckets = NULL;
+    cache->next = NULL;
+    cache->count = 0;
+    cache->capacity = 0;
+    cache->bucket_count = 0;
+    cache->hits = 0;
+    cache->misses = 0;
+    cache->enabled = 0;
+    cache->ctx = ctx;
+    cache->max_possible_entries = max_possible_entries;
+#ifdef _OPENMP
+    cache->bucket_locks = NULL;
+#endif
+
+    if (capacity <= 0) return;
+
+    cache->entries = (nmod_det_minor_cache_entry_t *) calloc((size_t) capacity,
+                                                             sizeof(nmod_det_minor_cache_entry_t));
+    cache->next = (slong *) flint_malloc((size_t) capacity * sizeof(slong));
+    cache->bucket_count = nmod_det_minor_cache_next_pow2(FLINT_MAX(16, 2 * capacity));
+    cache->buckets = (slong *) flint_malloc((size_t) cache->bucket_count * sizeof(slong));
+#ifdef _OPENMP
+    cache->bucket_locks = (omp_lock_t *) flint_malloc((size_t) cache->bucket_count * sizeof(omp_lock_t));
+#endif
+    if (cache->entries == NULL || cache->next == NULL || cache->buckets == NULL
+#ifdef _OPENMP
+        || cache->bucket_locks == NULL
+#endif
+        ) {
+        free(cache->entries);
+        flint_free(cache->next);
+        flint_free(cache->buckets);
+#ifdef _OPENMP
+        flint_free(cache->bucket_locks);
+#endif
+        memset(cache, 0, sizeof(*cache));
+        cache->ctx = ctx;
+        cache->max_possible_entries = max_possible_entries;
+        return;
+    }
+
+    for (slong i = 0; i < cache->bucket_count; i++) {
+        cache->buckets[i] = -1;
+    }
+#ifdef _OPENMP
+    for (slong i = 0; i < cache->bucket_count; i++) {
+        omp_init_lock(cache->bucket_locks + i);
+    }
+    omp_init_lock(&cache->count_lock);
+#endif
+    cache->capacity = capacity;
+    cache->enabled = 1;
+}
+
+static void nmod_det_minor_cache_clear(nmod_det_minor_cache_t *cache)
+{
+#ifdef _OPENMP
+    if (cache->bucket_locks != NULL) {
+        for (slong i = 0; i < cache->bucket_count; i++) {
+            omp_destroy_lock(cache->bucket_locks + i);
+        }
+    }
+    if (cache->enabled) {
+        omp_destroy_lock(&cache->count_lock);
+    }
+#endif
+    if (cache->entries != NULL) {
+        for (slong i = 0; i < cache->count; i++) {
+            nmod_mpoly_clear(&cache->entries[i].value, cache->ctx);
+        }
+        free(cache->entries);
+    }
+    flint_free(cache->next);
+    flint_free(cache->buckets);
+#ifdef _OPENMP
+    flint_free(cache->bucket_locks);
+#endif
+    memset(cache, 0, sizeof(*cache));
+}
+
+static int nmod_det_minor_cache_lookup(nmod_det_minor_cache_t *cache,
+                                       ulong mask,
+                                       nmod_mpoly_t out)
+{
+    slong bucket;
+    slong idx;
+
+    if (cache == NULL || !cache->enabled) return 0;
+    bucket = (slong) (nmod_det_minor_cache_hash_mask(mask) &
+                      (ulong) (cache->bucket_count - 1));
+#ifdef _OPENMP
+    omp_set_lock(cache->bucket_locks + bucket);
+#endif
+    for (idx = cache->buckets[bucket]; idx >= 0; idx = cache->next[idx]) {
+        if (cache->entries[idx].mask == mask) {
+            nmod_mpoly_set(out, &cache->entries[idx].value, cache->ctx);
+            cache->hits++;
+#ifdef _OPENMP
+            omp_unset_lock(cache->bucket_locks + bucket);
+#endif
+            return 1;
+        }
+    }
+    cache->misses++;
+#ifdef _OPENMP
+    omp_unset_lock(cache->bucket_locks + bucket);
+#endif
+    return 0;
+}
+
+static void nmod_det_minor_cache_store(nmod_det_minor_cache_t *cache,
+                                       ulong mask,
+                                       const nmod_mpoly_t value)
+{
+    slong bucket;
+    slong idx;
+
+    if (cache == NULL || !cache->enabled) return;
+    bucket = (slong) (nmod_det_minor_cache_hash_mask(mask) &
+                      (ulong) (cache->bucket_count - 1));
+#ifdef _OPENMP
+    omp_set_lock(cache->bucket_locks + bucket);
+#endif
+    for (idx = cache->buckets[bucket]; idx >= 0; idx = cache->next[idx]) {
+        if (cache->entries[idx].mask == mask) {
+#ifdef _OPENMP
+            omp_unset_lock(cache->bucket_locks + bucket);
+#endif
+            return;
+        }
+    }
+#ifdef _OPENMP
+    omp_set_lock(&cache->count_lock);
+#endif
+    if (cache->count >= cache->capacity) {
+#ifdef _OPENMP
+        omp_unset_lock(&cache->count_lock);
+        omp_unset_lock(cache->bucket_locks + bucket);
+#endif
+        return;
+    }
+    idx = cache->count++;
+#ifdef _OPENMP
+    omp_unset_lock(&cache->count_lock);
+#endif
+    cache->entries[idx].mask = mask;
+    nmod_mpoly_init(&cache->entries[idx].value, cache->ctx);
+    nmod_mpoly_set(&cache->entries[idx].value, value, cache->ctx);
+    cache->next[idx] = cache->buckets[bucket];
+    cache->buckets[bucket] = idx;
+#ifdef _OPENMP
+    omp_unset_lock(cache->bucket_locks + bucket);
+#endif
+}
+
+static ulong nmod_det_mask_remove_local_col(ulong mask, slong col)
+{
+    slong local_index = 0;
+    for (slong bit = 0; bit < (slong) (8 * sizeof(ulong)); bit++) {
+        if (((mask >> bit) & 1UL) == 0) continue;
+        if (local_index == col) {
+            return mask & ~(1UL << bit);
+        }
+        local_index++;
+    }
+    return mask;
+}
+
+static void compute_nmod_mpoly_det_recursive_cached_internal(
+        nmod_mpoly_t det_result,
+        nmod_mpoly_t **mpoly_matrix,
+        slong size,
+        nmod_mpoly_ctx_t mpoly_ctx,
+        nmod_det_minor_cache_t *cache,
+        ulong mask);
+
+static void compute_nmod_mpoly_det_parallel_cached_internal(
+        nmod_mpoly_t det_result,
+        nmod_mpoly_t **mpoly_matrix,
+        slong size,
+        nmod_mpoly_ctx_t mpoly_ctx,
+        nmod_det_minor_cache_t *cache,
+        ulong mask,
+        slong depth);
+
+static void compute_nmod_mpoly_det_recursive_cached_internal(
+        nmod_mpoly_t det_result,
+        nmod_mpoly_t **mpoly_matrix,
+        slong size,
+        nmod_mpoly_ctx_t mpoly_ctx,
+        nmod_det_minor_cache_t *cache,
+        ulong mask)
+{
+    if (cache != NULL && nmod_det_minor_cache_lookup(cache, mask, det_result)) {
+        return;
+    }
+
+    if (size <= 0) {
+        nmod_mpoly_one(det_result, mpoly_ctx);
+        return;
+    }
+
+    if (size == 1) {
+        nmod_mpoly_set(det_result, mpoly_matrix[0][0], mpoly_ctx);
+        if (cache != NULL) nmod_det_minor_cache_store(cache, mask, det_result);
+        return;
+    }
+
+    if (size == 2) {
+        nmod_mpoly_t ad, bc;
+        nmod_mpoly_init(ad, mpoly_ctx);
+        nmod_mpoly_init(bc, mpoly_ctx);
+        nmod_mpoly_mul(ad, mpoly_matrix[0][0], mpoly_matrix[1][1], mpoly_ctx);
+        nmod_mpoly_mul(bc, mpoly_matrix[0][1], mpoly_matrix[1][0], mpoly_ctx);
+        nmod_mpoly_sub(det_result, ad, bc, mpoly_ctx);
+        nmod_mpoly_clear(ad, mpoly_ctx);
+        nmod_mpoly_clear(bc, mpoly_ctx);
+        if (cache != NULL) nmod_det_minor_cache_store(cache, mask, det_result);
+        return;
+    }
+
+    if (size == 3) {
+        compute_det_3x3_nmod_optimized(det_result, mpoly_matrix, mpoly_ctx);
+        if (cache != NULL) nmod_det_minor_cache_store(cache, mask, det_result);
+        return;
+    }
+
+    nmod_mpoly_zero(det_result, mpoly_ctx);
+
+    nmod_mpoly_t temp_result, cofactor, subdet;
+    nmod_mpoly_init(temp_result, mpoly_ctx);
+    nmod_mpoly_init(cofactor, mpoly_ctx);
+    nmod_mpoly_init(subdet, mpoly_ctx);
+
+    nmod_mpoly_t **submatrix = (nmod_mpoly_t **) flint_malloc((size_t) (size - 1) * sizeof(nmod_mpoly_t *));
+    for (slong i = 0; i < size - 1; i++) {
+        submatrix[i] = (nmod_mpoly_t *) flint_malloc((size_t) (size - 1) * sizeof(nmod_mpoly_t));
+        for (slong j = 0; j < size - 1; j++) {
+            nmod_mpoly_init(submatrix[i][j], mpoly_ctx);
+        }
+    }
+
+    for (slong col = 0; col < size; col++) {
+        if (nmod_mpoly_is_zero(mpoly_matrix[0][col], mpoly_ctx)) continue;
+
+        for (slong i = 1; i < size; i++) {
+            slong sub_j = 0;
+            for (slong j = 0; j < size; j++) {
+                if (j != col) {
+                    nmod_mpoly_set(submatrix[i - 1][sub_j], mpoly_matrix[i][j], mpoly_ctx);
+                    sub_j++;
+                }
+            }
+        }
+
+        compute_nmod_mpoly_det_recursive_cached_internal(
+            subdet, submatrix, size - 1, mpoly_ctx, cache,
+            nmod_det_mask_remove_local_col(mask, col));
+
+        nmod_mpoly_mul(cofactor, mpoly_matrix[0][col], subdet, mpoly_ctx);
+        if ((col & 1) == 0) {
+            nmod_mpoly_add(temp_result, det_result, cofactor, mpoly_ctx);
+        } else {
+            nmod_mpoly_sub(temp_result, det_result, cofactor, mpoly_ctx);
+        }
+        nmod_mpoly_set(det_result, temp_result, mpoly_ctx);
+    }
+
+    for (slong i = 0; i < size - 1; i++) {
+        for (slong j = 0; j < size - 1; j++) {
+            nmod_mpoly_clear(submatrix[i][j], mpoly_ctx);
+        }
+        flint_free(submatrix[i]);
+    }
+    flint_free(submatrix);
+    nmod_mpoly_clear(temp_result, mpoly_ctx);
+    nmod_mpoly_clear(cofactor, mpoly_ctx);
+    nmod_mpoly_clear(subdet, mpoly_ctx);
+
+    if (cache != NULL) nmod_det_minor_cache_store(cache, mask, det_result);
+}
+
+static void compute_nmod_mpoly_det_parallel_cached_internal(
+        nmod_mpoly_t det_result,
+        nmod_mpoly_t **mpoly_matrix,
+        slong size,
+        nmod_mpoly_ctx_t mpoly_ctx,
+        nmod_det_minor_cache_t *cache,
+        ulong mask,
+        slong depth)
+{
+    if (cache != NULL && nmod_det_minor_cache_lookup(cache, mask, det_result)) {
+        return;
+    }
+
+    if (size < PARALLEL_THRESHOLD || size <= 3 || depth >= 1) {
+        compute_nmod_mpoly_det_recursive_cached_internal(det_result, mpoly_matrix, size,
+                                                         mpoly_ctx, cache, mask);
+        return;
+    }
+
+    nmod_mpoly_zero(det_result, mpoly_ctx);
+
+    slong nonzero_count = 0;
+    for (slong col = 0; col < size; col++) {
+        if (!nmod_mpoly_is_zero(mpoly_matrix[0][col], mpoly_ctx)) {
+            nonzero_count++;
+        }
+    }
+
+    if (g_dixon_verbose_level >= 2) {
+        printf("  determinant parallel memo (nmod) depth=%ld size=%ld nonzero-first-row=%ld\n",
+               depth, size, nonzero_count);
+    }
+
+    if (nonzero_count < 2) {
+        compute_nmod_mpoly_det_recursive_cached_internal(det_result, mpoly_matrix, size,
+                                                         mpoly_ctx, cache, mask);
+        return;
+    }
+
+    nmod_mpoly_t *partial_results = (nmod_mpoly_t *) flint_malloc((size_t) size * sizeof(nmod_mpoly_t));
+    for (slong i = 0; i < size; i++) {
+        nmod_mpoly_init(partial_results[i], mpoly_ctx);
+        nmod_mpoly_zero(partial_results[i], mpoly_ctx);
+    }
+
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(static) num_threads(FLINT_MIN(nonzero_count, omp_get_max_threads()))
+#endif
+    for (slong col = 0; col < size; col++) {
+        if (nmod_mpoly_is_zero(mpoly_matrix[0][col], mpoly_ctx)) {
+            continue;
+        }
+
+        nmod_mpoly_t cofactor, subdet;
+        nmod_mpoly_init(cofactor, mpoly_ctx);
+        nmod_mpoly_init(subdet, mpoly_ctx);
+
+        nmod_mpoly_t **submatrix = (nmod_mpoly_t **) flint_malloc((size_t) (size - 1) * sizeof(nmod_mpoly_t *));
+        for (slong i = 0; i < size - 1; i++) {
+            submatrix[i] = (nmod_mpoly_t *) flint_malloc((size_t) (size - 1) * sizeof(nmod_mpoly_t));
+            for (slong j = 0; j < size - 1; j++) {
+                nmod_mpoly_init(submatrix[i][j], mpoly_ctx);
+            }
+        }
+
+        for (slong i = 1; i < size; i++) {
+            slong sub_j = 0;
+            for (slong j = 0; j < size; j++) {
+                if (j != col) {
+                    nmod_mpoly_set(submatrix[i - 1][sub_j], mpoly_matrix[i][j], mpoly_ctx);
+                    sub_j++;
+                }
+            }
+        }
+
+        compute_nmod_mpoly_det_recursive_cached_internal(
+            subdet, submatrix, size - 1, mpoly_ctx, cache,
+            nmod_det_mask_remove_local_col(mask, col));
+
+        nmod_mpoly_mul(cofactor, mpoly_matrix[0][col], subdet, mpoly_ctx);
+        if ((col & 1) == 0) {
+            nmod_mpoly_set(partial_results[col], cofactor, mpoly_ctx);
+        } else {
+            nmod_mpoly_neg(partial_results[col], cofactor, mpoly_ctx);
+        }
+
+        for (slong i = 0; i < size - 1; i++) {
+            for (slong j = 0; j < size - 1; j++) {
+                nmod_mpoly_clear(submatrix[i][j], mpoly_ctx);
+            }
+            flint_free(submatrix[i]);
+        }
+        flint_free(submatrix);
+        nmod_mpoly_clear(cofactor, mpoly_ctx);
+        nmod_mpoly_clear(subdet, mpoly_ctx);
+    }
+
+    nmod_mpoly_t temp_sum;
+    nmod_mpoly_init(temp_sum, mpoly_ctx);
+    for (slong col = 0; col < size; col++) {
+        if (!nmod_mpoly_is_zero(partial_results[col], mpoly_ctx)) {
+            nmod_mpoly_add(temp_sum, det_result, partial_results[col], mpoly_ctx);
+            nmod_mpoly_set(det_result, temp_sum, mpoly_ctx);
+        }
+        nmod_mpoly_clear(partial_results[col], mpoly_ctx);
+    }
+    nmod_mpoly_clear(temp_sum, mpoly_ctx);
+    flint_free(partial_results);
+
+    if (cache != NULL) nmod_det_minor_cache_store(cache, mask, det_result);
+}
+
+static void compute_nmod_mpoly_det_recursive_with_optional_cache(
+        nmod_mpoly_t det_result,
+        nmod_mpoly_t **mpoly_matrix,
+        slong size,
+        nmod_mpoly_ctx_t mpoly_ctx,
+        int use_parallel)
+{
+    slong cache_limit = g_dixon_det_cache_limit;
+    nmod_det_minor_cache_t cache;
+    ulong full_mask;
+    slong max_possible_entries;
+
+    if (cache_limit <= 0 || size <= 3 || size >= (slong) (8 * sizeof(ulong))) {
+        if (g_dixon_verbose_level >= 2) {
+            printf("  determinant recursive path (nmod): cache disabled (limit=%ld, size=%ld), parallel=%s\n",
+                   cache_limit, size, use_parallel ? "yes" : "no");
+        }
+        compute_nmod_mpoly_det_recursive(det_result, mpoly_matrix, size, mpoly_ctx);
+        return;
+    }
+
+    max_possible_entries = nmod_det_minor_cache_max_possible_entries(size);
+    nmod_det_minor_cache_init(&cache, mpoly_ctx, cache_limit, max_possible_entries);
+    if (!cache.enabled) {
+        if (g_dixon_verbose_level >= 2) {
+            printf("  determinant recursive path (nmod): cache allocation failed, falling back to plain recursion\n");
+        }
+        compute_nmod_mpoly_det_recursive(det_result, mpoly_matrix, size, mpoly_ctx);
+        return;
+    }
+
+    full_mask = (1UL << size) - 1UL;
+    if (g_dixon_verbose_level >= 2) {
+        printf("  determinant recursive path (nmod): shared memo enabled (limit=%ld, max=%ld), parallel=%s\n",
+               cache.capacity, cache.max_possible_entries, use_parallel ? "yes" : "no");
+    }
+
+    if (use_parallel && size >= PARALLEL_THRESHOLD) {
+        compute_nmod_mpoly_det_parallel_cached_internal(det_result, mpoly_matrix, size,
+                                                        mpoly_ctx, &cache, full_mask, 0);
+    } else {
+        compute_nmod_mpoly_det_recursive_cached_internal(det_result, mpoly_matrix, size,
+                                                         mpoly_ctx, &cache, full_mask);
+    }
+
+    if (g_dixon_verbose_level >= 2) {
+        printf("  determinant memoization (nmod): entries=%ld/%ld, limit=%ld, hits=%ld, misses=%ld\n",
+               cache.count, cache.max_possible_entries, cache.capacity, cache.hits, cache.misses);
+    }
+    nmod_det_minor_cache_clear(&cache);
+}
+
+static void compute_fq_det_nmod_recursive_cached_direct(fq_mvpoly_t *result,
+                                                        fq_mvpoly_t **matrix,
+                                                        slong size)
+{
+    const fq_nmod_ctx_struct *ctx = matrix[0][0].ctx;
+    slong nvars = matrix[0][0].nvars;
+    slong npars = matrix[0][0].npars;
+    slong total_vars = nvars + npars;
+    mp_limb_t p = fq_nmod_ctx_modulus(ctx)->mod.n;
+    int use_parallel = (size >= PARALLEL_THRESHOLD && omp_get_max_threads() > 1);
+
+    nmod_mpoly_ctx_t nmod_ctx;
+    nmod_mpoly_ctx_init(nmod_ctx, total_vars, ORD_LEX, p);
+
+    nmod_mpoly_t **nmod_matrix = (nmod_mpoly_t **) flint_malloc((size_t) size * sizeof(nmod_mpoly_t *));
+    for (slong i = 0; i < size; i++) {
+        nmod_matrix[i] = (nmod_mpoly_t *) flint_malloc((size_t) size * sizeof(nmod_mpoly_t));
+    }
+    fq_matrix_mvpoly_to_nmod_mpoly(nmod_matrix, matrix, size, nmod_ctx);
+
+    nmod_mpoly_t det_nmod;
+    nmod_mpoly_init(det_nmod, nmod_ctx);
+    compute_nmod_mpoly_det_recursive_with_optional_cache(det_nmod, nmod_matrix, size,
+                                                         nmod_ctx, use_parallel);
+
+    fq_mvpoly_clear(result);
+    nmod_mpoly_to_fq_mvpoly(result, det_nmod, nvars, npars, nmod_ctx, ctx);
+
+    nmod_mpoly_clear(det_nmod, nmod_ctx);
+    for (slong i = 0; i < size; i++) {
+        for (slong j = 0; j < size; j++) {
+            nmod_mpoly_clear(nmod_matrix[i][j], nmod_ctx);
+        }
+        flint_free(nmod_matrix[i]);
+    }
+    flint_free(nmod_matrix);
+    nmod_mpoly_ctx_clear(nmod_ctx);
+}
+
 // ============= Univariate Optimization Implementation =============
 
 int is_univariate_matrix(fq_mvpoly_t **matrix, slong size) {
@@ -2145,6 +2684,16 @@ static void compute_fq_det_unified_interface_impl(fq_mvpoly_t *result,
         
         timing_info_t total_elapsed = end_timing(total_start);
         //print_timing("Total univariate computation", total_elapsed);
+        return;
+    }
+
+    if (is_prime_field(ctx) && method == 0) {
+        if (g_dixon_verbose_level >= 2) {
+            printf("  prime-field recursive determinant: using direct nmod_mpoly cached path\n");
+        }
+        compute_fq_det_nmod_recursive_cached_direct(result, matrix, size);
+        timing_info_t total_elapsed = end_timing(total_start);
+        (void) total_elapsed;
         return;
     }
 

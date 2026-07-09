@@ -1715,6 +1715,7 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         long uniform_d = 0;
 
         report->step4_hnf_linear_algebra_log2 = log2_M_la;
+        report->step3_rank_extraction_log2 = log2_M_la;
         report->step4_ordinary_probe_cost_log2 = log2_M_la;
         report->step4_sparse_slp_length_log2 = log2_M_la;
         report->step4_rank_model_applicable = 0;
@@ -1862,10 +1863,13 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
         ? report->step1_best_log2
         : report->step4_log2;
     if (report->step4_rank_model_applicable) {
-        report->rank_adjusted_overall_log2 =
-            (report->step1_best_log2 > report->step4_rank_hnf_log2)
-            ? report->step1_best_log2
-            : report->step4_rank_hnf_log2;
+        report->rank_adjusted_overall_log2 = report->step1_best_log2;
+        if (report->step3_rank_extraction_log2 > report->rank_adjusted_overall_log2) {
+            report->rank_adjusted_overall_log2 = report->step3_rank_extraction_log2;
+        }
+        if (report->step4_rank_hnf_log2 > report->rank_adjusted_overall_log2) {
+            report->rank_adjusted_overall_log2 = report->step4_rank_hnf_log2;
+        }
     }
 
     report->total_direct_log2 = log2_add_exp(report->step1_direct_log2, report->step4_log2);
@@ -2055,7 +2059,7 @@ static void dixon_complexity_write_report_body(
                 dixon_complexity_best_total_log2(report));
         if (report->step4_rank_model_applicable) {
             fprintf(fp,
-                    "Rank prediction Dixon complexity (heuristic Step 4 rank prediction, log2): %.6f\n",
+                    "Rank prediction Dixon complexity (heuristic, log2): %.6f\n",
                     report->rank_adjusted_overall_log2);
         }
         return;
@@ -2450,6 +2454,14 @@ static void dixon_complexity_write_report_body(
             report->step1_best_method ? report->step1_best_method : "unknown",
             report->step1_best_log2);
 
+    if (verbose_level >= 2) {
+        fprintf(fp, "\n--- Step 3 ---\n");
+        fprintf(fp, "Step 3 rank-submatrix extraction by constant specialization and elimination (D^omega, log2): %.6f\n",
+                report->step3_rank_extraction_log2);
+        fprintf(fp, "  Formula: omega*log2(D), where D is the Dixon matrix size before rank reduction.\n");
+        fprintf(fp, "  This cost is charged to the rank-predicted route because the rank-sized Step 4 matrix must first be extracted.\n");
+    }
+
     fprintf(fp, "\n--- Step 4 ---\n");
     fprintf(fp, "Dixon matrix size: ");
     fmpz_fprint(fp, matrix_size);
@@ -2580,7 +2592,11 @@ static void dixon_complexity_write_report_body(
     fprintf(fp, "Overall complexity = max(step1/2, step4) (log2): %.6f\n",
             dixon_complexity_best_total_log2(report));
     if (report->step4_rank_model_applicable) {
-        fprintf(fp, "Rank-predicted overall complexity = max(step1/2, rank-predicted step4 HNF) (log2): %.6f\n",
+        if (verbose_level >= 2) {
+            fprintf(fp, "Step 3 rank extraction (log2): %.6f\n",
+                    report->step3_rank_extraction_log2);
+        }
+        fprintf(fp, "Rank-predicted overall complexity = max(step1/2, step3 extraction, rank-predicted step4 HNF) (log2): %.6f\n",
                 report->rank_adjusted_overall_log2);
     }
 

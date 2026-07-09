@@ -1753,7 +1753,8 @@ static void find_pivot_rows_nmod_dense(slong **selected_rows_out,
     slong max_rank = FLINT_MIN(nrows, ncols);
     slong rank = 0;
     slong *selected_rows;
-    nmod_row_basis_tracker_t tracker;
+    slong *perm;
+    nmod_mat_t work;
 
     if (nrows == 0 || ncols == 0) {
         *selected_rows_out = NULL;
@@ -1762,13 +1763,23 @@ static void find_pivot_rows_nmod_dense(slong **selected_rows_out,
     }
 
     selected_rows = (slong *) flint_malloc((size_t) max_rank * sizeof(slong));
-    nmod_row_basis_tracker_init(&tracker, max_rank, ncols, mod);
-    for (slong row = 0; row < nrows && tracker.current_rank < max_rank; row++) {
-        if (nmod_try_add_row_to_basis_raw(&tracker, mat, row)) {
-            selected_rows[rank++] = row;
+    perm = (slong *) flint_malloc((size_t) nrows * sizeof(slong));
+    nmod_mat_init(work, nrows, ncols, mod->n);
+
+    for (slong i = 0; i < nrows; i++) {
+        perm[i] = i;
+        for (slong j = 0; j < ncols; j++) {
+            nmod_mat_entry(work, i, j) = mat[i * ncols + j];
         }
     }
-    nmod_row_basis_tracker_clear(&tracker);
+
+    rank = nmod_mat_lu(perm, work, 0);
+    for (slong i = 0; i < rank; i++) {
+        selected_rows[i] = perm[i];
+    }
+
+    nmod_mat_clear(work);
+    flint_free(perm);
 
     if (rank > 0) {
         *selected_rows_out = (slong *) flint_realloc(selected_rows, (size_t) rank * sizeof(slong));
