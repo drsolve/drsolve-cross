@@ -15,7 +15,7 @@ Website: <https://drsolve.github.io>
 ---
 
 ## Dependencies
-- **FLINT** (recommended version: 3.5.0)  
+- **FLINT** (recommended version: 3.6.0)  
   <https://github.com/flintlib/flint>
 
 ```bash

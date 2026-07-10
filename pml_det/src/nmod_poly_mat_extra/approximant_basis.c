@@ -56,6 +56,46 @@ _nmod_pmbasis_profile_enabled(void)
     return g_dixon_verbose_level >= 3 && g_dixon_debug_mode;
 }
 
+/* Environment switches, read once (getenv+strcmp used to run on every one of
+ * the ~60000 mbasis calls of a typical solve). */
+
+/* DRSOLVE_PML_MBASIS_MODE: "legacy"/"classic"/"rescomp" -> plain mbasis,
+ * anything else (default) -> mbasis_resupdate */
+static int
+_nmod_pmbasis_use_legacy_mbasis(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+    {
+        const char * mode = getenv("DRSOLVE_PML_MBASIS_MODE");
+        cached = (mode != NULL &&
+                  (strcmp(mode, "legacy") == 0 ||
+                   strcmp(mode, "classic") == 0 ||
+                   strcmp(mode, "rescomp") == 0)) ? 1 : 0;
+    }
+    return cached;
+}
+
+/* DRSOLVE_PML_MIDDLE_PRODUCT=geometric: in pmbasis, compute the residual with
+ * the evaluation-interpolation middle product at a geometric progression
+ * instead of the naive one (full product + shift + truncate, which wastes
+ * roughly a factor 2 at balanced orders). Only used when the modulus is
+ * large enough for an element of multiplicative order >= 2*order to exist
+ * (always the case for the word-size random primes of the Dixon solver).
+ * Default: off, so behavior is unchanged unless explicitly enabled --
+ * benchmark before adopting. */
+static int
+_nmod_pmbasis_use_geometric_midprod(void)
+{
+    static int cached = -1;
+    if (cached < 0)
+    {
+        const char * mode = getenv("DRSOLVE_PML_MIDDLE_PRODUCT");
+        cached = (mode != NULL && strcmp(mode, "geometric") == 0) ? 1 : 0;
+    }
+    return cached;
+}
+
 void
 nmod_poly_mat_pmbasis_profile_reset(void)
 {
@@ -89,10 +129,10 @@ void nmod_poly_mat_mbasis(nmod_poly_mat_t appbas,
                           const nmod_poly_mat_t pmat,
                           ulong order)
 {
-    const double call_start = _nmod_pmbasis_now_seconds();
-    const char *mbasis_mode = getenv("DRSOLVE_PML_MBASIS_MODE");
+    const int collect_profile = _nmod_pmbasis_profile_enabled();
+    const double call_start = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
     nmod_mat_poly_t app, matp;
-    if (_nmod_pmbasis_profile_enabled()) {
+    if (collect_profile) {
         g_nmod_pmbasis_profile.mbasis_calls++;
         if ((slong) order > g_nmod_pmbasis_profile.max_order)
             g_nmod_pmbasis_profile.max_order = (slong) order;
@@ -104,17 +144,14 @@ void nmod_poly_mat_mbasis(nmod_poly_mat_t appbas,
     nmod_mat_poly_init(matp, pmat->r, pmat->c, pmat->modulus);
     nmod_mat_poly_set_trunc_from_poly_mat(matp, pmat, order);
     nmod_mat_poly_init(app, pmat->r, pmat->r, pmat->modulus);
-    if (mbasis_mode != NULL &&
-        (strcmp(mbasis_mode, "legacy") == 0 ||
-         strcmp(mbasis_mode, "classic") == 0 ||
-         strcmp(mbasis_mode, "rescomp") == 0))
+    if (_nmod_pmbasis_use_legacy_mbasis())
         nmod_mat_poly_mbasis(app, shift, matp, order);
     else
         nmod_mat_poly_mbasis_resupdate(app, shift, matp, order);
     nmod_poly_mat_set_from_mat_poly(appbas, app);
     nmod_mat_poly_clear(matp);
     nmod_mat_poly_clear(app);
-    if (_nmod_pmbasis_profile_enabled())
+    if (collect_profile)
         g_nmod_pmbasis_profile.mbasis_total_time += _nmod_pmbasis_now_seconds() - call_start;
 }
 
@@ -123,8 +160,8 @@ void nmod_poly_mat_pmbasis(nmod_poly_mat_t appbas,
                            const nmod_poly_mat_t pmat,
                            slong order)
 {
-    const double call_start = _nmod_pmbasis_now_seconds();
     const int collect_profile = _nmod_pmbasis_profile_enabled();
+    const double call_start = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
     const slong depth = g_nmod_pmbasis_depth++;
 
     if (collect_profile) {
@@ -144,8 +181,8 @@ void nmod_poly_mat_pmbasis(nmod_poly_mat_t appbas,
         if (collect_profile)
             g_nmod_pmbasis_profile.pmbasis_basecase_calls++;
         {
-            double t0 = _nmod_pmbasis_now_seconds();
-        nmod_poly_mat_mbasis(appbas, shift, pmat, order);
+            double t0 = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
+            nmod_poly_mat_mbasis(appbas, shift, pmat, order);
             if (collect_profile)
                 g_nmod_pmbasis_profile.pmbasis_basecase_time += _nmod_pmbasis_now_seconds() - t0;
         }
@@ -163,29 +200,34 @@ void nmod_poly_mat_pmbasis(nmod_poly_mat_t appbas,
     nmod_poly_mat_init(residual, pmat->r, pmat->c, pmat->modulus);
 
     {
-        double t0 = _nmod_pmbasis_now_seconds();
-    nmod_poly_mat_pmbasis(appbas, shift, pmat, order1);
+        double t0 = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
+        nmod_poly_mat_pmbasis(appbas, shift, pmat, order1);
         if (collect_profile)
             g_nmod_pmbasis_profile.pmbasis_first_half_time += _nmod_pmbasis_now_seconds() - t0;
     }
 
     {
-        double t0 = _nmod_pmbasis_now_seconds();
-    nmod_poly_mat_middle_product_naive(residual, appbas, pmat, order1, order2-1);
+        double t0 = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
+        /* residual = (appbas * pmat div x^order1) mod x^order2 */
+        if (_nmod_pmbasis_use_geometric_midprod()
+            && pmat->modulus > 2 * (ulong) order + 1)
+            nmod_poly_mat_middle_product_geometric(residual, appbas, pmat, order1, order2-1);
+        else
+            nmod_poly_mat_middle_product_naive(residual, appbas, pmat, order1, order2-1);
         if (collect_profile)
             g_nmod_pmbasis_profile.pmbasis_middle_product_time += _nmod_pmbasis_now_seconds() - t0;
     }
 
     {
-        double t0 = _nmod_pmbasis_now_seconds();
-    nmod_poly_mat_pmbasis(appbas2, shift, residual, order2);
+        double t0 = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
+        nmod_poly_mat_pmbasis(appbas2, shift, residual, order2);
         if (collect_profile)
             g_nmod_pmbasis_profile.pmbasis_second_half_time += _nmod_pmbasis_now_seconds() - t0;
     }
 
     {
-        double t0 = _nmod_pmbasis_now_seconds();
-    nmod_poly_mat_mul(appbas, appbas2, appbas);
+        double t0 = collect_profile ? _nmod_pmbasis_now_seconds() : 0.0;
+        nmod_poly_mat_mul(appbas, appbas2, appbas);
         if (collect_profile)
             g_nmod_pmbasis_profile.pmbasis_final_mul_time += _nmod_pmbasis_now_seconds() - t0;
     }
