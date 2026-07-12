@@ -2904,7 +2904,7 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
         }
     }
     
-    const int use_extension_specialization = (fq_nmod_ctx_degree(ctx) == 1 && fq_nmod_ctx_prime(ctx) <= 100 && npars > 0);
+    const int use_extension_specialization = (fq_nmod_ctx_degree(ctx) == 1 && fq_nmod_ctx_prime(ctx) <= 2 && npars > 0);
     const slong MAX_SELECTION_ATTEMPTS = use_extension_specialization ? 3 : 2;
 
     field_ctx_t selection_ctx;
@@ -2912,7 +2912,7 @@ void find_fq_optimal_maximal_rank_submatrix(fq_mvpoly_t ***full_matrix,
     if (use_extension_specialization) {
         fmpz_t selection_prime;
         fmpz_init_set_ui(selection_prime, fq_nmod_ctx_prime(ctx));
-        fq_nmod_ctx_init(extension_eval_ctx, selection_prime, 2, "u");
+        fq_nmod_ctx_init(extension_eval_ctx, selection_prime, 4, "u");
         fmpz_clear(selection_prime);
         field_ctx_init(&selection_ctx, extension_eval_ctx);
     } else {
