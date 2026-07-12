@@ -7,6 +7,7 @@
 #include <flint/fmpz_factor.h>
 #include <flint/fq_nmod.h>
 #include <ctype.h>
+#include <getopt.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <math.h>
@@ -35,7 +36,7 @@
 #include "rational_system_solver.h"
 #include "dixon_test.h"
 
-#define PROGRAM_VERSION "0.4.0"
+#define PROGRAM_VERSION "0.4.1"
 
 #ifdef _WIN32
 #define DIXON_NULL_DEVICE "NUL"
@@ -79,7 +80,7 @@ static void print_short_usage(const char *prog_name)
     printf("OPTIONS:\n");
     printf("  -r \"[d1,d2,...,dn]\" random polynomial generation\n");
     printf("  -s  solving mode (auto-enables when no vars given)\n");
-    printf("  -c  complexity analysis mode\n");
+    printf("  -c, --comp, --complexity  complexity analysis mode\n");
     printf("EXAMPLES:\n");
     printf("  Dixon resultant elimination:\n");
     printf("    %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
@@ -175,7 +176,7 @@ static void print_usage(const char *prog_name)
 
     printf("MODES:\n");
     printf("  Complexity analysis:\n");
-    printf("    %s --comp \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
+    printf("    %s --comp|--complexity \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s -c    \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    %s --comp -f input.dr\n", prog_name);
     printf("    Example: %s --comp \"x^2+y^2+1, x*y+z, x+y+z^2\" \"x,y\" 257\n", prog_name);
@@ -1134,6 +1135,80 @@ static int parse_density_option(const char *value, double *density_out)
     if (!endptr || *endptr != '\0' || density < 0.0 || density > 1.0) return 0;
 
     *density_out = density;
+    return 1;
+}
+
+static int validate_cli_options(int argc, char *argv[])
+{
+    enum { OPT_FLAG = 1000 };
+    static const struct option options[] = {
+        {"silent", no_argument, NULL, OPT_FLAG},
+        {"solve-verbose", no_argument, NULL, OPT_FLAG},
+        {"solve-rational-only", no_argument, NULL, OPT_FLAG},
+        {"complex", no_argument, NULL, OPT_FLAG},
+        {"solve", no_argument, NULL, 's'},
+        {"comp", no_argument, NULL, 'c'},
+        {"complexity", no_argument, NULL, 'c'},
+        {"random", no_argument, NULL, 'r'},
+        {"ideal", no_argument, NULL, OPT_FLAG},
+        {"field-equation", no_argument, NULL, OPT_FLAG},
+        {"field-equation-s", no_argument, NULL, OPT_FLAG},
+        {"time", no_argument, NULL, OPT_FLAG},
+        {"no-rational-root-scan", no_argument, NULL, OPT_FLAG},
+        {"force-rational-root-scan", no_argument, NULL, OPT_FLAG},
+        {"rational-root-scan", required_argument, NULL, OPT_FLAG},
+        {"debug", no_argument, NULL, OPT_FLAG},
+        {"verbose", required_argument, NULL, 'v'},
+        {"dixon", no_argument, NULL, OPT_FLAG},
+        {"macaulay", no_argument, NULL, OPT_FLAG},
+        {"subres", no_argument, NULL, OPT_FLAG},
+        {"resultant", required_argument, NULL, OPT_FLAG},
+        {"resultant-method", required_argument, NULL, OPT_FLAG},
+        {"omega", required_argument, NULL, 'w'},
+        {"method", required_argument, NULL, OPT_FLAG},
+        {"fq-det-method", required_argument, NULL, OPT_FLAG},
+        {"fast-ksy", no_argument, NULL, OPT_FLAG},
+        {"ksy-precondition", no_argument, NULL, OPT_FLAG},
+        {"fast-ksy-col", required_argument, NULL, OPT_FLAG},
+        {"no-fast-ksy", no_argument, NULL, OPT_FLAG},
+        {"step3-verify-second", no_argument, NULL, OPT_FLAG},
+        {"no-step3-verify-second", no_argument, NULL, OPT_FLAG},
+        {"step1", required_argument, NULL, OPT_FLAG},
+        {"step4", required_argument, NULL, OPT_FLAG},
+        {"threads", required_argument, NULL, OPT_FLAG},
+        {"cache", required_argument, NULL, OPT_FLAG},
+        {"nvars", required_argument, NULL, 'n'},
+        {"num-vars", required_argument, NULL, 'n'},
+        {"density", required_argument, NULL, OPT_FLAG},
+        {"seed", required_argument, NULL, OPT_FLAG},
+        {"specialize-vars", required_argument, NULL, OPT_FLAG},
+        {"help", no_argument, NULL, 'h'},
+        {"version", no_argument, NULL, 'V'},
+        {"test", no_argument, NULL, OPT_FLAG},
+        {"test-solver", no_argument, NULL, OPT_FLAG},
+        {NULL, 0, NULL, 0}
+    };
+    char *args[argc + 1];
+    int option_index = 0;
+    int parsed;
+
+    memcpy(args, argv, (size_t) argc * sizeof(*args));
+    args[argc] = NULL;
+    optind = 1;
+    opterr = 0;
+
+    while ((parsed = getopt_long(argc, args, "-scrv:w:n:f:o:hV", options,
+                                  &option_index)) != -1) {
+        if (parsed == '?') {
+            const char *bad = (optind > 0 && optind <= argc) ? args[optind - 1] : "";
+            fprintf(stderr, "Error: Unknown option or missing argument '%s'. Use --help to list supported options.\n",
+                    bad);
+            optind = 1;
+            return 0;
+        }
+    }
+
+    optind = 1;
     return 1;
 }
 
@@ -2784,6 +2859,10 @@ int main(int argc, char *argv[])
         print_usage(prog_name);
         return 0;
     }
+
+    if (!validate_cli_options(argc, argv)) {
+        return 1;
+    }
     if (argc == 2 &&
         (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-V") == 0)) {
         print_version();
@@ -2843,6 +2922,7 @@ int main(int argc, char *argv[])
                    strcmp(argv[i], "-s")      == 0) {
             solve_mode = 1;
         } else if (strcmp(argv[i], "--comp") == 0 ||
+                   strcmp(argv[i], "--complexity") == 0 ||
                    strcmp(argv[i], "-c")     == 0) {
             comp_mode = 1;
         } else if (strcmp(argv[i], "--random") == 0 ||
@@ -3083,6 +3163,15 @@ int main(int argc, char *argv[])
             i++;
         } else if (strcmp(argv[i], "-o") == 0) {
             fprintf(stderr, "Error: -o requires an output filename.\n");
+            return 1;
+        } else if (strcmp(argv[i], "--test") == 0 ||
+                   strcmp(argv[i], "--test-solver") == 0 ||
+                   strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0 ||
+                   strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-V") == 0) {
+            positional_args[positional_count++] = argv[i];
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            fprintf(stderr, "Error: Unknown option '%s'. Use --help to list supported options.\n",
+                    argv[i]);
             return 1;
         } else {
             positional_args[positional_count++] = argv[i];
