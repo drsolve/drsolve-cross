@@ -3,6 +3,11 @@
  */
 
 #include "gf2n_mpoly.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <time.h>
+#endif
 #if DIXON_X86_SIMD
 #include <emmintrin.h>  /* SSE2 */
 #endif
@@ -495,9 +500,21 @@ DEFINE_MPOLY_DIVISION_IMPL(gf2128, gf2128_t, GF2128_IS_ZERO, GF2128_ADD,
    ============================================================================ */
 
 double get_wall_time(void) {
-    struct timeval time;
-    if (gettimeofday(&time, NULL)) return 0;
-    return (double)time.tv_sec + (double)time.tv_usec * 0.000001;
+#ifdef _WIN32
+    LARGE_INTEGER counter;
+    LARGE_INTEGER frequency;
+
+    if (!QueryPerformanceFrequency(&frequency) ||
+        !QueryPerformanceCounter(&counter)) {
+        return 0.0;
+    }
+    return (double) counter.QuadPart / (double) frequency.QuadPart;
+#else
+    struct timespec time;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) return 0.0;
+    return (double) time.tv_sec + (double) time.tv_nsec * 1e-9;
+#endif
 }
 
 #define DEFINE_BASIC_OPS(FIELD, COEFF_T, IS_ZERO_CHECK)                        \
