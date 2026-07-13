@@ -174,11 +174,13 @@ MATH_SOURCES = $(SRC_DIR)/dixon_complexity.c \
 # Object files (in build directory)
 MATH_OBJECTS = $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(MATH_SOURCES))
 
-# Main source file (in current directory)
+# CLI source files. Keep the process entry point separate from the CLI
+# implementation so the executable boundary stays small and testable.
 DIXON_SRC = drsolve.c
+CLI_SOURCES = $(DIXON_SRC) $(SRC_DIR)/drsolve_cli.c
 
 # All source files (for LTO compilation)
-ALL_SOURCES = $(DIXON_SRC) $(MATH_SOURCES)
+ALL_SOURCES = $(CLI_SOURCES) $(MATH_SOURCES)
 
 # Library names (in current directory)
 DIXON_STATIC_LIB = libdrsolve.a
@@ -285,9 +287,9 @@ $(DIXON_TARGET)-lto: $(DIXON_STATIC_LIB) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS
 	@echo "Build complete: $(DIXON_TARGET) (LTO optimized)"
 
 # Traditional dynamic library target
-$(DIXON_TARGET)-dynamic: $(DIXON_SRC) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
+$(DIXON_TARGET)-dynamic: $(CLI_SOURCES) $(DIXON_SHARED_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with dynamic drsolve library..."
-	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< -L. -ldrsolve $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
+	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $(CLI_SOURCES) -L. -ldrsolve $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (dynamic drsolve, bundled static PML, dynamic FLINT)"
 
 # ============================================================
@@ -318,17 +320,17 @@ $(DIXON_STATIC_LIB): $(MATH_OBJECTS)
 static: $(DIXON_TARGET)-static
 	@echo "Built drsolve with static library"
 
-$(DIXON_TARGET)-static: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
+$(DIXON_TARGET)-static: $(CLI_SOURCES) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with static drsolve library (bundled static PML, dynamic FLINT)..."
-	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
+	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $(CLI_SOURCES) $(DIXON_STATIC_LIB) $(EXTERNAL_LIBS) $(RPATH_FLAGS) $(LDFLAGS)
 	@echo "Build complete: $(DIXON_TARGET) (static drsolve, bundled static PML, dynamic FLINT)"
 
 # Build with all static libraries (drsolve + PML + FLINT)
 static-all: static-lib $(DIXON_TARGET)-static-all
 
-$(DIXON_TARGET)-static-all: $(DIXON_SRC) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
+$(DIXON_TARGET)-static-all: $(CLI_SOURCES) $(DIXON_STATIC_LIB) $(PML_BUILD_PREREQS)
 	@echo "Building $(DIXON_TARGET) with all static libraries..."
-	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $< $(DIXON_STATIC_LIB) \
+	$(CC) $(ALL_CFLAGS) -o $(DIXON_TARGET) $(CLI_SOURCES) $(DIXON_STATIC_LIB) \
 		$(STATIC_LIBS_ORDERED) \
 		$(SYSTEM_LIBS) \
 		$(STATIC_ALLOW_MULTI) \
@@ -688,7 +690,7 @@ help:
 	@echo ""
 	@echo "Library structure:"
 	@echo "  drsolve library: $(words $(MATH_SOURCES)) math source files"
-	@echo "  Main program: drsolve.c links against drsolve library OR compiles with all sources"
+	@echo "  CLI: drsolve.c + src/drsolve_cli.c link against drsolve library OR compile with all sources"
 	@echo "  External deps: FLINT (required), PML determinant subset (bundled from pml_det when present)"
 	@echo ""
 	@echo "PML Detection:"

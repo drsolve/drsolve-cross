@@ -663,13 +663,18 @@ endif()
 # On Windows it lives in bin/ as drsolve_cli_real.exe;
 # the top-level drsolve.exe is a thin launcher (built below).
 # ============================================================
-# The original Makefile compiles all sources together in one
-# translation unit for maximum inlining ("unity" compilation).
-# With CMake IPO/LTO enabled this is equivalent at link-time.
-# We replicate the unity approach via a separate object library
-# that is linked privately into the executable.
+set(CLI_SOURCES
+  drsolve.c
+  src/drsolve_cli.c
+)
 
-add_executable(drsolve_exe drsolve.c ${MATH_SOURCES})
+# Keep the CLI sources outside libdrsolve; the executable compiles the math
+# sources directly, matching the existing LTO-oriented build arrangement.
+
+add_executable(drsolve_exe
+  ${CLI_SOURCES}
+  ${MATH_SOURCES}
+)
 drsolve_target_common(drsolve_exe)
 
 if(DRSOLVE_WINDOWS)
