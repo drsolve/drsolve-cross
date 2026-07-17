@@ -403,6 +403,287 @@ static double rational_evaluate_polynomial_double(const char *poly_str,
     return value;
 }
 
+typedef enum {
+    RATIONAL_EXPR_CONST,
+    RATIONAL_EXPR_VAR,
+    RATIONAL_EXPR_NEG,
+    RATIONAL_EXPR_ADD,
+    RATIONAL_EXPR_SUB,
+    RATIONAL_EXPR_MUL,
+    RATIONAL_EXPR_DIV,
+    RATIONAL_EXPR_POW
+} rational_expr_op_t;
+
+typedef struct {
+    rational_expr_op_t op;
+    int left;
+    int right;
+    double constant;
+    slong var_index;
+    long exponent;
+} rational_expr_node_t;
+
+typedef struct {
+    rational_expr_node_t *nodes;
+    slong count;
+    slong alloc;
+    int root;
+    slong num_vars;
+    double *work_values;
+    double *work_adjoints;
+} rational_compiled_poly_t;
+
+typedef struct {
+    const char *cursor;
+    rational_variable_info_t *vars;
+    slong num_vars;
+    rational_compiled_poly_t *poly;
+    int ok;
+} rational_compile_parser_t;
+
+static void rational_compile_skip_ws(rational_compile_parser_t *parser) {
+    while (parser->cursor && isspace((unsigned char) *parser->cursor)) parser->cursor++;
+}
+
+static int rational_compiled_add_node(rational_compiled_poly_t *poly,
+                                      rational_expr_op_t op, int left, int right,
+                                      double constant, slong var_index, long exponent) {
+    if (poly->count >= poly->alloc) {
+        slong new_alloc = poly->alloc ? 2 * poly->alloc : 64;
+        rational_expr_node_t *new_nodes = (rational_expr_node_t *) realloc(
+            poly->nodes, (size_t) new_alloc * sizeof(rational_expr_node_t));
+        if (!new_nodes) return -1;
+        poly->nodes = new_nodes;
+        poly->alloc = new_alloc;
+    }
+    rational_expr_node_t *node = &poly->nodes[poly->count];
+    node->op = op;
+    node->left = left;
+    node->right = right;
+    node->constant = constant;
+    node->var_index = var_index;
+    node->exponent = exponent;
+    return (int) poly->count++;
+}
+
+static int rational_compile_expression(rational_compile_parser_t *parser);
+
+static int rational_compile_lookup_var(rational_compile_parser_t *parser,
+                                       const char *name, size_t len) {
+    for (slong i = 0; i < parser->num_vars; i++) {
+        if (strlen(parser->vars[i].name) == len &&
+            strncmp(parser->vars[i].name, name, len) == 0) return (int) i;
+    }
+    return -1;
+}
+
+static int rational_compile_primary(rational_compile_parser_t *parser) {
+    rational_compile_skip_ws(parser);
+    if (!parser->ok || *parser->cursor == '\0') {
+        parser->ok = 0;
+        return -1;
+    }
+    if (*parser->cursor == '(') {
+        parser->cursor++;
+        int node = rational_compile_expression(parser);
+        rational_compile_skip_ws(parser);
+        if (*parser->cursor != ')') parser->ok = 0;
+        else parser->cursor++;
+        return node;
+    }
+    if (*parser->cursor == '+' || *parser->cursor == '-') {
+        int negative = (*parser->cursor == '-');
+        parser->cursor++;
+        int child = rational_compile_primary(parser);
+        if (!negative) return child;
+        return rational_compiled_add_node(parser->poly, RATIONAL_EXPR_NEG,
+                                          child, -1, 0.0, -1, 0);
+    }
+    if (isalpha((unsigned char) *parser->cursor) || *parser->cursor == '_') {
+        const char *start = parser->cursor;
+        while (isalnum((unsigned char) *parser->cursor) || *parser->cursor == '_') parser->cursor++;
+        int var = rational_compile_lookup_var(parser, start,
+                                              (size_t) (parser->cursor - start));
+        if (var < 0) {
+            parser->ok = 0;
+            return -1;
+        }
+        return rational_compiled_add_node(parser->poly, RATIONAL_EXPR_VAR,
+                                          -1, -1, 0.0, var, 0);
+    }
+    if (isdigit((unsigned char) *parser->cursor) || *parser->cursor == '.') {
+        char *endptr = NULL;
+        double value = strtod(parser->cursor, &endptr);
+        if (endptr == parser->cursor) {
+            parser->ok = 0;
+            return -1;
+        }
+        parser->cursor = endptr;
+        rational_compile_skip_ws(parser);
+        if (*parser->cursor == '/') {
+            parser->cursor++;
+            rational_compile_skip_ws(parser);
+            double denominator = strtod(parser->cursor, &endptr);
+            if (endptr == parser->cursor || fabs(denominator) < 1e-30) {
+                parser->ok = 0;
+                return -1;
+            }
+            parser->cursor = endptr;
+            value /= denominator;
+        }
+        return rational_compiled_add_node(parser->poly, RATIONAL_EXPR_CONST,
+                                          -1, -1, value, -1, 0);
+    }
+    parser->ok = 0;
+    return -1;
+}
+
+static int rational_compile_power(rational_compile_parser_t *parser) {
+    int node = rational_compile_primary(parser);
+    rational_compile_skip_ws(parser);
+    while (parser->ok && *parser->cursor == '^') {
+        char *endptr = NULL;
+        parser->cursor++;
+        rational_compile_skip_ws(parser);
+        long exponent = strtol(parser->cursor, &endptr, 10);
+        if (endptr == parser->cursor) {
+            parser->ok = 0;
+            return -1;
+        }
+        parser->cursor = endptr;
+        node = rational_compiled_add_node(parser->poly, RATIONAL_EXPR_POW,
+                                          node, -1, 0.0, -1, exponent);
+        rational_compile_skip_ws(parser);
+    }
+    return node;
+}
+
+static int rational_compile_term(rational_compile_parser_t *parser) {
+    int node = rational_compile_power(parser);
+    rational_compile_skip_ws(parser);
+    while (parser->ok && (*parser->cursor == '*' || *parser->cursor == '/')) {
+        char op = *parser->cursor++;
+        int rhs = rational_compile_power(parser);
+        node = rational_compiled_add_node(parser->poly,
+                                          op == '*' ? RATIONAL_EXPR_MUL : RATIONAL_EXPR_DIV,
+                                          node, rhs, 0.0, -1, 0);
+        rational_compile_skip_ws(parser);
+    }
+    return node;
+}
+
+static int rational_compile_expression(rational_compile_parser_t *parser) {
+    int node = rational_compile_term(parser);
+    rational_compile_skip_ws(parser);
+    while (parser->ok && (*parser->cursor == '+' || *parser->cursor == '-')) {
+        char op = *parser->cursor++;
+        int rhs = rational_compile_term(parser);
+        node = rational_compiled_add_node(parser->poly,
+                                          op == '+' ? RATIONAL_EXPR_ADD : RATIONAL_EXPR_SUB,
+                                          node, rhs, 0.0, -1, 0);
+        rational_compile_skip_ws(parser);
+    }
+    return node;
+}
+
+static int rational_compile_polynomial(rational_compiled_poly_t *compiled,
+                                       const char *poly_str,
+                                       rational_variable_info_t *vars,
+                                       slong num_vars) {
+    rational_compile_parser_t parser;
+    memset(compiled, 0, sizeof(*compiled));
+    compiled->root = -1;
+    compiled->num_vars = num_vars;
+    parser.cursor = poly_str;
+    parser.vars = vars;
+    parser.num_vars = num_vars;
+    parser.poly = compiled;
+    parser.ok = 1;
+    compiled->root = rational_compile_expression(&parser);
+    rational_compile_skip_ws(&parser);
+    if (!parser.ok || *parser.cursor != '\0' || compiled->root < 0) return 0;
+    compiled->work_values = (double *) malloc((size_t) compiled->count * sizeof(double));
+    compiled->work_adjoints = (double *) malloc((size_t) compiled->count * sizeof(double));
+    return compiled->work_values && compiled->work_adjoints;
+}
+
+static void rational_compiled_polynomial_clear(rational_compiled_poly_t *compiled) {
+    if (!compiled) return;
+    free(compiled->nodes);
+    free(compiled->work_values);
+    free(compiled->work_adjoints);
+    memset(compiled, 0, sizeof(*compiled));
+    compiled->root = -1;
+}
+
+static int rational_compiled_evaluate_gradient(rational_compiled_poly_t *compiled,
+                                               const double *variables,
+                                               double *value_out,
+                                               double *gradient_out) {
+    double *values = compiled->work_values;
+    double *adj = compiled->work_adjoints;
+    memset(adj, 0, (size_t) compiled->count * sizeof(double));
+    memset(gradient_out, 0, (size_t) compiled->num_vars * sizeof(double));
+
+    for (slong i = 0; i < compiled->count; i++) {
+        rational_expr_node_t *node = &compiled->nodes[i];
+        double left = node->left >= 0 ? values[node->left] : 0.0;
+        double right = node->right >= 0 ? values[node->right] : 0.0;
+        switch (node->op) {
+            case RATIONAL_EXPR_CONST: values[i] = node->constant; break;
+            case RATIONAL_EXPR_VAR: values[i] = variables[node->var_index]; break;
+            case RATIONAL_EXPR_NEG: values[i] = -left; break;
+            case RATIONAL_EXPR_ADD: values[i] = left + right; break;
+            case RATIONAL_EXPR_SUB: values[i] = left - right; break;
+            case RATIONAL_EXPR_MUL: values[i] = left * right; break;
+            case RATIONAL_EXPR_DIV:
+                if (fabs(right) < 1e-30) return 0;
+                values[i] = left / right;
+                break;
+            case RATIONAL_EXPR_POW: values[i] = pow(left, (double) node->exponent); break;
+        }
+        if (!isfinite(values[i])) return 0;
+    }
+
+    adj[compiled->root] = 1.0;
+    for (slong i = compiled->count; i-- > 0;) {
+        rational_expr_node_t *node = &compiled->nodes[i];
+        double a = adj[i];
+        if (a == 0.0) continue;
+        switch (node->op) {
+            case RATIONAL_EXPR_CONST: break;
+            case RATIONAL_EXPR_VAR: gradient_out[node->var_index] += a; break;
+            case RATIONAL_EXPR_NEG: adj[node->left] -= a; break;
+            case RATIONAL_EXPR_ADD:
+                adj[node->left] += a; adj[node->right] += a; break;
+            case RATIONAL_EXPR_SUB:
+                adj[node->left] += a; adj[node->right] -= a; break;
+            case RATIONAL_EXPR_MUL:
+                adj[node->left] += a * values[node->right];
+                adj[node->right] += a * values[node->left];
+                break;
+            case RATIONAL_EXPR_DIV: {
+                double denominator = values[node->right];
+                adj[node->left] += a / denominator;
+                adj[node->right] -= a * values[node->left] / (denominator * denominator);
+                break;
+            }
+            case RATIONAL_EXPR_POW:
+                if (node->exponent != 0) {
+                    adj[node->left] += a * (double) node->exponent *
+                        pow(values[node->left], (double) node->exponent - 1.0);
+                }
+                break;
+        }
+    }
+
+    for (slong i = 0; i < compiled->num_vars; i++) {
+        if (!isfinite(gradient_out[i])) return 0;
+    }
+    *value_out = values[compiled->root];
+    return 1;
+}
+
 static int rational_polynomial_is_numerically_zero(const char *poly_str,
                                                    rational_variable_info_t *vars,
                                                    slong num_vars) {
@@ -1591,7 +1872,7 @@ static void rational_recover_exact_solutions_from_real_approximations(rational_s
         int recovered = 1;
         for (slong var = 0; var < sols->num_variables; var++) {
             double approx = rational_arb_to_double(sols->real_solution_sets[set][var][0]);
-            if (!rational_recover_fmpq_from_double(approx, 100000L, 1e-4, candidate_values[var])) {
+            if (!rational_recover_fmpq_from_double(approx, 1000L, 1e-4, candidate_values[var])) {
                 recovered = 0;
                 break;
             }
@@ -2286,6 +2567,7 @@ static int rational_verify_numeric_full_solution(char **poly_strings, slong num_
 }
 
 static int rational_newton_solve_reduced_system(char **poly_strings,
+                                                rational_compiled_poly_t *compiled_polys,
                                                 const slong *eq_indices,
                                                 slong num_eqs,
                                                 rational_variable_info_t *vars,
@@ -2305,8 +2587,9 @@ static int rational_newton_solve_reduced_system(char **poly_strings,
     double *rhs = (double *) malloc(num_unknowns * sizeof(double));
     double *delta = (double *) calloc(num_unknowns, sizeof(double));
     double *full_values = (double *) calloc(num_vars, sizeof(double));
-    if (!x || !F || !J || !rhs || !delta || !full_values) {
-        free(x); free(F); free(J); free(rhs); free(delta); free(full_values);
+    double *gradient = (double *) calloc(num_vars, sizeof(double));
+    if (!x || !F || !J || !rhs || !delta || !full_values || !gradient) {
+        free(x); free(F); free(J); free(rhs); free(delta); free(full_values); free(gradient);
         return 0;
     }
 
@@ -2322,11 +2605,13 @@ static int rational_newton_solve_reduced_system(char **poly_strings,
     for (slong iter = 0; iter < RATIONAL_NUMERIC_NEWTON_MAX_ITER; iter++) {
         double max_F = 0.0;
         for (slong eq = 0; eq < num_unknowns; eq++) {
-            int ok = 0;
-            F[eq] = rational_evaluate_polynomial_double(poly_strings[eq_indices[eq]], vars, num_vars, full_values, &ok);
-            if (!ok || !isfinite(F[eq])) {
+            if (!rational_compiled_evaluate_gradient(&compiled_polys[eq_indices[eq]],
+                                                     full_values, &F[eq], gradient)) {
                 converged = 0;
                 goto cleanup;
+            }
+            for (slong col = 0; col < num_unknowns; col++) {
+                J[eq * num_unknowns + col] = gradient[fixed_count + col];
             }
             if (fabs(F[eq]) > max_F) {
                 max_F = fabs(F[eq]);
@@ -2340,29 +2625,6 @@ static int rational_newton_solve_reduced_system(char **poly_strings,
 
         for (slong row = 0; row < num_unknowns; row++) {
             rhs[row] = -F[row];
-            for (slong col = 0; col < num_unknowns; col++) {
-                double saved = x[col];
-                double h = 1e-6 * fmax(1.0, fabs(saved));
-
-                x[col] = saved + h;
-                full_values[fixed_count + col] = x[col];
-                int ok_plus = 0;
-                double f_plus = rational_evaluate_polynomial_double(poly_strings[eq_indices[row]], vars, num_vars, full_values, &ok_plus);
-
-                x[col] = saved - h;
-                full_values[fixed_count + col] = x[col];
-                int ok_minus = 0;
-                double f_minus = rational_evaluate_polynomial_double(poly_strings[eq_indices[row]], vars, num_vars, full_values, &ok_minus);
-
-                x[col] = saved;
-                full_values[fixed_count + col] = saved;
-
-                if (!ok_plus || !ok_minus || !isfinite(f_plus) || !isfinite(f_minus)) {
-                    converged = 0;
-                    goto cleanup;
-                }
-                J[row * num_unknowns + col] = (f_plus - f_minus) / (2.0 * h);
-            }
         }
 
         memset(delta, 0, num_unknowns * sizeof(double));
@@ -2409,6 +2671,7 @@ cleanup:
     free(rhs);
     free(delta);
     free(full_values);
+    free(gradient);
     return converged;
 }
 
@@ -2441,6 +2704,44 @@ static int rational_full_solution_already_present(const rational_solutions_t *so
     }
 
     return 0;
+}
+
+static int rational_try_numeric_seed(char **poly_strings,
+                                     rational_compiled_poly_t *compiled_polys,
+                                     slong num_polys, const slong *eq_indices,
+                                     slong num_unknowns,
+                                     rational_variable_info_t *sorted_vars,
+                                     slong num_vars, const double *fixed_values,
+                                     const double *initial_guess,
+                                     double *full_solution,
+                                     rational_solutions_t *sols) {
+    if (!rational_newton_solve_reduced_system(poly_strings, compiled_polys,
+                                               eq_indices, num_unknowns,
+                                               sorted_vars, num_vars,
+                                               fixed_values, 1,
+                                               initial_guess, full_solution)) {
+        return 0;
+    }
+
+    double max_residual = 0.0;
+    if (!rational_verify_numeric_full_solution(poly_strings, num_polys,
+                                               sorted_vars, num_vars,
+                                               full_solution,
+                                               RATIONAL_NUMERIC_VERIFY_TOL,
+                                               &max_residual) ||
+        rational_full_solution_already_present(sols, full_solution, num_vars, 1e-6)) {
+        return 0;
+    }
+
+    rational_append_real_solution_values(sols, full_solution, num_vars);
+    return 1;
+}
+
+static void rational_clear_compiled_polynomials(rational_compiled_poly_t *compiled,
+                                                slong count) {
+    if (!compiled) return;
+    for (slong i = 0; i < count; i++) rational_compiled_polynomial_clear(&compiled[i]);
+    free(compiled);
 }
 
 static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, slong num_polys,
@@ -2484,6 +2785,22 @@ static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, s
         return;
     }
 
+    rational_compiled_poly_t *compiled_polys = (rational_compiled_poly_t *) calloc(
+        (size_t) num_polys, sizeof(rational_compiled_poly_t));
+    if (!compiled_polys) {
+        free(fixed_values); free(candidate); free(active_eq_indices);
+        return;
+    }
+    for (slong i = 0; i < num_active; i++) {
+        slong eq = active_eq_indices[i];
+        if (!rational_compile_polynomial(&compiled_polys[eq], poly_strings[eq],
+                                         sorted_vars, num_vars)) {
+            rational_clear_compiled_polynomials(compiled_polys, num_polys);
+            free(fixed_values); free(candidate); free(active_eq_indices);
+            return;
+        }
+    }
+
     rational_equation_combination_t *combinations = NULL;
     slong num_combinations = 0;
     if (num_active == num_unknowns) {
@@ -2501,10 +2818,8 @@ static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, s
     }
 
     double scale = fmax(2.0, fabs(base_value) + 1.0);
-    double grid5[] = {-scale, -0.5 * scale, 0.0, 0.5 * scale, scale};
     double grid3[] = {-scale, 0.0, scale};
-    double *grid = (num_unknowns <= 2) ? grid5 : grid3;
-    slong grid_count = (num_unknowns <= 2) ? 5 : 3;
+    slong grid_count = 3;
     slong total_seed_count = 1;
     for (slong i = 0; i < num_unknowns; i++) {
         total_seed_count *= grid_count;
@@ -2516,6 +2831,7 @@ static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, s
     if (!initial_guess || !full_solution || !eq_indices) {
         free(initial_guess); free(full_solution); free(eq_indices);
         rational_free_equation_combinations(combinations, num_combinations);
+        rational_clear_compiled_polynomials(compiled_polys, num_polys);
         free(fixed_values); free(candidate); free(active_eq_indices);
         return;
     }
@@ -2525,26 +2841,42 @@ static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, s
             eq_indices[i] = active_eq_indices[combinations[comb_idx].equation_indices[i]];
         }
 
-        for (slong seed_idx = 0; seed_idx < total_seed_count; seed_idx++) {
-            slong code = seed_idx;
-            for (slong j = 0; j < num_unknowns; j++) {
-                initial_guess[j] = grid[code % grid_count];
-                code /= grid_count;
-            }
+        slong solutions_before = sols->num_real_solution_sets;
+        memset(initial_guess, 0, (size_t) num_unknowns * sizeof(double));
+        rational_try_numeric_seed(poly_strings, compiled_polys, num_polys,
+                                  eq_indices, num_unknowns,
+                                  sorted_vars, num_vars, fixed_values,
+                                  initial_guess, full_solution, sols);
 
-            if (rational_newton_solve_reduced_system(poly_strings, eq_indices, num_unknowns,
-                                                     sorted_vars, num_vars,
-                                                     fixed_values, 1,
-                                                     initial_guess, full_solution)) {
-                double max_residual = 0.0;
-                if (rational_verify_numeric_full_solution(poly_strings, num_polys,
-                                                          sorted_vars, num_vars,
-                                                          full_solution, RATIONAL_NUMERIC_VERIFY_TOL,
-                                                          &max_residual) &&
-                    !rational_full_solution_already_present(sols, full_solution, num_vars, 1e-6)) {
-                    rational_append_real_solution_values(sols, full_solution, num_vars);
-                }
+        for (slong axis = 0; axis < num_unknowns; axis++) {
+            const double axis_values[] = {-scale, -0.5 * scale, 0.5 * scale, scale};
+            for (slong a = 0; a < 4; a++) {
+                memset(initial_guess, 0, (size_t) num_unknowns * sizeof(double));
+                initial_guess[axis] = axis_values[a];
+                rational_try_numeric_seed(poly_strings, compiled_polys, num_polys,
+                                          eq_indices, num_unknowns,
+                                          sorted_vars, num_vars, fixed_values,
+                                          initial_guess, full_solution, sols);
             }
+        }
+
+        if (sols->num_real_solution_sets == solutions_before) {
+            rational_trace_stdout("Numeric backsolve: sparse seeds found no solution; expanding to %ld full-grid seeds\n",
+                                  total_seed_count);
+            for (slong seed_idx = 0; seed_idx < total_seed_count; seed_idx++) {
+                slong code = seed_idx;
+                for (slong j = 0; j < num_unknowns; j++) {
+                    initial_guess[j] = grid3[code % grid_count];
+                    code /= grid_count;
+                }
+                rational_try_numeric_seed(poly_strings, compiled_polys, num_polys,
+                                          eq_indices, num_unknowns,
+                                          sorted_vars, num_vars, fixed_values,
+                                          initial_guess, full_solution, sols);
+            }
+        } else {
+            rational_trace_stdout("Numeric backsolve: sparse seeds recovered %ld solution(s); full grid skipped\n",
+                                  sols->num_real_solution_sets - solutions_before);
         }
     }
 
@@ -2552,6 +2884,7 @@ static void rational_try_numeric_backsolve_from_real_root(char **poly_strings, s
     free(full_solution);
     free(eq_indices);
     rational_free_equation_combinations(combinations, num_combinations);
+    rational_clear_compiled_polynomials(compiled_polys, num_polys);
     free(fixed_values);
     free(candidate);
     free(active_eq_indices);
@@ -2952,7 +3285,6 @@ int rational_solve_by_back_substitution_recursive_enhanced(char **original_polys
         }
         
         slong target_equations = num_vars - 1;
-        
         if (num_nonzero_polys >= target_equations) {
             rational_equation_combination_t *combinations = NULL;
             slong num_combinations = 0;
@@ -3457,7 +3789,7 @@ int rational_solve_by_elimination_enhanced(char **poly_strings, slong num_polys,
                                          "Found %ld value(s) for %s, starting back substitution",
                                          sols->num_base_solutions, keep_var);
         }
-        
+
         if (num_roots > 0) {
 #ifdef _WIN32
             win_trace("back substitution start rational count=%ld", num_roots);
