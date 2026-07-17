@@ -101,6 +101,7 @@ void dixon_clear_last_root_report(void);
 const char *dixon_get_last_root_report(void);
 void dixon_set_suppress_root_reporting(int enabled);
 slong dixon_get_last_resultant_term_count(void);
+void dixon_set_approximate_root_mode(int enabled, slong precision_bits);
 void dixon_set_print_complex_roots(int enabled);
 int dixon_get_print_complex_roots(void);
 

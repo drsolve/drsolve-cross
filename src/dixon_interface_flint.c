@@ -2,6 +2,8 @@
 #include "dixon_interface_flint.h"
 #include "dixon_complexity.h"
 #include "dixon_recursive.h"
+#include "fq_multivariate_interpolation.h"
+#include "fq_poly_mat_det.h"
 #include <flint/arith.h>
 #include <flint/fmpq.h>
 #include <flint/fmpq_poly.h>
@@ -18,6 +20,8 @@ static int g_suppress_rational_root_reporting = 0;
 static slong g_last_resultant_term_count = -1;
 static char *g_last_root_report = NULL;
 static int g_dixon_print_complex_roots = 0;
+static int g_dixon_approximate_root_mode = 0;
+static slong g_dixon_approximate_root_precision = 128;
 
 static int qq_root_debug_enabled(void)
 {
@@ -370,6 +374,12 @@ void dixon_set_suppress_root_reporting(int enabled)
 slong dixon_get_last_resultant_term_count(void)
 {
     return g_last_resultant_term_count;
+}
+
+void dixon_set_approximate_root_mode(int enabled, slong precision_bits)
+{
+    g_dixon_approximate_root_mode = enabled ? 1 : 0;
+    g_dixon_approximate_root_precision = precision_bits >= 2 ? precision_bits : 128;
 }
 
 void dixon_set_print_complex_roots(int enabled)
@@ -858,6 +868,9 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
     size_t root_report_cap = 0;
 
     if (result) {
+#ifdef _OPENMP
+        #pragma omp atomic write
+#endif
         g_last_resultant_term_count = result->nterms;
     }
     if (g_suppress_univariate_root_reporting) {
@@ -2232,86 +2245,126 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     for (;;) {
         int stop_reconstruction = 0;
 
-        for (slong i = processed_primes; i < num_primes; i++) {
-            fq_nmod_ctx_t ctx;
-            fmpz_t p;
-            char *mod_result;
-            fq_mvpoly_t mod_poly;
-            char *candidate_result = NULL;
-            int saved_stdout = -1;
-            int devnull = -1;
+        while (processed_primes < num_primes && !stop_reconstruction) {
+            slong remaining = num_primes - processed_primes;
+            int total_threads = dixon_get_effective_interpolation_threads();
+            int outer_threads;
+            int inner_threads;
+            slong batch_count;
+            char **mod_results;
+            int saved_verbose = g_dixon_verbose_level;
 
-            fmpz_init(p);
-            fmpz_set_ui(p, primes[i]);
-            fq_nmod_ctx_init(ctx, p, 1, "t");
-
-            printf("Prime %ld/%ld: ", i + 1, num_primes);
-            printf("Computing Dixon resultant modulo %lu...\n", primes[i]);
-
-            fflush(stdout);
-            saved_stdout = dup(STDOUT_FILENO);
-            devnull = open("/dev/null", O_WRONLY);
-            if (saved_stdout != -1 && devnull != -1) {
-                dup2(devnull, STDOUT_FILENO);
-            }
-
-            mod_result = qq_compute_modular_resultant_for_reconstruction(poly_string, vars_string, ctx);
-
-            fflush(stdout);
-            if (saved_stdout != -1) {
-                dup2(saved_stdout, STDOUT_FILENO);
-                close(saved_stdout);
-            }
-            if (devnull != -1) {
-                close(devnull);
-            }
-
-            if (!mod_result) {
-                printf("Skipping p = %lu: modular resultant computation failed.\n", primes[i]);
-                fq_nmod_ctx_clear(ctx);
-                fmpz_clear(p);
-                continue;
-            }
-
-            if (!parse_result_string_fixed_params(mod_result, recon.par_names, recon.npars, ctx, &mod_poly)) {
-                printf("Skipping p = %lu: failed to parse modular resultant.\n", primes[i]);
-                free(mod_result);
-                fq_nmod_ctx_clear(ctx);
-                fmpz_clear(p);
-                continue;
-            }
-
-            qq_poly_recon_absorb_modular_result(&recon, &mod_poly, ctx);
-            if (qq_poly_recon_to_string(&candidate_result, &recon)) {
-                qq_poly_recon_copy(&best_recon, &recon);
-                have_best_recon = 1;
-                if (best_result && strcmp(best_result, candidate_result) == 0) {
-                    stable_count++;
-                } else {
-                    stable_count = 0;
-                    free(best_result);
-                    best_result = strdup(candidate_result);
-                    printf("Reconstruction updated after p = %lu.\n", primes[i]);
-                }
-                free(candidate_result);
-                if (i + 1 >= min_primes_before_stopping &&
-                    stable_count >= stable_rounds_before_stopping) {
-                    printf("Reconstruction stabilized after %ld prime(s).\n", i + 1);
-                    stop_reconstruction = 1;
-                }
-            }
-
-            fq_mvpoly_clear(&mod_poly);
-            free(mod_result);
-            fq_nmod_ctx_clear(ctx);
-            fmpz_clear(p);
-
-            if (stop_reconstruction) {
+            if (total_threads < 1) total_threads = 1;
+            outer_threads = (int) FLINT_MIN((slong) total_threads, remaining);
+            if (outer_threads < 1) outer_threads = 1;
+            batch_count = FLINT_MIN(remaining, (slong) outer_threads);
+            inner_threads = FLINT_MAX(1, total_threads / outer_threads);
+            mod_results = (char **) calloc((size_t) batch_count, sizeof(char *));
+            if (!mod_results) {
+                fprintf(stderr, "Failed to allocate modular-result batch.\n");
                 break;
             }
-        }
 
-        processed_primes = num_primes;
+            printf("Prime batch %ld-%ld/%ld: %d parallel prime task(s), %d internal thread(s) each.\n",
+                   processed_primes + 1, processed_primes + batch_count, num_primes,
+                   outer_threads, inner_threads);
+
+            g_dixon_verbose_level = 0;
+            fq_interpolation_set_threads(inner_threads);
+            fq_nmod_poly_mat_det_set_threads(inner_threads);
+#ifdef _OPENMP
+            {
+                int saved_dynamic = omp_get_dynamic();
+                int saved_levels = omp_get_max_active_levels();
+                omp_set_dynamic(0);
+                omp_set_max_active_levels(2);
+                #pragma omp parallel for schedule(dynamic) num_threads(outer_threads)
+                for (slong j = 0; j < batch_count; j++) {
+                    fq_nmod_ctx_t task_ctx;
+                    fmpz_t task_p;
+                    omp_set_num_threads(inner_threads);
+                    fmpz_init(task_p);
+                    fmpz_set_ui(task_p, primes[processed_primes + j]);
+                    fq_nmod_ctx_init(task_ctx, task_p, 1, "t");
+                    mod_results[j] = qq_compute_modular_resultant_for_reconstruction(
+                        poly_string, vars_string, task_ctx);
+                    fq_nmod_ctx_clear(task_ctx);
+                    fmpz_clear(task_p);
+                }
+                omp_set_max_active_levels(saved_levels);
+                omp_set_dynamic(saved_dynamic);
+            }
+#else
+            for (slong j = 0; j < batch_count; j++) {
+                fq_nmod_ctx_t task_ctx;
+                fmpz_t task_p;
+                fmpz_init(task_p);
+                fmpz_set_ui(task_p, primes[processed_primes + j]);
+                fq_nmod_ctx_init(task_ctx, task_p, 1, "t");
+                mod_results[j] = qq_compute_modular_resultant_for_reconstruction(
+                    poly_string, vars_string, task_ctx);
+                fq_nmod_ctx_clear(task_ctx);
+                fmpz_clear(task_p);
+            }
+#endif
+            fq_interpolation_set_threads(total_threads);
+            fq_nmod_poly_mat_det_set_threads(total_threads);
+            g_dixon_verbose_level = saved_verbose;
+
+            for (slong j = 0; j < batch_count; j++) {
+                slong i = processed_primes + j;
+                fq_nmod_ctx_t ctx;
+                fmpz_t p;
+                fq_mvpoly_t mod_poly;
+                char *candidate_result = NULL;
+
+                printf("Prime %ld/%ld completed modulo %lu.\n", i + 1, num_primes, primes[i]);
+                if (!mod_results[j]) {
+                    printf("Skipping p = %lu: modular resultant computation failed.\n", primes[i]);
+                    continue;
+                }
+
+                fmpz_init(p);
+                fmpz_set_ui(p, primes[i]);
+                fq_nmod_ctx_init(ctx, p, 1, "t");
+                if (!parse_result_string_fixed_params(mod_results[j], recon.par_names,
+                                                      recon.npars, ctx, &mod_poly)) {
+                    printf("Skipping p = %lu: failed to parse modular resultant.\n", primes[i]);
+                    fq_nmod_ctx_clear(ctx);
+                    fmpz_clear(p);
+                    continue;
+                }
+
+                qq_poly_recon_absorb_modular_result(&recon, &mod_poly, ctx);
+                if (qq_poly_recon_to_string(&candidate_result, &recon)) {
+                    qq_poly_recon_copy(&best_recon, &recon);
+                    have_best_recon = 1;
+                    if (best_result && strcmp(best_result, candidate_result) == 0) {
+                        stable_count++;
+                    } else {
+                        stable_count = 0;
+                        free(best_result);
+                        best_result = strdup(candidate_result);
+                        printf("Reconstruction updated after p = %lu.\n", primes[i]);
+                    }
+                    free(candidate_result);
+                    if (i + 1 >= min_primes_before_stopping &&
+                        stable_count >= stable_rounds_before_stopping) {
+                        printf("Reconstruction stabilized after %ld prime(s).\n", i + 1);
+                        stop_reconstruction = 1;
+                    }
+                }
+
+                fq_mvpoly_clear(&mod_poly);
+                fq_nmod_ctx_clear(ctx);
+                fmpz_clear(p);
+                if (stop_reconstruction) break;
+            }
+
+            for (slong j = 0; j < batch_count; j++) free(mod_results[j]);
+            free(mod_results);
+            processed_primes += batch_count;
+        }
 
         if (stop_reconstruction) {
             break;
@@ -2484,6 +2537,19 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
 
     printf("\nRoots in %s (degree %ld):\n", var_name, degree);
 
+    if (g_dixon_approximate_root_mode) {
+        if (have_file) {
+            fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
+        }
+        fmpq_poly_approx_roots_report(rat_poly,
+                                      g_dixon_approximate_root_precision,
+                                      g_dixon_print_complex_roots,
+                                      fp_file, 1);
+        fmpq_poly_clear(rat_poly);
+        free(par_used);
+        return;
+    }
+
     if (g_dixon_print_complex_roots) {
         slong prec = 64;
         fmpq_acb_roots_t all_roots;
@@ -2528,7 +2594,7 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
         arb_roots_init(&lifted_real_roots);
 
         root_search_start = clock();
-        qq_root_debug_log("[root-debug] Calling compressed approximate real-root pipeline (prec=%ld).\n",
+        qq_root_debug_log("[root-debug] Calling compressed dedicated Arb real-root pipeline (prec=%ld).\n",
                           prec);
         fmpq_poly_real_roots(&compressed_roots, compressed_poly, prec);
 
@@ -2553,27 +2619,16 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
         qq_root_debug_log("[root-debug] Compressed root pipeline finished in %.3f s.\n",
                           root_search_seconds);
 
-        if (lifted_real_roots.num_roots > 0) {
-            printf("\nApproximate real roots:\n");
-            arb_roots_print(&lifted_real_roots);
-        } else {
-            printf("No roots found.\n");
-        }
-
         if (have_file) {
             fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
-            if (lifted_real_roots.num_roots > 0) {
-                fprintf(fp_file, "\nApproximate real roots:\n");
-                arb_roots_print_to_file(fp_file, &lifted_real_roots);
-            } else {
-                fprintf(fp_file, "No roots found.\n");
-            }
             if (g_dixon_verbose_level >= 3) {
                 fprintf(fp_file,
                         "\n[root-debug] Exponent gcd %ld used for compressed real-root search (degree %ld -> %ld).\n",
                         exponent_gcd, degree, root_search_degree);
             }
         }
+        fmpq_poly_real_roots_report(rat_poly, &lifted_real_roots, prec,
+                                    fp_file, 1);
 
         arb_roots_clear(&lifted_real_roots);
         fmpq_acb_roots_clear(&compressed_roots);
@@ -2583,34 +2638,18 @@ static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_
         fmpq_acb_roots_t all_roots;
         fmpq_acb_roots_init(&all_roots);
         root_search_start = clock();
-        qq_root_debug_log("[root-debug] Calling approximate real-root pipeline (prec=%ld, also computes complex roots internally).\n",
+        qq_root_debug_log("[root-debug] Calling dedicated Arb real-root pipeline (prec=%ld).\n",
                           prec);
         fmpq_poly_real_roots(&all_roots, rat_poly, prec);
         root_search_seconds = (double) (clock() - root_search_start) / CLOCKS_PER_SEC;
         qq_root_debug_log("[root-debug] Approximate real-root pipeline finished in %.3f s.\n",
                           root_search_seconds);
 
-        fmpq_acb_roots_print_real(&all_roots);
-        
         if (have_file) {
             fprintf(fp_file, "\nRoots in %s (degree %ld):\n", var_name, degree);
-            if (all_roots.rational_roots.num_roots > 0) {
-                fprintf(fp_file, "\nRational roots:\n");
-                fmpq_roots_print_to_file(fp_file, &all_roots.rational_roots);
-            }
-            if (all_roots.real_roots.num_roots > 0) {
-                fprintf(fp_file, "\nApproximate real roots:\n");
-                arb_roots_print_to_file(fp_file, &all_roots.real_roots);
-            }
-            if (g_dixon_verbose_level >= 3 && all_roots.approximate_roots.num_roots > 0) {
-                fprintf(fp_file, "\nApproximate complex roots:\n");
-                acb_roots_print_to_file(fp_file, &all_roots.approximate_roots);
-            }
-            if (all_roots.rational_roots.num_roots == 0 &&
-                all_roots.real_roots.num_roots == 0) {
-                fprintf(fp_file, "No roots found.\n");
-            }
         }
+        fmpq_poly_real_roots_report(rat_poly, &all_roots.real_roots, prec,
+                                    fp_file, 1);
         
         fmpq_acb_roots_clear(&all_roots);
     }
@@ -2902,7 +2941,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     subres_cli_log(1,
                    "  Input summary: terms=(%ld, %ld), deg_%s=(%ld, %ld), remaining vars=%ld",
                    poly1.nterms, poly2.nterms, elim_var, a_degs[0], b_degs[0], num_remaining);
-    if (num_remaining > 0) {
+    if (num_remaining > 0 && subres_cli_logging_enabled(1)) {
         printf(" [");
         subres_cli_print_name_list(state.par_names, state.npars);
         printf("]\n");

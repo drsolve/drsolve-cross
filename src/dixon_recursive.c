@@ -2419,9 +2419,9 @@ static void fq_dixon_fast_resultant_common(fq_mvpoly_t *result, fq_mvpoly_t *pol
                                            ((double) (clock() - step4_cpu_start) / CLOCKS_PER_SEC),
                                            get_wall_time() - step4_wall_start);
         fq_mvpoly_make_monic(result);
-        print_resultant_summary(result, par_names, npars);
+        if (g_dixon_verbose_level >= 1) print_resultant_summary(result, par_names, npars);
 
-        if (result->nterms < 100) {
+        if (g_dixon_verbose_level >= 1 && result->nterms < 100) {
             if (var_names || par_names || gen_name) {
                 fq_mvpoly_print_with_names(result, "  Final Resultant",
                                            NULL, par_names, gen_name, 0);

@@ -61,6 +61,23 @@ Example:
   ./drsolve --resultant-only "x^2+y^2-1, x-y" "x" 0
   ./drsolve --resultant-only "x+y, x-y" "x" 257
   ```
+- Rational reconstruction parallelizes independent modular-prime images first.
+  With `--threads n`, a batch of `k` prime tasks gives each task
+  `max(1, floor(n/k))` internal threads.
+- `--approx-roots` converts the reconstructed rational coefficients to Arb
+  approximations before root finding. The default precision is 128 bits and
+  can be changed with `--root-precision`; root intervals and residual intervals
+  are reported without automatic precision escalation:
+  ```bash
+  ./drsolve --threads 16 --approx-roots --root-precision 256 \
+    "x+y, x-y^2+2" "x" 0
+  ```
+- Without `--complex`, rational resultants use FLINT's dedicated
+  `arb_fmpz_poly_real_roots` path after clearing denominators and squarefree
+  factorization. With `--complex`, the Acb all-complex-roots path is retained.
+  Both default and approximate real-root modes report a dimensionless normalized
+  residual interval, scaling by `sum |a_i| max(1, |x|)^i` so large reconstructed
+  integer coefficients do not make the residual unreadable.
 - Default output file: `out/solution_YYYYMMDD_HHMMSS.dr`
 
 #### Polynomial system solver

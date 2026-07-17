@@ -2531,6 +2531,8 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     int random_seed_given = 0;
     int complex_mode = 0;
     int resultant_only_mode = 0;
+    int approximate_root_mode = 0;
+    slong approximate_root_precision = 128;
     const char *specialize_vars_arg = NULL;
     int array_limit_k = -1;
 
@@ -2548,6 +2550,21 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
         } else if (strcmp(argv[i], "--resultant-only") == 0 ||
                    strcmp(argv[i], "--no-roots") == 0) {
             resultant_only_mode = 1;
+        } else if (strcmp(argv[i], "--approx-roots") == 0) {
+            approximate_root_mode = 1;
+        } else if (strcmp(argv[i], "--root-precision") == 0 && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (!endptr || *endptr != '\0' || val < 32 || val > 1048576) {
+                fprintf(stderr, "Error: --root-precision expects a bit count in [32, 1048576].\n");
+                return 1;
+            }
+            approximate_root_precision = (slong) val;
+            approximate_root_mode = 1;
+            i++;
+        } else if (strcmp(argv[i], "--root-precision") == 0) {
+            fprintf(stderr, "Error: --root-precision requires a bit count.\n");
+            return 1;
         } else if (strcmp(argv[i], "--solve") == 0 ||
                    strcmp(argv[i], "-s")      == 0) {
             solve_mode = 1;
@@ -3185,6 +3202,15 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
                 "Error: --resultant-only is supported only in resultant/elimination mode.\n");
         goto cleanup_fail;
     }
+    if (approximate_root_mode && (!rational_mode || solve_mode || comp_mode || ideal_str)) {
+        fprintf(stderr,
+                "Error: --approx-roots is supported only for resultant/elimination over Q.\n");
+        goto cleanup_fail;
+    }
+    if (approximate_root_mode && resultant_only_mode) {
+        fprintf(stderr, "Error: --approx-roots and --resultant-only cannot be used together.\n");
+        goto cleanup_fail;
+    }
     if (large_prime_mode) {
         if (ideal_str) {
             fprintf(stderr, "Error: large prime fallback currently does not support --ideal.\n");
@@ -3564,6 +3590,7 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
 
     dixon_clear_last_root_report();
     dixon_set_suppress_root_reporting(resultant_only_mode);
+    dixon_set_approximate_root_mode(approximate_root_mode, approximate_root_precision);
     dixon_set_print_complex_roots(complex_mode);
     complex_solver_solution_list_init(&complex_solutions);
     complex_solutions_initialized = 1;
@@ -3986,6 +4013,7 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     }
 
     dixon_set_suppress_root_reporting(0);
+    dixon_set_approximate_root_mode(0, 128);
     flint_cleanup_master();
     return 0;
 
@@ -4020,6 +4048,7 @@ cleanup_fail:
         complex_solver_solution_list_clear(&complex_solutions);
     }
     dixon_set_suppress_root_reporting(0);
+    dixon_set_approximate_root_mode(0, 128);
     flint_cleanup_master();
     return 1;
 }

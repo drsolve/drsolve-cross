@@ -2173,31 +2173,17 @@ arb_t* rational_solve_univariate_equation_all_real_roots(const char *poly_str, c
     fmpq_poly_t fmpq_poly;
     rational_parse_string_to_fmpq_poly(poly_str, var_name, fmpq_poly);
 
-    fmpq_roots_t rational_roots;
-    acb_roots_t complex_roots;
-    arb_roots_t real_roots;
-    fmpq_roots_init(&rational_roots);
-    acb_roots_init(&complex_roots);
-    arb_roots_init(&real_roots);
-
-    fmpq_poly_roots(&rational_roots, fmpq_poly, 0);
-    fmpq_poly_acb_roots(&complex_roots, fmpq_poly, prec);
-    acb_roots_to_real(&real_roots, &complex_roots, prec);
+    fmpq_acb_roots_t isolated_roots;
+    fmpq_acb_roots_init(&isolated_roots);
+    fmpq_poly_real_roots(&isolated_roots, fmpq_poly, prec);
 
     arb_t *result_roots = NULL;
     slong result_count = 0;
     slong result_cap = 0;
 
-    for (slong i = 0; i < rational_roots.num_roots; i++) {
-        arb_t as_real;
-        arb_init(as_real);
-        arb_set_fmpq(as_real, rational_roots.roots[i], prec);
-        rational_append_unique_real_root(&result_roots, &result_count, &result_cap, as_real);
-        arb_clear(as_real);
-    }
-
-    for (slong i = 0; i < real_roots.num_roots; i++) {
-        rational_append_unique_real_root(&result_roots, &result_count, &result_cap, real_roots.roots[i]);
+    for (slong i = 0; i < isolated_roots.real_roots.num_roots; i++) {
+        rational_append_unique_real_root(&result_roots, &result_count, &result_cap,
+                                         isolated_roots.real_roots.roots[i]);
     }
 
     *num_roots_out = result_count;
@@ -2215,9 +2201,7 @@ arb_t* rational_solve_univariate_equation_all_real_roots(const char *poly_str, c
         rational_trace_stdout("No real roots found.\n");
     }
 
-    fmpq_roots_clear(&rational_roots);
-    acb_roots_clear(&complex_roots);
-    arb_roots_clear(&real_roots);
+    fmpq_acb_roots_clear(&isolated_roots);
     fmpq_poly_clear(fmpq_poly);
 
     return result_roots;

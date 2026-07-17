@@ -8,8 +8,10 @@
 #include <flint/fmpq.h>
 #include <flint/fmpq_poly.h>
 #include <flint/fmpz_poly.h>
+#include <flint/fmpz_poly_factor.h>
 #include <flint/acb.h>
 #include <flint/acb_poly.h>
+#include <flint/arb_fmpz_poly.h>
 
 #define FMPQ_ROOT_SEARCH_MAX_DEGREE 10
 #define FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES 100
@@ -79,9 +81,15 @@ void fmpq_acb_roots_clear(fmpq_acb_roots_t *roots);
 
 slong fmpq_poly_all_roots(fmpq_acb_roots_t *roots, const fmpq_poly_t poly, slong prec);
 slong fmpq_poly_real_roots(fmpq_acb_roots_t *roots, const fmpq_poly_t poly, slong prec);
+slong fmpq_poly_approx_roots_report(const fmpq_poly_t poly, slong prec,
+                                    int complex_roots, FILE *fp_file,
+                                    int print_to_stdout);
 
 void fmpq_acb_roots_print(const fmpq_acb_roots_t *roots);
 void fmpq_acb_roots_print_real(const fmpq_acb_roots_t *roots);
+void fmpq_poly_real_roots_report(const fmpq_poly_t poly,
+                                 const arb_roots_t *roots, slong prec,
+                                 FILE *fp_file, int print_to_stdout);
 
 void fmpq_roots_print_to_file(FILE *fp, const fmpq_roots_t *roots);
 void acb_roots_print_to_file(FILE *fp, const acb_roots_t *roots);

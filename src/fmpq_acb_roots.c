@@ -360,6 +360,224 @@ slong fmpq_poly_acb_roots(acb_roots_t *roots, const fmpq_poly_t poly, slong prec
     return result;
 }
 
+static void approx_root_report_one(FILE *fp, slong index, const acb_t root,
+                                   const acb_t residual, int complex_root,
+                                   slong digits)
+{
+    if (!fp) return;
+
+    fprintf(fp, "  Root %ld interval: ", index);
+    if (complex_root) {
+        acb_fprintd(fp, root, digits);
+    } else {
+        arb_fprintd(fp, acb_realref(root), digits);
+    }
+    fprintf(fp, "\n    Residual interval: ");
+    acb_fprintd(fp, residual, digits);
+    fprintf(fp, "\n");
+}
+
+static void approx_real_root_report_one(FILE *fp, slong index, const arb_t root,
+                                        const arb_t normalized_residual,
+                                        slong multiplicity,
+                                        slong digits)
+{
+    if (!fp) return;
+
+    fprintf(fp, "  Root %ld interval: ", index);
+    arb_fprintd(fp, root, digits);
+    fprintf(fp, " (Multiplicity: %ld)", multiplicity);
+    fprintf(fp, "\n    Normalized residual interval: ");
+    arb_fprintd(fp, normalized_residual, digits);
+    fprintf(fp, "\n");
+}
+
+static void fmpq_poly_get_primitive_integer_poly(fmpz_poly_t integer_poly,
+                                                 const fmpq_poly_t rational_poly)
+{
+    fmpz_poly_t numerator;
+    fmpz_poly_init(numerator);
+    fmpq_poly_get_numerator(numerator, rational_poly);
+    fmpz_poly_primitive_part(integer_poly, numerator);
+    fmpz_poly_clear(numerator);
+}
+
+static void arb_roots_add_root(arb_roots_t *roots, const arb_t root, slong mult);
+
+static slong fmpz_poly_isolate_real_roots_with_multiplicity(
+    arb_roots_t *roots, const fmpz_poly_t integer_poly, slong prec)
+{
+    fmpz_poly_factor_t factors;
+
+    fmpz_poly_factor_init(factors);
+    fmpz_poly_factor_squarefree(factors, integer_poly);
+
+    for (slong factor_idx = 0; factor_idx < factors->num; factor_idx++) {
+        slong degree = fmpz_poly_degree(factors->p + factor_idx);
+        arb_ptr factor_roots;
+        slong count;
+
+        if (degree <= 0) continue;
+        factor_roots = _arb_vec_init(degree);
+        count = arb_fmpz_poly_real_roots(factor_roots, factors->p + factor_idx,
+                                         0, prec);
+        for (slong i = 0; i < count; i++) {
+            if (arb_is_finite(factor_roots + i)) {
+                arb_roots_add_root(roots, factor_roots + i,
+                                   factors->exp[factor_idx]);
+            }
+        }
+        _arb_vec_clear(factor_roots, degree);
+    }
+
+    fmpz_poly_factor_clear(factors);
+    return roots->num_roots;
+}
+
+static void fmpz_poly_normalized_residual(arb_t normalized,
+                                          const fmpz_poly_t poly,
+                                          const arb_t root, slong prec)
+{
+    arb_t residual, abs_root, scale_x, power, denominator, term, one;
+    fmpz_t coeff;
+    slong length = fmpz_poly_length(poly);
+
+    arb_init(residual);
+    arb_init(abs_root);
+    arb_init(scale_x);
+    arb_init(power);
+    arb_init(denominator);
+    arb_init(term);
+    arb_init(one);
+    fmpz_init(coeff);
+
+    arb_fmpz_poly_evaluate_arb(residual, poly, root, prec);
+    arb_abs(abs_root, root);
+    arb_one(one);
+    arb_max(scale_x, abs_root, one, prec);
+    arb_one(power);
+    arb_zero(denominator);
+
+    for (slong i = 0; i < length; i++) {
+        fmpz_poly_get_coeff_fmpz(coeff, poly, i);
+        fmpz_abs(coeff, coeff);
+        arb_set_fmpz(term, coeff);
+        arb_mul(term, term, power, prec);
+        arb_add(denominator, denominator, term, prec);
+        arb_mul(power, power, scale_x, prec);
+    }
+
+    if (arb_contains_zero(denominator)) {
+        arb_indeterminate(normalized);
+    } else {
+        arb_div(normalized, residual, denominator, prec);
+    }
+
+    fmpz_clear(coeff);
+    arb_clear(residual);
+    arb_clear(abs_root);
+    arb_clear(scale_x);
+    arb_clear(power);
+    arb_clear(denominator);
+    arb_clear(term);
+    arb_clear(one);
+}
+
+slong fmpq_poly_approx_roots_report(const fmpq_poly_t poly, slong prec,
+                                    int complex_roots, FILE *fp_file,
+                                    int print_to_stdout)
+{
+    slong degree = fmpq_poly_degree(poly);
+    slong reported = 0;
+    slong digits = FLINT_MAX(15, (slong) (0.30103 * (double) prec));
+
+    if (degree <= 0 || prec < 2) return 0;
+
+    if (!complex_roots) {
+        fmpz_poly_t integer_poly;
+        arb_roots_t real_roots;
+
+        fmpz_poly_init(integer_poly);
+        fmpq_poly_get_primitive_integer_poly(integer_poly, poly);
+        arb_roots_init(&real_roots);
+        fmpz_poly_isolate_real_roots_with_multiplicity(&real_roots, integer_poly, prec);
+
+        if (print_to_stdout) {
+            printf("Approximate coefficient real-root analysis (%ld-bit Arb precision):\n", prec);
+        }
+        if (fp_file) {
+            fprintf(fp_file, "Approximate coefficient real-root analysis (%ld-bit Arb precision):\n", prec);
+        }
+
+        for (slong i = 0; i < real_roots.num_roots; i++) {
+            arb_t normalized_residual;
+            arb_init(normalized_residual);
+            fmpz_poly_normalized_residual(normalized_residual, integer_poly,
+                                          real_roots.roots[i], prec);
+            reported++;
+            if (print_to_stdout) {
+                approx_real_root_report_one(stdout, reported, real_roots.roots[i], normalized_residual,
+                                            real_roots.multiplicities[i], digits);
+            }
+            if (fp_file) {
+                approx_real_root_report_one(fp_file, reported, real_roots.roots[i], normalized_residual,
+                                            real_roots.multiplicities[i], digits);
+            }
+            arb_clear(normalized_residual);
+        }
+
+        if (reported == 0) {
+            if (print_to_stdout) printf("No isolated approximate real roots found.\n");
+            if (fp_file) fprintf(fp_file, "No isolated approximate real roots found.\n");
+        }
+
+        arb_roots_clear(&real_roots);
+        fmpz_poly_clear(integer_poly);
+        return reported;
+    }
+
+    acb_poly_t approx_poly;
+    acb_ptr roots_array;
+
+    acb_poly_init(approx_poly);
+    acb_poly_set_fmpq_poly(approx_poly, poly, prec);
+    roots_array = _acb_vec_init(degree);
+    acb_poly_find_roots(roots_array, approx_poly, NULL, 0, prec);
+
+    if (print_to_stdout) {
+        printf("Approximate coefficient root analysis (%ld-bit Arb precision):\n", prec);
+    }
+    if (fp_file) {
+        fprintf(fp_file, "Approximate coefficient root analysis (%ld-bit Arb precision):\n", prec);
+    }
+
+    for (slong i = 0; i < degree; i++) {
+        acb_t residual;
+
+        acb_init(residual);
+        acb_poly_evaluate(residual, approx_poly, roots_array + i, prec);
+        reported++;
+        if (print_to_stdout) {
+            approx_root_report_one(stdout, reported, roots_array + i, residual,
+                                   complex_roots, digits);
+        }
+        if (fp_file) {
+            approx_root_report_one(fp_file, reported, roots_array + i, residual,
+                                   complex_roots, digits);
+        }
+        acb_clear(residual);
+    }
+
+    if (reported == 0) {
+        if (print_to_stdout) printf("No approximate %s roots found.\n", complex_roots ? "complex" : "real");
+        if (fp_file) fprintf(fp_file, "No approximate %s roots found.\n", complex_roots ? "complex" : "real");
+    }
+
+    _acb_vec_clear(roots_array, degree);
+    acb_poly_clear(approx_poly);
+    return reported;
+}
+
 void acb_roots_print(const acb_roots_t *roots) {
     printf("Found %ld approximate roots:\n", roots->num_roots);
     for (slong i = 0; i < roots->num_roots; i++) {
@@ -522,20 +740,22 @@ slong fmpq_poly_real_roots(fmpq_acb_roots_t *roots, const fmpq_poly_t poly, slon
         return 0;
     }
      
-    fmpq_poly_roots(&roots->rational_roots, poly, 0);
-     
-    fmpq_poly_acb_roots(&roots->approximate_roots, poly, prec);
-     
-    acb_roots_to_real(&roots->real_roots, &roots->approximate_roots, prec);
+    fmpz_poly_t integer_poly;
+    slong num_real_roots;
 
-    root_trace_log("[root-debug:v3] Real-root pipeline summary: degree=%ld, rational=%ld, approx_complex=%ld, real=%ld, total=%.3f s.\n",
+    fmpz_poly_init(integer_poly);
+    fmpq_poly_get_primitive_integer_poly(integer_poly, poly);
+    num_real_roots = fmpz_poly_isolate_real_roots_with_multiplicity(
+        &roots->real_roots, integer_poly, prec);
+    fmpz_poly_clear(integer_poly);
+
+    root_trace_log("[root-debug:v3] Dedicated real-root pipeline summary: degree=%ld, isolated=%ld, finite=%ld, total=%.3f s.\n",
                    degree,
-                   roots->rational_roots.num_roots,
-                   roots->approximate_roots.num_roots,
+                   num_real_roots,
                    roots->real_roots.num_roots,
                    (double) (clock() - start_time) / CLOCKS_PER_SEC);
      
-    return roots->rational_roots.num_roots + roots->real_roots.num_roots;
+    return roots->real_roots.num_roots;
 }
 
 void fmpq_acb_roots_print_real(const fmpq_acb_roots_t *roots) {
@@ -552,6 +772,47 @@ void fmpq_acb_roots_print_real(const fmpq_acb_roots_t *roots) {
     if (roots->rational_roots.num_roots == 0 && roots->real_roots.num_roots == 0) {
         printf("No roots found.\n");
     }
+}
+
+static void fmpq_poly_real_roots_report_to_file(FILE *fp,
+                                                const fmpz_poly_t integer_poly,
+                                                const arb_roots_t *roots,
+                                                slong prec, slong digits)
+{
+    if (!fp) return;
+
+    fprintf(fp, "Found %ld certified real root interval(s):\n", roots->num_roots);
+    for (slong i = 0; i < roots->num_roots; i++) {
+        arb_t normalized_residual;
+        arb_init(normalized_residual);
+        fmpz_poly_normalized_residual(normalized_residual, integer_poly,
+                                      roots->roots[i], prec);
+        fprintf(fp, "  Root %ld: ", i + 1);
+        arb_fprintd(fp, roots->roots[i], digits);
+        fprintf(fp, " (Multiplicity: %ld)\n", roots->multiplicities[i]);
+        fprintf(fp, "    Normalized residual interval: ");
+        arb_fprintd(fp, normalized_residual, digits);
+        fprintf(fp, "\n");
+        arb_clear(normalized_residual);
+    }
+}
+
+void fmpq_poly_real_roots_report(const fmpq_poly_t poly,
+                                 const arb_roots_t *roots, slong prec,
+                                 FILE *fp_file, int print_to_stdout)
+{
+    fmpz_poly_t integer_poly;
+    slong digits = FLINT_MAX(15, (slong) (0.30103 * (double) prec));
+
+    fmpz_poly_init(integer_poly);
+    fmpq_poly_get_primitive_integer_poly(integer_poly, poly);
+    if (print_to_stdout) {
+        fmpq_poly_real_roots_report_to_file(stdout, integer_poly, roots, prec, digits);
+    }
+    if (fp_file) {
+        fmpq_poly_real_roots_report_to_file(fp_file, integer_poly, roots, prec, digits);
+    }
+    fmpz_poly_clear(integer_poly);
 }
 
 void fmpq_roots_print_to_file(FILE *fp, const fmpq_roots_t *roots) {

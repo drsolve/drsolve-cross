@@ -4311,7 +4311,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     }
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
-    if (d_poly.nterms <= 100) {
+    if (g_dixon_verbose_level >= 1 && d_poly.nterms <= 100) {
         dixon_info_log("  Dixon polynomial: %ld terms\n", d_poly.nterms);
         fq_mvpoly_print_expanded(&d_poly, "  DixonPoly", 1);
     } else {
@@ -4382,14 +4382,14 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                            ((double)(clock() - step4_cpu_start) / CLOCKS_PER_SEC),
                                            get_wall_time() - step4_wall_start);
         
-        if (result->nterms < 100) {
+        if (g_dixon_verbose_level >= 1 && result->nterms < 100) {
             fq_mvpoly_print(result, "  Final Resultant");
         } else {
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
 
         fq_mvpoly_make_monic(result);
-        print_resultant_summary(result, NULL, 0);
+        if (g_dixon_verbose_level >= 1) print_resultant_summary(result, NULL, 0);
         // Cleanup coefficient matrix
         for (slong i = 0; i < matrix_size; i++) {
             for (slong j = 0; j < matrix_size; j++) {
@@ -4444,7 +4444,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                     dixon_det_method_name(step1_method));
     compute_fq_cancel_matrix_det(&d_poly, modified_M_mvpoly, nvars, npars, step1_method);
     
-    if (d_poly.nterms <= 100) {
+    if (g_dixon_verbose_level >= 1 && d_poly.nterms <= 100) {
         dixon_info_log("  Dixon polynomial: %ld terms\n", d_poly.nterms);
         fq_mvpoly_print_with_names(&d_poly, "  DixonPoly", var_names, par_names, gen_name, 1);
     } else {
@@ -4499,13 +4499,13 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                            ((double)(clock() - step4_cpu_start) / CLOCKS_PER_SEC),
                                            get_wall_time() - step4_wall_start);
         
-        if (result->nterms < 100) {
+        if (g_dixon_verbose_level >= 1 && result->nterms < 100) {
             fq_mvpoly_print_with_names(result, "  Final Resultant", NULL, par_names, gen_name, 0);
         } else {
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
         }
         fq_mvpoly_make_monic(result);
-        print_resultant_summary(result, par_names, npars);
+        if (g_dixon_verbose_level >= 1) print_resultant_summary(result, par_names, npars);
         
         for (slong i = 0; i < matrix_size; i++) {
             for (slong j = 0; j < matrix_size; j++) {

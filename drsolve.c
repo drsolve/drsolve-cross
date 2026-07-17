@@ -75,6 +75,8 @@ static void print_short_usage(const char *prog_name)
     printf("  --ideal <args>    After each multiplication, reduces using the given substitution\n");
     printf("  --complex         Output complex solutions (2x2 solver or complex roots over Q)\n");
     printf("  --resultant-only  Output the Dixon resultant and skip root analysis (all fields)\n");
+    printf("  --approx-roots    Over Q, solve using Arb-approximated coefficients\n");
+    printf("  --root-precision  Approximate-root precision in bits (default: 128)\n");
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
     printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:detailed, 3:debug)\n");
@@ -91,6 +93,7 @@ void drsolve_cli_print_usage(const char *prog_name)
     printf("    Example: %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
     printf("    Example: %s --resultant-only \"x^2+y^2-1, x-y\" \"x\" 0\n", prog_name);
+    printf("    Example: %s --approx-roots --root-precision 256 \"x+y, x-y^2+2\" \"x\" 0\n", prog_name);
     printf("    Example: %s -o out/elimination.dr \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> Default output file: %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
     printf("\n");
@@ -305,6 +308,8 @@ static int validate_cli_options(int argc, char *argv[])
         {"complex", no_argument, NULL, OPT_FLAG},
         {"resultant-only", no_argument, NULL, OPT_FLAG},
         {"no-roots", no_argument, NULL, OPT_FLAG},
+        {"approx-roots", no_argument, NULL, OPT_FLAG},
+        {"root-precision", required_argument, NULL, OPT_FLAG},
         {"solve", no_argument, NULL, 's'},
         {"comp", no_argument, NULL, 'c'},
         {"complexity", no_argument, NULL, 'c'},

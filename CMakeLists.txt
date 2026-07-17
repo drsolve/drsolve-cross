@@ -884,6 +884,29 @@ set_tests_properties(drsolve_finite_resultant_only PROPERTIES
   PASS_REGULAR_EXPRESSION "y"
   FAIL_REGULAR_EXPRESSION "Roots in|Found roots|Root"
 )
+add_test(NAME drsolve_rational_prime_parallel
+  COMMAND drsolve_exe --threads 4 --resultant-only "x+y, x-y" "x" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_rational_prime_parallel PROPERTIES
+  PASS_REGULAR_EXPRESSION "4 parallel prime task\\(s\\), 1 internal thread\\(s\\) each"
+)
+add_test(NAME drsolve_rational_approx_roots
+  COMMAND drsolve_exe --approx-roots --root-precision 128 "x+y, x-y^2+2" "x" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_rational_approx_roots PROPERTIES
+  PASS_REGULAR_EXPRESSION "Normalized residual interval"
+  FAIL_REGULAR_EXPRESSION "Rational roots:|Forcing exhaustive rational-root scan"
+)
+add_test(NAME drsolve_rational_repeated_real_root
+  COMMAND drsolve_exe "x, x+y^2+2*y+1" "x" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_rational_repeated_real_root PROPERTIES
+  PASS_REGULAR_EXPRESSION "Root 1: -1.*Multiplicity: 2"
+  FAIL_REGULAR_EXPRESSION "\\+/- \\+inf"
+)
 add_test(NAME drsolve_solve
   COMMAND drsolve_exe --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257
   WORKING_DIRECTORY ${_test_wd}
