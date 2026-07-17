@@ -414,6 +414,7 @@ static slong fmpz_poly_isolate_real_roots_with_multiplicity(
 
     for (slong factor_idx = 0; factor_idx < factors->num; factor_idx++) {
         slong degree = fmpz_poly_degree(factors->p + factor_idx);
+#if DRSOLVE_HAVE_ARB_FMPZ_POLY_REAL_ROOTS
         arb_ptr factor_roots;
         slong count;
 
@@ -428,6 +429,28 @@ static slong fmpz_poly_isolate_real_roots_with_multiplicity(
             }
         }
         _arb_vec_clear(factor_roots, degree);
+#else
+        fmpq_poly_t rational_factor;
+        acb_roots_t complex_roots;
+        arb_roots_t real_roots;
+
+        if (degree <= 0) continue;
+        fmpq_poly_init(rational_factor);
+        fmpq_poly_set_fmpz_poly(rational_factor, factors->p + factor_idx);
+        acb_roots_init(&complex_roots);
+        arb_roots_init(&real_roots);
+        fmpq_poly_acb_roots(&complex_roots, rational_factor, prec);
+        acb_roots_to_real(&real_roots, &complex_roots, prec);
+        for (slong i = 0; i < real_roots.num_roots; i++) {
+            if (arb_is_finite(real_roots.roots[i])) {
+                arb_roots_add_root(roots, real_roots.roots[i],
+                                   factors->exp[factor_idx]);
+            }
+        }
+        arb_roots_clear(&real_roots);
+        acb_roots_clear(&complex_roots);
+        fmpq_poly_clear(rational_factor);
+#endif
     }
 
     fmpz_poly_factor_clear(factors);

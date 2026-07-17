@@ -11,7 +11,24 @@
 #include <flint/fmpz_poly_factor.h>
 #include <flint/acb.h>
 #include <flint/acb_poly.h>
-#include <flint/arb_fmpz_poly.h>
+
+#ifndef DRSOLVE_HAVE_ARB_FMPZ_POLY_REAL_ROOTS
+#  if defined(__FLINT_RELEASE) && (__FLINT_RELEASE >= 30600)
+#    define DRSOLVE_HAVE_ARB_FMPZ_POLY_REAL_ROOTS 1
+#  else
+#    define DRSOLVE_HAVE_ARB_FMPZ_POLY_REAL_ROOTS 0
+#  endif
+#endif
+
+#if defined(__has_include)
+#  if __has_include(<flint/arb_fmpz_poly.h>)
+#    include <flint/arb_fmpz_poly.h>
+#  elif __has_include(<arb_fmpz_poly.h>)
+#    include <arb_fmpz_poly.h>
+#  endif
+#else
+#  include <flint/arb_fmpz_poly.h>
+#endif
 
 #define FMPQ_ROOT_SEARCH_MAX_DEGREE 10
 #define FMPQ_ROOT_SEARCH_AUTO_MAX_CANDIDATES 100
