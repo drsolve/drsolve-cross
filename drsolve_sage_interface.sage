@@ -746,7 +746,14 @@ def _parse_resultant_file(foutput, debug):
         print(content.rstrip())
         print("[debug] --- end ---")
 
-    m = re.search(r"Resultant:\n(.*)", content, re.DOTALL)
+    # The output may contain a roots report after the resultant, separated by
+    # a blank line.  Do not include that diagnostic text in the value returned
+    # to callers.
+    m = re.search(
+        r"Resultant:\s*\n(.*?)(?=\n\s*\n|\Z)",
+        content,
+        re.DOTALL,
+    )
     if not m:
         if debug:
             print("[debug] regex 'Resultant:\\n...' did NOT match")

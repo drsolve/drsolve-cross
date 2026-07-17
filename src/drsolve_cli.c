@@ -2530,7 +2530,9 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     ulong random_seed = 0;
     int random_seed_given = 0;
     int complex_mode = 0;
+    int resultant_only_mode = 0;
     const char *specialize_vars_arg = NULL;
+    int array_limit_k = -1;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--silent") == 0) {
@@ -2543,6 +2545,9 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
             solve_rational_only_mode = 1;
         } else if (strcmp(argv[i], "--complex") == 0) {
             complex_mode = 1;
+        } else if (strcmp(argv[i], "--resultant-only") == 0 ||
+                   strcmp(argv[i], "--no-roots") == 0) {
+            resultant_only_mode = 1;
         } else if (strcmp(argv[i], "--solve") == 0 ||
                    strcmp(argv[i], "-s")      == 0) {
             solve_mode = 1;
@@ -2561,6 +2566,16 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
             field_eq_final_only_mode = 1;
         } else if (strcmp(argv[i], "--time") == 0) {
             time_mode = 1;
+        } else if (strcmp(argv[i], "--array-limit-k") == 0 && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (!endptr || *endptr != '\0' || val < 0 || val >= (long)(8 * sizeof(ulong) - 1)) {
+                fprintf(stderr, "Error: --array-limit-k expects an integer k in [0,%zu].\n",
+                        8 * sizeof(ulong) - 2);
+                return 1;
+            }
+            array_limit_k = (int) val;
+            i++;
         } else if (strcmp(argv[i], "--no-rational-root-scan") == 0) {
             rational_root_scan_mode = RATIONAL_ROOT_SCAN_OFF;
             rational_root_scan_mode_explicit = 1;
@@ -2803,6 +2818,8 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
         }
     }
 
+    gf2n_mpoly_set_array_limit_k(array_limit_k);
+
     int silent_mode = (verbose_level == 0);
     int solve_verbose_mode = (verbose_level >= 2);
     int debug_mode = (verbose_level >= 2);
@@ -2853,6 +2870,7 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     char *vars_str_override = NULL;
     char *specialized_polys_str = NULL;
     const char *effective_polys_str = NULL;
+    int complex_solutions_initialized = 0;
     int   vars_str_generated = 0;
     int   need_free     = 0;
     int   rand_generated = 0;  /* 1 = polys_str/vars_str were malloc'd by random gen */
@@ -3160,6 +3178,11 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     }
     if (complex_mode && !rational_mode) {
         fprintf(stderr, "Error: --complex is only supported for field_size=0.\n");
+        goto cleanup_fail;
+    }
+    if (resultant_only_mode && (solve_mode || comp_mode || ideal_str)) {
+        fprintf(stderr,
+                "Error: --resultant-only is supported only in resultant/elimination mode.\n");
         goto cleanup_fail;
     }
     if (large_prime_mode) {
@@ -3536,11 +3559,11 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     rational_solutions_t *rational_solutions = NULL;
     large_prime_solutions_t *large_prime_solutions = NULL;
     complex_solver_solution_list_t complex_solutions;
-    int complex_solutions_initialized = 0;
 
     effective_polys_str = polys_str;
 
     dixon_clear_last_root_report();
+    dixon_set_suppress_root_reporting(resultant_only_mode);
     dixon_set_print_complex_roots(complex_mode);
     complex_solver_solution_list_init(&complex_solutions);
     complex_solutions_initialized = 1;
@@ -3742,7 +3765,12 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
         }
 
         if (rational_mode) {
-            if (output_filename) {
+            if (resultant_only_mode && output_filename) {
+                result = dixon_str_rational_resultant_only_with_file(polys_str, vars_str,
+                                                                     output_filename);
+            } else if (resultant_only_mode) {
+                result = dixon_str_rational_resultant_only(polys_str, vars_str);
+            } else if (output_filename) {
                 result = dixon_str_rational_with_file(polys_str, vars_str, output_filename);
             } else {
                 result = dixon_str_rational(polys_str, vars_str);
@@ -3868,6 +3896,15 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
         }
     } else {
         if (result) {
+            slong resultant_terms = dixon_get_last_resultant_term_count();
+            if (resultant_only_mode && silent_mode &&
+                resultant_terms >= 0 && resultant_terms < 100) {
+                printf("%s\n", result);
+            }
+            if (resultant_only_mode && large_prime_mode && !silent_mode &&
+                resultant_terms >= 0 && resultant_terms < 100) {
+                printf("Final Resultant over target field = %s\n", result);
+            }
             if (output_filename && !rational_mode) {
                 save_result_to_file(output_filename, polys_str, vars_str,
                                     ideal_str, allvars_str, p_fmpz, power,
@@ -3875,7 +3912,7 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
                 if (!silent_mode)
                     printf("\nResult saved to: %s\n", output_filename);
                 
-                FILE *fp_append = fopen(output_filename, "a");
+                FILE *fp_append = resultant_only_mode ? NULL : fopen(output_filename, "a");
                 if (fp_append) {
                     if (large_prime_mode) {
                         large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
@@ -3889,11 +3926,11 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
                         }
                     }
                     fclose(fp_append);
-                } else if (large_prime_mode && !silent_mode) {
+                } else if (!resultant_only_mode && large_prime_mode && !silent_mode) {
                     large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
                                                                   p_fmpz, NULL, 1);
                 }
-            } else if (large_prime_mode) {
+            } else if (large_prime_mode && !resultant_only_mode) {
                 large_prime_print_roots_from_resultant_string(result, polys_str, vars_str,
                                                               p_fmpz, NULL, !silent_mode);
             } else if (output_filename && rational_mode) {
@@ -3948,6 +3985,7 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
         complex_solver_solution_list_clear(&complex_solutions);
     }
 
+    dixon_set_suppress_root_reporting(0);
     flint_cleanup_master();
     return 0;
 
@@ -3981,6 +4019,7 @@ cleanup_fail:
     if (complex_solutions_initialized) {
         complex_solver_solution_list_clear(&complex_solutions);
     }
+    dixon_set_suppress_root_reporting(0);
     flint_cleanup_master();
     return 1;
 }

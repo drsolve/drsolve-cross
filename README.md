@@ -54,6 +54,13 @@ Example:
 ```bash
 ./drsolve "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
 ```
+- `--resultant-only` (alias `--no-roots`) skips root analysis over rational and
+  finite fields. Resultants with fewer than 100 terms are also printed; larger
+  resultants are written only to the result file:
+  ```bash
+  ./drsolve --resultant-only "x^2+y^2-1, x-y" "x" 0
+  ./drsolve --resultant-only "x+y, x-y" "x" 257
+  ```
 - Default output file: `out/solution_YYYYMMDD_HHMMSS.dr`
 
 #### Polynomial system solver

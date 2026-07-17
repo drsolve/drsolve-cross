@@ -99,6 +99,8 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
 void print_resultant_summary(const fq_mvpoly_t *result, char **remaining_vars, slong num_remaining_vars);
 void dixon_clear_last_root_report(void);
 const char *dixon_get_last_root_report(void);
+void dixon_set_suppress_root_reporting(int enabled);
+slong dixon_get_last_resultant_term_count(void);
 void dixon_set_print_complex_roots(int enabled);
 int dixon_get_print_complex_roots(void);
 
@@ -126,6 +128,14 @@ char* dixon_str_rational_with_file(const char *poly_string,
 
 char* dixon_str_rational(const char *poly_string,
                          const char *vars_string);
+
+/* Exact rational Dixon resultant without univariate root analysis. */
+char* dixon_str_rational_resultant_only_with_file(const char *poly_string,
+                                                  const char *vars_string,
+                                                  const char *output_filename);
+
+char* dixon_str_rational_resultant_only(const char *poly_string,
+                                        const char *vars_string);
 
 char* dixon_str_large_prime(const char *poly_string,
                             const char *vars_string,

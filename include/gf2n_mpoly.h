@@ -6,6 +6,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+/* Optional process-wide override for optimized array multiplication limits.
+ * A negative value keeps each field's compiled-in default. */
+extern int gf2n_mpoly_array_limit_k;
+void gf2n_mpoly_set_array_limit_k(int k);
 #include <time.h>
 #include <sys/time.h>
 

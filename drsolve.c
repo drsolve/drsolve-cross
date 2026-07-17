@@ -9,7 +9,7 @@
 #include "drsolve_cli.h"
 #include "fmpq_acb_roots.h"
 
-#define PROGRAM_VERSION "0.4.1"
+#define PROGRAM_VERSION "0.4.2"
 #define DEFAULT_OUTPUT_DIR "out"
 
 /* =========================================================================
@@ -74,6 +74,7 @@ static void print_short_usage(const char *prog_name)
     printf("  --field-equation  After each multiplication, reduces x^q -> x for every variable\n");
     printf("  --ideal <args>    After each multiplication, reduces using the given substitution\n");
     printf("  --complex         Output complex solutions (2x2 solver or complex roots over Q)\n");
+    printf("  --resultant-only  Output the Dixon resultant and skip root analysis (all fields)\n");
     printf("  --test <n>        Run built-in tests (1: Dixon matrix size, 2: Bezout bound, 3: solver correctness, 4: performance)\n");
     printf("  --time            Print per-step timing information\n");
     printf("  -v, --verbose <n> Verbosity level (0:silent, 1:default, 2:detailed, 3:debug)\n");
@@ -89,6 +90,7 @@ void drsolve_cli_print_usage(const char *prog_name)
     printf("    %s -o output.dr \"polynomials\" \"eliminate_vars\" field_size\n", prog_name);
     printf("    Example: %s \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s \"x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z\" \"x,y\" 0\n", prog_name);
+    printf("    Example: %s --resultant-only \"x^2+y^2-1, x-y\" \"x\" 0\n", prog_name);
     printf("    Example: %s -o out/elimination.dr \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> Default output file: %s/solution_YYYYMMDD_HHMMSS.dr\n", DEFAULT_OUTPUT_DIR);
     printf("\n");
@@ -254,12 +256,14 @@ void drsolve_cli_print_usage(const char *prog_name)
     printf("    Example: %s --fq-det-method hnf \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s --step1 4 --step4 4 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s --cache 256 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
+    printf("    Example: %s --array-limit-k 16 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s --fast-ksy --fast-ksy-col 0 --method 5 \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    Example: %s --step3-verify-second \"x+y+z, x*y+y*z+z*x, x*y*z+1\" \"x,y\" 257\n", prog_name);
     printf("    -> Available methods: 0.Minor expansion; 1.HNF; 2.Interpolation; 3.Sparse interpolation; 4.Bareiss; 5.Recursive Dixon construction; 6.Balanced split Laplace (experimental)\n");
     printf("    -> --method sets both step 1 and step 4 for backward compatibility\n");
     printf("    -> --fq-det-method (auto|hnf|iter) controls the prime-field univariate polynomial-matrix determinant backend used in fq_poly_mat_det\n");
     printf("    -> --cache sets the determinant memoization cache entry cap (method 0 / unified expansion path)\n");
+    printf("    -> --array-limit-k <k> caps optimized extension-field array multiplication tables at 2^k entries (0-62)\n");
     printf("    -> --fast-ksy enables a KSY precondition check for method 5 submatrix extraction; --no-fast-ksy disables it\n");
     printf("    -> --fast-ksy-col <idx> selects which fast-Dixon column is treated as the constant column for the KSY check (default: 0)\n");
     printf("    -> --step3-verify-second enables the second Step 3 verification pass; default is off\n");
@@ -299,6 +303,8 @@ static int validate_cli_options(int argc, char *argv[])
         {"solve-verbose", no_argument, NULL, OPT_FLAG},
         {"solve-rational-only", no_argument, NULL, OPT_FLAG},
         {"complex", no_argument, NULL, OPT_FLAG},
+        {"resultant-only", no_argument, NULL, OPT_FLAG},
+        {"no-roots", no_argument, NULL, OPT_FLAG},
         {"solve", no_argument, NULL, 's'},
         {"comp", no_argument, NULL, 'c'},
         {"complexity", no_argument, NULL, 'c'},
@@ -330,6 +336,7 @@ static int validate_cli_options(int argc, char *argv[])
         {"step4", required_argument, NULL, OPT_FLAG},
         {"threads", required_argument, NULL, OPT_FLAG},
         {"cache", required_argument, NULL, OPT_FLAG},
+        {"array-limit-k", required_argument, NULL, OPT_FLAG},
         {"nvars", required_argument, NULL, 'n'},
         {"num-vars", required_argument, NULL, 'n'},
         {"density", required_argument, NULL, OPT_FLAG},

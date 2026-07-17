@@ -15,6 +15,7 @@
 
 static int g_suppress_univariate_root_reporting = 0;
 static int g_suppress_rational_root_reporting = 0;
+static slong g_last_resultant_term_count = -1;
 static char *g_last_root_report = NULL;
 static int g_dixon_print_complex_roots = 0;
 
@@ -352,11 +353,23 @@ void dixon_clear_last_root_report(void)
         free(g_last_root_report);
         g_last_root_report = NULL;
     }
+    g_last_resultant_term_count = -1;
 }
 
 const char *dixon_get_last_root_report(void)
 {
     return g_last_root_report;
+}
+
+void dixon_set_suppress_root_reporting(int enabled)
+{
+    g_suppress_univariate_root_reporting = enabled ? 1 : 0;
+    g_suppress_rational_root_reporting = enabled ? 1 : 0;
+}
+
+slong dixon_get_last_resultant_term_count(void)
+{
+    return g_last_resultant_term_count;
 }
 
 void dixon_set_print_complex_roots(int enabled)
@@ -844,6 +857,9 @@ void find_and_print_roots_of_univariate_resultant_with_file(const fq_mvpoly_t *r
     size_t root_report_len = 0;
     size_t root_report_cap = 0;
 
+    if (result) {
+        g_last_resultant_term_count = result->nterms;
+    }
     if (g_suppress_univariate_root_reporting) {
         return;
     }
@@ -2175,7 +2191,8 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
                                                           qq_poly_recon_t *best_recon_out,
                                                           int *have_best_recon_out,
                                                           const char *output_filename,
-                                                          slong max_prime_budget_override) {
+                                                          slong max_prime_budget_override,
+                                                          int resultant_only) {
     const slong initial_prime_budget = 8;
     const slong default_max_prime_budget = 64;
     const slong min_primes_before_stopping = 4;
@@ -2332,12 +2349,16 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     double computation_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
     
     // Check number of terms in the resultant
-    const slong MAX_DISPLAY_TERMS = 10;
+    const slong MAX_DISPLAY_TERMS = 100;
     if (have_best_recon) {
-        if (best_recon.nterms <= MAX_DISPLAY_TERMS && strcmp(best_result, "0") != 0) {
+        g_last_resultant_term_count = best_recon.nterms;
+        if (resultant_only && best_recon.nterms < MAX_DISPLAY_TERMS) {
             printf("Final Resultant = %s\n", best_result);
-        } else if (best_recon.nterms > MAX_DISPLAY_TERMS) {
-            printf("Final Resultant has %ld terms (not displayed)\n", best_recon.nterms);
+        } else if (!resultant_only && best_recon.nterms < MAX_DISPLAY_TERMS && strcmp(best_result, "0") != 0) {
+            printf("Final Resultant = %s\n", best_result);
+        } else if (best_recon.nterms >= MAX_DISPLAY_TERMS) {
+            printf("Final Resultant has %ld terms (written to the result file, not displayed)\n",
+                   best_recon.nterms);
         }
     }
     
@@ -2346,13 +2367,13 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     }
     
     FILE *fp_file = NULL;
-    if (!g_suppress_rational_root_reporting && output_filename && have_best_recon && strcmp(best_result, "0") != 0) {
+    if (!resultant_only && !g_suppress_rational_root_reporting && output_filename && have_best_recon && strcmp(best_result, "0") != 0) {
         fp_file = fopen(output_filename, "a");
         find_and_print_rational_roots_of_univariate_resultant(&best_recon, fp_file);
         if (fp_file) {
             fclose(fp_file);
         }
-    } else if (!g_suppress_rational_root_reporting && have_best_recon && strcmp(best_result, "0") != 0) {
+    } else if (!resultant_only && !g_suppress_rational_root_reporting && have_best_recon && strcmp(best_result, "0") != 0) {
         find_and_print_rational_roots_of_univariate_resultant(&best_recon, NULL);
     }
 
@@ -2376,7 +2397,7 @@ static char *qq_reconstruct_from_modular_dixon(const char *poly_string,
                                                int *have_best_recon_out) {
     return qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
                                                        best_recon_out, have_best_recon_out,
-                                                       NULL, 64);
+                                                       NULL, 64, 0);
 }
 
 static void find_and_print_rational_roots_of_univariate_resultant(const qq_poly_recon_t *acc, FILE *fp_file) {
@@ -2607,7 +2628,7 @@ char* dixon_str_rational_with_file(const char *poly_string,
 
     best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
                                                               &best_recon, &have_best_recon,
-                                                              output_filename, 64);
+                                                              output_filename, 64, 0);
     
     if (have_best_recon) {
         qq_poly_recon_clear(&best_recon);
@@ -2618,6 +2639,27 @@ char* dixon_str_rational_with_file(const char *poly_string,
 char* dixon_str_rational(const char *poly_string,
                          const char *vars_string) {
     return dixon_str_rational_with_file(poly_string, vars_string, NULL);
+}
+
+char* dixon_str_rational_resultant_only_with_file(const char *poly_string,
+                                                  const char *vars_string,
+                                                  const char *output_filename) {
+    qq_poly_recon_t best_recon;
+    char *best_result;
+    int have_best_recon = 0;
+
+    best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
+                                                              &best_recon, &have_best_recon,
+                                                              output_filename, 64, 1);
+    if (have_best_recon) {
+        qq_poly_recon_clear(&best_recon);
+    }
+    return best_result;
+}
+
+char* dixon_str_rational_resultant_only(const char *poly_string,
+                                        const char *vars_string) {
+    return dixon_str_rational_resultant_only_with_file(poly_string, vars_string, NULL);
 }
 
 char* dixon_str_large_prime(const char *poly_string,
@@ -2632,7 +2674,7 @@ char* dixon_str_large_prime(const char *poly_string,
     g_suppress_rational_root_reporting = 1;
     best_result = qq_reconstruct_from_modular_dixon_with_file(poly_string, vars_string,
                                                               &best_recon, &have_best_recon,
-                                                              NULL, 256);
+                                                              NULL, 256, 0);
     g_suppress_rational_root_reporting = 0;
 
     if (!best_result) {
@@ -3072,7 +3114,7 @@ char* bivariate_resultant(const char *poly1_str, const char *poly2_str,
     }
 
     if (g_dixon_verbose_level >= 1) {
-        if (result_mvpoly.nterms <= 100) {
+        if (result_mvpoly.nterms < 100) {
             fq_mvpoly_print_with_names(&result_mvpoly, "  Final Resultant",
                                        NULL, state.par_names, gen_name, 0);
         } else {

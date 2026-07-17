@@ -4382,7 +4382,7 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                            ((double)(clock() - step4_cpu_start) / CLOCKS_PER_SEC),
                                            get_wall_time() - step4_wall_start);
         
-        if (result->nterms <= 100) {
+        if (result->nterms < 100) {
             fq_mvpoly_print(result, "  Final Resultant");
         } else {
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);
@@ -4499,7 +4499,7 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                                            ((double)(clock() - step4_cpu_start) / CLOCKS_PER_SEC),
                                            get_wall_time() - step4_wall_start);
         
-        if (result->nterms <= 100) {
+        if (result->nterms < 100) {
             fq_mvpoly_print_with_names(result, "  Final Resultant", NULL, par_names, gen_name, 0);
         } else {
             dixon_info_log("  Final resultant too large to display (%ld terms)\n", result->nterms);

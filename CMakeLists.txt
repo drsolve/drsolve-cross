@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 project(drsolve
-  VERSION 0.4.1
+  VERSION 0.4.2
   DESCRIPTION "DRsolve: Dixon Resultant & Polynomial System Solver"
   LANGUAGES C
 )
@@ -867,6 +867,22 @@ add_test(NAME drsolve_basic
 add_test(NAME drsolve_basic_rational
   COMMAND drsolve_exe "x^2+y^2+z^2-1, x^2+y^2-2*z^2, x+y+z" "x,y" 0
   WORKING_DIRECTORY ${_test_wd}
+)
+add_test(NAME drsolve_rational_resultant_only
+  COMMAND drsolve_exe --silent --resultant-only "x+y, x-y" "x" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_rational_resultant_only PROPERTIES
+  PASS_REGULAR_EXPRESSION "y"
+  FAIL_REGULAR_EXPRESSION "Roots in|Approximate real roots|Rational roots"
+)
+add_test(NAME drsolve_finite_resultant_only
+  COMMAND drsolve_exe --silent --resultant-only "x+y, x-y" "x" 257
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_finite_resultant_only PROPERTIES
+  PASS_REGULAR_EXPRESSION "y"
+  FAIL_REGULAR_EXPRESSION "Roots in|Found roots|Root"
 )
 add_test(NAME drsolve_solve
   COMMAND drsolve_exe --solve "x^2+y^2+z^2-6, x+y+z-4, x*y*z-x-1" 257

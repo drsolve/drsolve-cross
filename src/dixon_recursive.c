@@ -2421,7 +2421,7 @@ static void fq_dixon_fast_resultant_common(fq_mvpoly_t *result, fq_mvpoly_t *pol
         fq_mvpoly_make_monic(result);
         print_resultant_summary(result, par_names, npars);
 
-        if (result->nterms <= 100) {
+        if (result->nterms < 100) {
             if (var_names || par_names || gen_name) {
                 fq_mvpoly_print_with_names(result, "  Final Resultant",
                                            NULL, par_names, gen_name, 0);

@@ -3,6 +3,13 @@
  */
 
 #include "gf2n_mpoly.h"
+
+int gf2n_mpoly_array_limit_k = -1;
+
+void gf2n_mpoly_set_array_limit_k(int k)
+{
+    gf2n_mpoly_array_limit_k = k;
+}
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -277,7 +284,9 @@ static int _##FIELD##_mpoly_mul_array_LEX(                                    \
         if (hi != 0 || (slong)mults[i] <= 0 || array_size <= 0)              \
             { flint_free(mults); return 0; }                                   \
     }                                                                          \
-    if (array_size > ARRAY_LIMIT) { flint_free(mults); return 0; }            \
+    if (array_size > (gf2n_mpoly_array_limit_k >= 0 ?                         \
+                      (WORD(1) << gf2n_mpoly_array_limit_k) : ARRAY_LIMIT))  \
+        { flint_free(mults); return 0; }                                      \
     flint_bitcnt_t exp_bits = FLINT_MAX(MPOLY_MIN_BITS,                       \
         FLINT_BIT_COUNT(max) + 1);                                             \
     exp_bits = mpoly_fix_bits(exp_bits, ctx->minfo);                          \
@@ -367,7 +376,9 @@ static int FIELD##_mpolyd_set_degbounds(FIELD##_mpolyd_t A, const slong *bounds)
         if (size > WORD_MAX / bounds[i]) return 0;                             \
         size *= bounds[i];                                                     \
     }                                                                          \
-    if (size > (1L << 26)) return 0;                                           \
+    if (size > (gf2n_mpoly_array_limit_k >= 0 ?                               \
+                (WORD(1) << gf2n_mpoly_array_limit_k) : (1L << 26)))         \
+        return 0;                                                              \
     A->alloc = size;                                                           \
     A->coeffs = (COEFF_T *)calloc(size, sizeof(COEFF_T));                     \
     return A->coeffs != NULL;                                                  \
@@ -1333,7 +1344,9 @@ int _gf28_mpoly_mul_array_LEX(gf28_mpoly_t A,
         if (hi != 0 || (slong)mults[i] <= 0 || array_size <= 0)
             { success = 0; goto cleanup; }
     }
-    if (array_size > (1L << 28)) { success = 0; goto cleanup; }
+    if (array_size > (gf2n_mpoly_array_limit_k >= 0 ?
+                      (WORD(1) << gf2n_mpoly_array_limit_k) : (1L << 28)))
+        { success = 0; goto cleanup; }
 
     exp_bits = FLINT_MAX(MPOLY_MIN_BITS, FLINT_BIT_COUNT(max) + 1);
     exp_bits = mpoly_fix_bits(exp_bits, ctx->minfo);
@@ -1460,7 +1473,8 @@ int gf28_mpolyd_set_degbounds(gf28_mpolyd_t A, const slong *bounds) {
         if (size > WORD_MAX / bounds[i]) return 0;
         size *= bounds[i];
     }
-    if (size > (1L << 28)) return 0;
+    if (size > (gf2n_mpoly_array_limit_k >= 0 ?
+                (WORD(1) << gf2n_mpoly_array_limit_k) : (1L << 28))) return 0;
     A->alloc = size;
     A->coeffs = (uint8_t *)calloc(size, sizeof(uint8_t));
     return A->coeffs != NULL;
@@ -2119,7 +2133,9 @@ static int _gf24_mpoly_mul_array_LEX(gf24_mpoly_t A,
         if (hi != 0 || (slong) mults[i] <= 0 || array_size <= 0)
             { success = 0; goto cleanup; }
     }
-    if (array_size > (1L << 28)) { success = 0; goto cleanup; }
+    if (array_size > (gf2n_mpoly_array_limit_k >= 0 ?
+                      (WORD(1) << gf2n_mpoly_array_limit_k) : (1L << 28)))
+        { success = 0; goto cleanup; }
 
     exp_bits = FLINT_MAX(MPOLY_MIN_BITS, FLINT_BIT_COUNT(max) + 1);
     exp_bits = mpoly_fix_bits(exp_bits, ctx->minfo);
