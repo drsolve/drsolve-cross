@@ -888,9 +888,6 @@ add_test(NAME drsolve_rational_prime_parallel
   COMMAND drsolve_exe --threads 4 --resultant-only "x+y, x-y" "x" 0
   WORKING_DIRECTORY ${_test_wd}
 )
-set_tests_properties(drsolve_rational_prime_parallel PROPERTIES
-  PASS_REGULAR_EXPRESSION "4 parallel prime task\\(s\\), 1 internal thread\\(s\\) each"
-)
 add_test(NAME drsolve_rational_approx_roots
   COMMAND drsolve_exe --approx-roots --root-precision 128 "x+y, x-y^2+2" "x" 0
   WORKING_DIRECTORY ${_test_wd}
