@@ -915,6 +915,13 @@ add_test(NAME drsolve_solve_linear
   COMMAND drsolve_exe --solve "x+y-3, x-y+1" 257
   WORKING_DIRECTORY ${_test_wd}
 )
+add_test(NAME drsolve_rational_numeric_backsolve
+  COMMAND drsolve_exe --solve "x^2-2, y-x" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_rational_numeric_backsolve PROPERTIES
+  PASS_REGULAR_EXPRESSION "Found 2 approximate real solution set\\(s\\)"
+)
 add_test(NAME drsolve_comp
   COMMAND drsolve_exe --comp "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 257
   WORKING_DIRECTORY ${_test_wd}

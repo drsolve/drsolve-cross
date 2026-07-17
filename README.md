@@ -78,6 +78,9 @@ Example:
   Both default and approximate real-root modes report a dimensionless normalized
   residual interval, scaling by `sum |a_i| max(1, |x|)^i` so large reconstructed
   integer coefficients do not make the residual unreadable.
+- Rational numeric back-substitution compiles polynomial strings once, evaluates
+  analytic Jacobians by reverse automatic differentiation, and tries sparse
+  axis seeds before falling back to the full Cartesian seed grid.
 - Default output file: `out/solution_YYYYMMDD_HHMMSS.dr`
 
 #### Polynomial system solver
