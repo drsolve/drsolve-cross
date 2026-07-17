@@ -1194,6 +1194,264 @@ static int append_signed_monomial_text(char **buffer,
     return 1;
 }
 
+
+static int append_fmpz_monomial_text(char **buffer,
+                                     size_t *capacity,
+                                     size_t *length,
+                                     const fmpz_t coeff,
+                                     const slong *exp,
+                                     slong nvars,
+                                     int *first_term)
+{
+    int has_var = 0;
+    char *coeff_str = NULL;
+
+    if (!buffer || !capacity || !length || !first_term) return 0;
+    if (fmpz_is_zero(coeff)) return 0;
+
+    for (slong j = 0; j < nvars; j++) {
+        if (exp[j] != 0) {
+            has_var = 1;
+            break;
+        }
+    }
+
+    if (!*first_term) {
+        if (!append_text(buffer, capacity, length, " + ")) return 0;
+    }
+
+    if (!fmpz_is_one(coeff) || !has_var) {
+        coeff_str = fmpz_get_str(NULL, 10, coeff);
+        if (!coeff_str) return 0;
+        if (!append_text(buffer, capacity, length, coeff_str)) {
+            flint_free(coeff_str);
+            return 0;
+        }
+        flint_free(coeff_str);
+    }
+
+    if (has_var) {
+        int wrote_any_var = 0;
+
+        for (slong j = 0; j < nvars; j++) {
+            char piece[64];
+
+            if (exp[j] == 0) continue;
+
+            if (!fmpz_is_one(coeff) || wrote_any_var) {
+                if (!append_text(buffer, capacity, length, "*")) return 0;
+            }
+
+            snprintf(piece, sizeof(piece), "x%ld", j);
+            if (!append_text(buffer, capacity, length, piece)) return 0;
+
+            if (exp[j] != 1) {
+                snprintf(piece, sizeof(piece), "^%ld", exp[j]);
+                if (!append_text(buffer, capacity, length, piece)) return 0;
+            }
+            wrote_any_var = 1;
+        }
+    }
+
+    *first_term = 0;
+    return 1;
+}
+
+static int generate_random_poly_strings_large_prime(
+        const long *degrees, slong npolys,
+        slong nvars,
+        slong num_elim_vars,
+        double density_ratio,
+        int seed_given,
+        ulong seed,
+        const fmpz_t prime,
+        int silent_mode,
+        char **polys_str_out,
+        char **elim_vars_str_out,
+        char **all_vars_str_out)
+{
+    char *all_vars = NULL;
+    char *elim_vars = NULL;
+    char *remaining_vars = NULL;
+    char *polys_str = NULL;
+    size_t polys_cap = 0;
+    size_t polys_len = 0;
+    flint_rand_t rstate;
+    int rand_initialized = 0;
+
+    if (!degrees || npolys <= 0 || nvars <= 0 ||
+        num_elim_vars < 0 || num_elim_vars > nvars ||
+        !prime || fmpz_cmp_ui(prime, 2) < 0) {
+        return 0;
+    }
+
+    if (!build_random_system_strings(nvars, num_elim_vars,
+                                     &elim_vars, &all_vars, &remaining_vars)) {
+        return 0;
+    }
+
+    flint_rand_init(rstate);
+    rand_initialized = 1;
+    if (seed_given) {
+        flint_rand_set_seed(rstate, seed, seed + 1);
+    } else {
+        ulong seed1 = (ulong) time(NULL);
+        ulong seed2 = seed1 ^ (ulong) clock();
+        flint_rand_set_seed(rstate, seed1, seed2);
+    }
+
+    if (!silent_mode)
+        printf("Generating random polynomial system over a large prime field...\n");
+
+    for (slong i = 0; i < npolys; i++) {
+        monomial_t *monomials = NULL;
+        slong monomial_count = 0;
+        slong degree = degrees[i] > 0 ? degrees[i] : 1;
+        slong target_terms;
+        slong *indices = NULL;
+        slong leading_idx = -1;
+        char *poly_buf = NULL;
+        size_t poly_cap = 0;
+        size_t poly_len = 0;
+        int first_term = 1;
+        slong selected = 0;
+        fmpz_t coeff;
+
+        fmpz_init(coeff);
+        enumerate_all_monomials(&monomials, &monomial_count, nvars, degree);
+        if (!monomials || monomial_count <= 0) {
+            fmpz_clear(coeff);
+            free_enumerated_monomials(monomials, monomial_count);
+            goto fail;
+        }
+
+        target_terms = (slong) (density_ratio * monomial_count);
+        if (target_terms < 1) target_terms = 1;
+        if (target_terms > monomial_count) target_terms = monomial_count;
+
+        indices = (slong *) malloc((size_t) monomial_count * sizeof(slong));
+        if (!indices) {
+            fmpz_clear(coeff);
+            free_enumerated_monomials(monomials, monomial_count);
+            goto fail;
+        }
+
+        for (slong j = 0; j < monomial_count; j++) {
+            indices[j] = j;
+        }
+        for (slong j = monomial_count - 1; j > 0; j--) {
+            slong k = (slong) n_randint(rstate, (ulong) (j + 1));
+            slong tmp = indices[j];
+            indices[j] = indices[k];
+            indices[k] = tmp;
+        }
+
+        for (slong j = 0; j < monomial_count; j++) {
+            if (monomials[indices[j]].total_degree == degree) {
+                leading_idx = indices[j];
+                break;
+            }
+        }
+        if (leading_idx < 0) leading_idx = indices[0];
+
+        do {
+            fmpz_randm(coeff, rstate, prime);
+        } while (fmpz_is_zero(coeff));
+
+        if (!append_fmpz_monomial_text(&poly_buf, &poly_cap, &poly_len,
+                                       coeff, monomials[leading_idx].exponents,
+                                       nvars, &first_term)) {
+            fmpz_clear(coeff);
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            goto fail;
+        }
+        selected++;
+
+        for (slong j = 0; j < monomial_count && selected < target_terms; j++) {
+            slong idx = indices[j];
+
+            if (idx == leading_idx) continue;
+
+            do {
+                fmpz_randm(coeff, rstate, prime);
+            } while (fmpz_is_zero(coeff));
+
+            if (!append_fmpz_monomial_text(&poly_buf, &poly_cap, &poly_len,
+                                           coeff, monomials[idx].exponents,
+                                           nvars, &first_term)) {
+                fmpz_clear(coeff);
+                free(indices);
+                free(poly_buf);
+                free_enumerated_monomials(monomials, monomial_count);
+                goto fail;
+            }
+            selected++;
+        }
+
+        if (i > 0 &&
+            !append_text(&polys_str, &polys_cap, &polys_len, ", ")) {
+            fmpz_clear(coeff);
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            goto fail;
+        }
+
+        if (!append_text(&polys_str, &polys_cap, &polys_len,
+                         poly_buf ? poly_buf : "0")) {
+            fmpz_clear(coeff);
+            free(indices);
+            free(poly_buf);
+            free_enumerated_monomials(monomials, monomial_count);
+            goto fail;
+        }
+
+        fmpz_clear(coeff);
+        free(indices);
+        free(poly_buf);
+        free_enumerated_monomials(monomials, monomial_count);
+    }
+
+    if (!silent_mode) {
+        printf("System: %ld equations, %ld variables\n", npolys, nvars);
+        printf("Degrees: [");
+        for (slong i = 0; i < npolys; i++) {
+            if (i > 0) printf(", ");
+            printf("%ld", degrees[i]);
+        }
+        printf("]\n");
+        printf("Density: %.2f%% of all monomials up to each polynomial degree\n",
+               density_ratio * 100.0);
+        if (seed_given) {
+            printf("Seed: %lu\n", seed);
+        }
+        if (num_elim_vars > 0) {
+            printf("Eliminate: %s\n", elim_vars);
+        }
+        if (strlen(remaining_vars) > 0) {
+            printf("Remaining: %s\n", remaining_vars);
+        }
+    }
+
+    free(remaining_vars);
+    flint_rand_clear(rstate);
+
+    *polys_str_out = polys_str;
+    *elim_vars_str_out = elim_vars;
+    *all_vars_str_out = all_vars;
+    return 1;
+
+fail:
+    free(polys_str);
+    free(all_vars);
+    free(elim_vars);
+    free(remaining_vars);
+    if (rand_initialized) flint_rand_clear(rstate);
+    return 0;
+}
+
 static char *build_random_system_spec(const char *deg_spec,
                                       slong nvars,
                                       double density_ratio,
@@ -3220,10 +3478,6 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
             fprintf(stderr, "Error: large prime fallback currently does not support --field-equation or --field-equation-s.\n");
             goto cleanup_fail;
         }
-        if (rand_mode) {
-            fprintf(stderr, "Error: large prime fallback currently does not support --random.\n");
-            goto cleanup_fail;
-        }
         if (comp_mode) {
             fprintf(stderr, "Error: large prime fallback currently does not support --comp.\n");
             goto cleanup_fail;
@@ -3395,6 +3649,15 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
                                    nvars_rand, num_elim_rand,
                                    random_density,
                                    random_seed_given, random_seed,
+                                   silent_mode,
+                                   &gen_polys, &gen_elim, &gen_allvars);
+            } else if (large_prime_mode) {
+                generated_ok = generate_random_poly_strings_large_prime(
+                                   degrees_rand, npolys_rand,
+                                   nvars_rand, num_elim_rand,
+                                   random_density,
+                                   random_seed_given, random_seed,
+                                   p_fmpz,
                                    silent_mode,
                                    &gen_polys, &gen_elim, &gen_allvars);
             } else {
