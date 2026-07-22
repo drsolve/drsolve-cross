@@ -24,8 +24,6 @@ typedef struct {
     double elapsed;
 } my_timer_t;
 
-extern flint_rand_t global_state;
-
 typedef struct {
     nmod_mpoly_struct** entries;
     slong rows;

@@ -592,6 +592,8 @@ void fq_mvpoly_print_enhanced(const fq_mvpoly_t *poly, const char *name,
 typedef struct {
     int initialized;
     const fq_nmod_ctx_struct *fq_ctx;
+    ulong prime;
+    slong degree;
     slong total_vars;
     field_ctx_t field_ctx;
     unified_mpoly_ctx_t unified_ctx;
@@ -617,9 +619,13 @@ static unified_mpoly_ctx_t fq_mvpoly_mul_get_cached_unified_ctx(const fq_mvpoly_
                                                                 field_ctx_t **field_ctx_out)
 {
     slong total_vars = poly->nvars + poly->npars;
+    ulong prime = fq_nmod_ctx_prime(poly->ctx);
+    slong degree = fq_nmod_ctx_degree(poly->ctx);
 
     if (!g_fq_mvpoly_mul_unified_cache.initialized ||
         g_fq_mvpoly_mul_unified_cache.fq_ctx != poly->ctx ||
+        g_fq_mvpoly_mul_unified_cache.prime != prime ||
+        g_fq_mvpoly_mul_unified_cache.degree != degree ||
         g_fq_mvpoly_mul_unified_cache.total_vars != total_vars) {
         fq_mvpoly_mul_unified_cache_clear();
 
@@ -627,6 +633,8 @@ static unified_mpoly_ctx_t fq_mvpoly_mul_get_cached_unified_ctx(const fq_mvpoly_
         g_fq_mvpoly_mul_unified_cache.unified_ctx =
             unified_mpoly_ctx_init(total_vars, ORD_LEX, &g_fq_mvpoly_mul_unified_cache.field_ctx);
         g_fq_mvpoly_mul_unified_cache.fq_ctx = poly->ctx;
+        g_fq_mvpoly_mul_unified_cache.prime = prime;
+        g_fq_mvpoly_mul_unified_cache.degree = degree;
         g_fq_mvpoly_mul_unified_cache.total_vars = total_vars;
         g_fq_mvpoly_mul_unified_cache.initialized =
             (g_fq_mvpoly_mul_unified_cache.unified_ctx != NULL);

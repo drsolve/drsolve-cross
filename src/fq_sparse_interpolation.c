@@ -142,8 +142,8 @@ typedef struct {
     char last_reason[256];
 } sparse_recovery_info_t;
 
-flint_rand_t global_state;
-static int global_state_initialized = 0;
+static __thread flint_rand_t global_state;
+static __thread int global_state_initialized = 0;
 
 static void ensure_global_state(void)
 {

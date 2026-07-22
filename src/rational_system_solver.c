@@ -1872,7 +1872,7 @@ static void rational_recover_exact_solutions_from_real_approximations(rational_s
         int recovered = 1;
         for (slong var = 0; var < sols->num_variables; var++) {
             double approx = rational_arb_to_double(sols->real_solution_sets[set][var][0]);
-            if (!rational_recover_fmpq_from_double(approx, 1000L, 1e-4, candidate_values[var])) {
+            if (!rational_recover_fmpq_from_double(approx, 100000L, 1e-4, candidate_values[var])) {
                 recovered = 0;
                 break;
             }
