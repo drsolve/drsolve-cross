@@ -68,6 +68,7 @@ static void print_short_usage(const char *prog_name)
     printf("  --step1, --step4  Override method <n> for specific algorithm steps\n");
     printf("  --cache <num>     Determinant memoization cache entry limit (default: 1024)\n");
     printf("  --threads <num>   Set number of threads for parallel computation\n");
+    printf("  --max-primes <n>  Maximum primes for rational reconstruction (Q default: 64; large-prime fallback: 256)\n");
     printf("  --dixon           Use Dixon resultant (default)\n");
     printf("  --macaulay        Use Macaulay resultant\n");
     printf("  --subres          Use Subresultant (2 polys)\n");
@@ -337,6 +338,7 @@ static int validate_cli_options(int argc, char *argv[])
         {"step1", required_argument, NULL, OPT_FLAG},
         {"step4", required_argument, NULL, OPT_FLAG},
         {"threads", required_argument, NULL, OPT_FLAG},
+        {"max-primes", required_argument, NULL, OPT_FLAG},
         {"cache", required_argument, NULL, OPT_FLAG},
         {"array-limit-k", required_argument, NULL, OPT_FLAG},
         {"nvars", required_argument, NULL, 'n'},

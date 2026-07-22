@@ -2766,6 +2766,7 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     int    det_method_step1 = -1;  /* determinant method override for step 1 */
     int    det_method_step4 = -1;  /* determinant method override for step 4 */
     int    num_threads = -1;  /* number of threads, -1 means use default */
+    slong  rational_reconstruction_max_primes = 0;
     slong  det_cache_limit = 1024;
     resultant_method_t resultant_method = RESULTANT_METHOD_DIXON;
     int resultant_method_explicit = 0;
@@ -3014,6 +3015,18 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
                                 "must be positive integer. Using default.\n", argv[i + 1]);
             }
             i++;          /* skip the value token */
+        } else if ((strcmp(argv[i], "--max-primes") == 0) && i + 1 < argc) {
+            char *endptr = NULL;
+            long val = strtol(argv[i + 1], &endptr, 10);
+            if (!endptr || *endptr != '\0' || val < 1 || val > 1048576) {
+                fprintf(stderr, "Error: --max-primes expects an integer in [1, 1048576].\n");
+                return 1;
+            }
+            rational_reconstruction_max_primes = (slong) val;
+            i++;
+        } else if (strcmp(argv[i], "--max-primes") == 0) {
+            fprintf(stderr, "Error: --max-primes requires a positive integer.\n");
+            return 1;
         } else if ((strcmp(argv[i], "--cache") == 0) && i + 1 < argc) {
             char *endptr = NULL;
             long val = strtol(argv[i + 1], &endptr, 10);
@@ -3835,8 +3848,13 @@ int drsolve_cli_main(int argc, char *argv[], const char *prog_name)
     }
     fq_interpolation_set_threads(num_threads);
     fq_nmod_poly_mat_det_set_threads(num_threads);
+    dixon_set_rational_reconstruction_max_primes(rational_reconstruction_max_primes);
     if (!silent_mode && threads_requested_explicitly && num_threads > 0) {
         printf("Using %d threads\n", num_threads);
+    }
+    if (!silent_mode && rational_reconstruction_max_primes > 0) {
+        printf("Rational reconstruction prime limit: %ld\n",
+               rational_reconstruction_max_primes);
     }
 
     /* ======================================================

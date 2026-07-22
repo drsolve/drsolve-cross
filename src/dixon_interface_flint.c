@@ -22,6 +22,17 @@ static char *g_last_root_report = NULL;
 static int g_dixon_print_complex_roots = 0;
 static int g_dixon_approximate_root_mode = 0;
 static slong g_dixon_approximate_root_precision = 128;
+static slong g_rational_reconstruction_max_primes = 0;
+
+void dixon_set_rational_reconstruction_max_primes(slong max_primes)
+{
+    g_rational_reconstruction_max_primes = max_primes > 0 ? max_primes : 0;
+}
+
+slong dixon_get_rational_reconstruction_max_primes(void)
+{
+    return g_rational_reconstruction_max_primes;
+}
 
 static int qq_root_debug_enabled(void)
 {
@@ -2206,12 +2217,16 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
                                                           const char *output_filename,
                                                           slong max_prime_budget_override,
                                                           int resultant_only) {
-    const slong initial_prime_budget = 8;
-    const slong default_max_prime_budget = 64;
+    const slong default_initial_prime_budget = 8;
+    const slong configured_max_primes = dixon_get_rational_reconstruction_max_primes();
+    const slong default_max_prime_budget = max_prime_budget_override > 0
+        ? max_prime_budget_override : 64;
+    const slong max_prime_budget = configured_max_primes > 0
+        ? configured_max_primes : default_max_prime_budget;
+    const slong initial_prime_budget = FLINT_MIN(default_initial_prime_budget,
+                                                 max_prime_budget);
     const slong min_primes_before_stopping = 4;
     const slong stable_rounds_before_stopping = 3;
-    const slong max_prime_budget = (max_prime_budget_override > initial_prime_budget)
-        ? max_prime_budget_override : default_max_prime_budget;
     ulong *primes = NULL;
     slong num_primes = 0;
     slong prime_budget = initial_prime_budget;
@@ -2403,15 +2418,21 @@ static char *qq_reconstruct_from_modular_dixon_with_file(const char *poly_string
     
     // Check number of terms in the resultant
     const slong MAX_DISPLAY_TERMS = 100;
+    const size_t MAX_DISPLAY_CHARACTERS = 4096;
     if (have_best_recon) {
+        size_t result_length = strlen(best_result);
+        int display_result = best_recon.nterms < MAX_DISPLAY_TERMS &&
+                             result_length <= MAX_DISPLAY_CHARACTERS;
         g_last_resultant_term_count = best_recon.nterms;
-        if (resultant_only && best_recon.nterms < MAX_DISPLAY_TERMS) {
+        if (resultant_only && display_result) {
             printf("Final Resultant = %s\n", best_result);
-        } else if (!resultant_only && best_recon.nterms < MAX_DISPLAY_TERMS && strcmp(best_result, "0") != 0) {
+        } else if (!resultant_only && display_result && strcmp(best_result, "0") != 0) {
             printf("Final Resultant = %s\n", best_result);
-        } else if (best_recon.nterms >= MAX_DISPLAY_TERMS) {
-            printf("Final Resultant has %ld terms (written to the result file, not displayed)\n",
-                   best_recon.nterms);
+        } else if (!display_result) {
+            printf("Final Resultant has %ld terms and %zu characters%s\n",
+                   best_recon.nterms, result_length,
+                   output_filename ? " (written to the result file, not displayed)"
+                                   : " (not displayed)");
         }
     }
     
