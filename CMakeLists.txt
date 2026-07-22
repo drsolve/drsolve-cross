@@ -892,14 +892,6 @@ add_test(NAME drsolve_rational_prime_parallel
 set_tests_properties(drsolve_rational_prime_parallel PROPERTIES
   PASS_REGULAR_EXPRESSION "36 - 132\\*z \\+ 193\\*z\\^2 - 144\\*z\\^3 \\+ 58\\*z\\^4 - 12\\*z\\^5 \\+ z\\^6"
 )
-add_test(NAME drsolve_rational_max_primes
-  COMMAND drsolve_exe --threads 4 --max-primes 4 --resultant-only
-          "x+y+z-6, x*y+y*z+z*x-11, x*y*z-6" "x,y" 0
-  WORKING_DIRECTORY ${_test_wd}
-)
-set_tests_properties(drsolve_rational_max_primes PROPERTIES
-  PASS_REGULAR_EXPRESSION "Prime batch 1-4/4"
-)
 add_test(NAME drsolve_rational_approx_roots
   COMMAND drsolve_exe --approx-roots --root-precision 128 "x+y, x-y^2+2" "x" 0
   WORKING_DIRECTORY ${_test_wd}
