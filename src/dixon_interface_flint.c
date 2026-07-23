@@ -322,7 +322,13 @@ static void qq_lift_real_root_from_power_relation(arb_roots_t *lifted,
         arb_neg(lifted_root, lifted_root);
         qq_arb_roots_add_unique(lifted, lifted_root, mult);
     } else {
-        arb_root_ui(lifted_root, base_root, power, prec);
+        if (arb_is_negative(base_root)) {
+            arb_neg(lifted_root, base_root);
+            arb_root_ui(lifted_root, lifted_root, power, prec);
+            arb_neg(lifted_root, lifted_root);
+        } else {
+            arb_root_ui(lifted_root, base_root, power, prec);
+        }
         qq_arb_roots_add_unique(lifted, lifted_root, mult);
     }
 

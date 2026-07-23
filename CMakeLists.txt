@@ -892,6 +892,14 @@ add_test(NAME drsolve_rational_prime_parallel
 set_tests_properties(drsolve_rational_prime_parallel PROPERTIES
   PASS_REGULAR_EXPRESSION "36 - 132\\*z \\+ 193\\*z\\^2 - 144\\*z\\^3 \\+ 58\\*z\\^4 - 12\\*z\\^5 \\+ z\\^6"
 )
+add_test(NAME drsolve_rational_compressed_negative_root
+  COMMAND drsolve_exe "x+y+z, x*y+y*z+z*x, x*y*z+1" "x,y" 0
+  WORKING_DIRECTORY ${_test_wd}
+)
+set_tests_properties(drsolve_rational_compressed_negative_root PROPERTIES
+  PASS_REGULAR_EXPRESSION "Root 1: -1.*Multiplicity: 2"
+  FAIL_REGULAR_EXPRESSION "nan|\\+inf"
+)
 add_test(NAME drsolve_rational_approx_roots
   COMMAND drsolve_exe --approx-roots --root-precision 128 "x+y, x-y^2+2" "x" 0
   WORKING_DIRECTORY ${_test_wd}
