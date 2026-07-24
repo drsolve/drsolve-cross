@@ -189,6 +189,12 @@ void dixon_complexity_report_from_degrees(dixon_complexity_report_t *report,
                                           const fmpz_t field_order,
                                           double omega);
 
+int dixon_rank_profile_from_degrees(slong **strata_out, slong *strata_len_out,
+                                    slong **hilbert_out, slong *hilbert_len_out,
+                                    slong *sigma_out, slong *rank_out,
+                                    const long *degrees, slong num_polys,
+                                    slong num_elim_vars);
+
 // Complexity extraction functions
 double extract_max_complexity(const char **poly_strings, slong num_polys);
 double extract_max_complexity_str(const char *poly_string);

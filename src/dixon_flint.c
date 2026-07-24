@@ -6,6 +6,7 @@
  */
 
 #include "dixon_flint.h"
+#include "dixon_complexity.h"
 #include <stdarg.h>
 #include <limits.h>
 #include <sys/time.h>
@@ -2007,6 +2008,55 @@ static slong compute_fq_selected_cols_row_max_total_degree(fq_mvpoly_t ***full_m
     return max_degree;
 }
 
+/* Reorder an already selected square minor using the same entry-degree
+   priorities as the degree-aware selector.  The row and column sets remain
+   unchanged, so this cannot invalidate the verified rank certificate. */
+static void reorder_fq_selected_minor_by_degree(fq_mvpoly_t ***full_matrix,
+                                                slong *selected_rows,
+                                                slong *selected_cols,
+                                                slong size,
+                                                slong npars)
+{
+    fq_index_degree_pair *row_degrees;
+    fq_index_degree_pair *col_degrees;
+
+    if (full_matrix == NULL || selected_rows == NULL || selected_cols == NULL ||
+        size <= 1)
+        return;
+
+    row_degrees = (fq_index_degree_pair *)
+        flint_malloc((size_t) size * sizeof(fq_index_degree_pair));
+    col_degrees = (fq_index_degree_pair *)
+        flint_malloc((size_t) size * sizeof(fq_index_degree_pair));
+
+    for (slong i = 0; i < size; i++) {
+        row_degrees[i].index = selected_rows[i];
+        row_degrees[i].degree =
+            compute_fq_selected_cols_row_max_total_degree(
+                full_matrix, selected_rows[i], selected_cols, size, npars);
+    }
+    qsort(row_degrees, (size_t) size, sizeof(fq_index_degree_pair),
+          compare_fq_degrees);
+    for (slong i = 0; i < size; i++) selected_rows[i] = row_degrees[i].index;
+
+    for (slong j = 0; j < size; j++) {
+        col_degrees[j].index = selected_cols[j];
+        col_degrees[j].degree =
+            compute_fq_selected_rows_col_max_total_degree(
+                full_matrix, selected_rows, size, selected_cols[j], npars);
+    }
+    qsort(col_degrees, (size_t) size, sizeof(fq_index_degree_pair),
+          compare_fq_degrees);
+    for (slong j = 0; j < size; j++) selected_cols[j] = col_degrees[j].index;
+
+    dixon_debug_log("  Reordered predicted minor by entry degree "
+                    "(rows %ld..%ld, columns %ld..%ld)\n",
+                    row_degrees[0].degree, row_degrees[size - 1].degree,
+                    col_degrees[0].degree, col_degrees[size - 1].degree);
+    flint_free(row_degrees);
+    flint_free(col_degrees);
+}
+
 // Check if two index arrays are identical
 static int indices_equal(slong *indices1, slong *indices2, slong size) {
     for (slong i = 0; i < size; i++) {
@@ -3816,13 +3866,87 @@ void fill_coefficient_matrix_optimized(fq_mvpoly_t ***full_matrix,
 // Optimized version of find_fq_optimal_maximal_rank_submatrix
 // ============ Extract coefficient matrix ============
 
+static int dixon_build_predicted_mirror_indices(
+    slong **rows_out, slong **cols_out, slong *size_out,
+    const monom_t *row_monoms, slong nrows,
+    const monom_t *col_monoms, slong ncols,
+    hash_entry_t **row_index, slong row_hash_size,
+    hash_entry_t **col_index, slong col_hash_size,
+    slong nvars, const slong *H, slong h_len,
+    slong sigma, slong dmin, slong predicted)
+{
+    unsigned char *standard = NULL, *selected = NULL;
+    slong *rows = NULL, *cols = NULL, *degree = NULL, *tmp_exp = NULL;
+    slong count = 0;
+
+    if (!rows_out || !cols_out || !size_out || !H || predicted <= 0) return 0;
+    standard = flint_calloc((size_t) ncols, 1);
+    selected = flint_calloc((size_t) ncols, 1);
+    degree = flint_malloc((size_t) ncols * sizeof(slong));
+    tmp_exp = flint_malloc((size_t) nvars * sizeof(slong));
+    if (!standard || !selected || !degree || !tmp_exp) goto fail;
+
+    for (slong j = 0; j < ncols; j++) {
+        degree[j] = 0;
+        for (slong v = 0; v < nvars; v++) degree[j] += col_monoms[j].exp[v];
+    }
+
+    /* Monomial collection order is deterministic; within each degree its
+       first H_e entries serve as the experimental almost-revlex staircase. */
+    for (slong e = 0; e < h_len; e++) {
+        slong need = H[e];
+        for (slong j = 0; j < ncols && need > 0; j++) {
+            if (degree[j] == e) { standard[j] = 1; need--; }
+        }
+        if (need != 0) goto fail;
+    }
+
+    for (slong j = 0; j < ncols; j++) {
+        slong t = degree[j];
+        if (standard[j] || (t >= dmin && 2 * t <= sigma && !standard[j]))
+            selected[j] = 1;
+    }
+    for (slong j = 0; j < ncols; j++) {
+        slong t = degree[j];
+        if (!(t >= dmin && 2 * t <= sigma && !standard[j])) continue;
+        slong large = sigma - t;
+        if (large <= t) continue;
+        memcpy(tmp_exp, col_monoms[j].exp, (size_t) nvars * sizeof(slong));
+        tmp_exp[0] += large - t;
+        slong shifted = lookup_monom_index(col_index, col_hash_size, tmp_exp, nvars);
+        if (shifted < 0) goto fail;
+        selected[shifted] = 1;
+    }
+
+    for (slong j = 0; j < ncols; j++) if (selected[j]) count++;
+    if (count != predicted || count > nrows) goto fail;
+    rows = flint_malloc((size_t) count * sizeof(slong));
+    cols = flint_malloc((size_t) count * sizeof(slong));
+    if (!rows || !cols) goto fail;
+    count = 0;
+    for (slong j = 0; j < ncols; j++) if (selected[j]) {
+        for (slong v = 0; v < nvars; v++) tmp_exp[v] = col_monoms[j].exp[nvars - 1 - v];
+        slong ri = lookup_monom_index(row_index, row_hash_size, tmp_exp, nvars);
+        if (ri < 0) goto fail;
+        rows[count] = ri; cols[count] = j; count++;
+    }
+    *rows_out = rows; *cols_out = cols; *size_out = count;
+    flint_free(standard); flint_free(selected); flint_free(degree); flint_free(tmp_exp);
+    return 1;
+fail:
+    flint_free(rows); flint_free(cols); flint_free(standard); flint_free(selected);
+    flint_free(degree); flint_free(tmp_exp);
+    return 0;
+}
+
 void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                               slong *row_indices, slong *col_indices,
                                               slong *matrix_size,
                                               const fq_mvpoly_t *dixon_poly,
                                               slong nvars, slong npars,
                                               char **var_names, char **par_names,
-                                              const char *gen_name) {
+                                              const char *gen_name,
+                                              const long *degrees, slong num_polys) {
     dixon_info_log("\nStep 2: Construct Dixon matrix\n");
     clock_t step2_cpu_start = clock();
     double step2_wall_start = get_wall_time();
@@ -3922,10 +4046,18 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     slong *col_idx_array = NULL;
     slong num_rows, num_cols;
     
-    if (npars == 0) {
-        dixon_debug_log("  Using scalar specialization for rank selection...\n");
+    const char *predict_env = getenv("DRSOLVE_PREDICT_MAXRANK");
+    int use_predicted_candidate =
+        (npars == 1 && (predict_env == NULL || strcmp(predict_env, "0") != 0));
+    if (npars == 0 || use_predicted_candidate) {
+        dixon_debug_log("  Using rank-predicted scalar specialization (%ld parameter(s))...\n", npars);
         fq_nmod_mat_t eval_mat;
         fq_nmod_mat_init(eval_mat, nx_monoms, ndual_monoms, dixon_poly->ctx);
+        fq_nmod_t *eval_params = NULL;
+        if (npars == 1) {
+            eval_params = (fq_nmod_t *) flint_malloc(sizeof(fq_nmod_t));
+            init_evaluation_parameters(eval_params, 1, dixon_poly->ctx, 0);
+        }
         clock_t scalar_eval_cpu_start = clock();
         double scalar_eval_wall_start = get_wall_time();
 #ifdef _OPENMP
@@ -3934,8 +4066,12 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         for (slong i = 0; i < nx_monoms; i++) {
             for (slong j = 0; j < ndual_monoms; j++) {
                 if (full_matrix[i][j] != NULL && full_matrix[i][j]->nterms > 0) {
-                    fq_nmod_set(fq_nmod_mat_entry(eval_mat, i, j),
-                               full_matrix[i][j]->terms[0].coeff, dixon_poly->ctx);
+                    if (npars == 1)
+                        evaluate_fq_mvpoly_at_params(fq_nmod_mat_entry(eval_mat, i, j),
+                                                     full_matrix[i][j], eval_params);
+                    else
+                        fq_nmod_set(fq_nmod_mat_entry(eval_mat, i, j),
+                                   full_matrix[i][j]->terms[0].coeff, dixon_poly->ctx);
                 } else {
                     fq_nmod_zero(fq_nmod_mat_entry(eval_mat, i, j), dixon_poly->ctx);
                 }
@@ -3944,8 +4080,125 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         dixon_maybe_print_step_detail_time("Step 3 scalar matrix build",
                                            scalar_eval_cpu_start,
                                            scalar_eval_wall_start);
-        slong rank = fq_nmod_mat_rank(eval_mat, dixon_poly->ctx);
+        /* Heuristic rank candidate from the bihomogeneous support.  Rows are
+         * ordered by decreasing x-degree and columns by increasing dual-degree
+         * so that the candidate follows the Dixon anti-diagonal.  This is only
+         * a fast path: sampled one-row/one-column extensions must not increase
+         * rank, otherwise we fall back to the exact full-matrix rank. */
+        slong sigma = 0;
+        for (slong t = 0; t < dixon_poly->nterms; t++) {
+            slong deg = 0;
+            if (dixon_poly->terms[t].var_exp) {
+                for (slong v = 0; v < 2 * nvars; v++)
+                    deg += dixon_poly->terms[t].var_exp[v];
+            }
+            if (deg > sigma) sigma = deg;
+        }
+        fq_index_degree_pair *row_order =
+            (fq_index_degree_pair *) flint_malloc((size_t) nx_monoms * sizeof(*row_order));
+        fq_index_degree_pair *col_order =
+            (fq_index_degree_pair *) flint_malloc((size_t) ndual_monoms * sizeof(*col_order));
+        slong *row_counts = (slong *) flint_calloc((size_t) (sigma + 1), sizeof(slong));
+        slong *col_counts = (slong *) flint_calloc((size_t) (sigma + 1), sizeof(slong));
+        for (slong i = 0; i < nx_monoms; i++) {
+            slong d = 0;
+            for (slong v = 0; v < nvars; v++) d += x_monoms[i].exp[v];
+            row_order[i].index = i; row_order[i].degree = d;
+            if (d <= sigma) row_counts[d]++;
+        }
+        for (slong j = 0; j < ndual_monoms; j++) {
+            slong d = 0;
+            for (slong v = 0; v < nvars; v++) d += dual_monoms[j].exp[v];
+            col_order[j].index = j; col_order[j].degree = d;
+            if (d <= sigma) col_counts[d]++;
+        }
+        qsort(row_order, (size_t) nx_monoms, sizeof(*row_order), compare_fq_degrees);
+        qsort(col_order, (size_t) ndual_monoms, sizeof(*col_order), compare_fq_degrees);
+        slong predicted = 0;
+        for (slong q = 0; q <= sigma; q++) {
+            slong p = sigma - q;
+            if (p <= sigma) predicted += FLINT_MIN(row_counts[p], col_counts[q]);
+        }
         slong min_size = FLINT_MIN(nx_monoms, ndual_monoms);
+        slong *model_H = NULL;
+        slong model_h_len = 0;
+        if (degrees != NULL && num_polys == nvars + 1) {
+            slong *model_R = NULL;
+            slong model_r_len = 0, model_sigma = 0, model_rank = 0;
+            if (dixon_rank_profile_from_degrees(&model_R, &model_r_len,
+                                                &model_H, &model_h_len,
+                                                &model_sigma, &model_rank,
+                                                degrees, num_polys, nvars)) {
+                predicted = model_rank;
+                sigma = model_sigma;
+                dixon_debug_log("  Rank model: sigma=%ld, e0=%ld, predicted rank=%ld\n",
+                                sigma, model_h_len, predicted);
+            }
+            flint_free(model_R);
+        }
+        predicted = FLINT_MIN(predicted, min_size);
+        slong rank = 0;
+        slong predicted_size = 0;
+        long dmin = LONG_MAX;
+        for (slong i = 0; i < num_polys; i++) if (degrees && degrees[i] < dmin) dmin = degrees[i];
+        int candidate_ok =
+            use_predicted_candidate && model_H != NULL && predicted > 0 && predicted < min_size &&
+            dixon_build_predicted_mirror_indices(
+                &row_idx_array, &col_idx_array, &predicted_size,
+                x_monoms, nx_monoms, dual_monoms, ndual_monoms,
+                x_index, x_hash_size, dual_index, dual_hash_size,
+                nvars, model_H, model_h_len, sigma, (slong) dmin, predicted);
+        if (candidate_ok) {
+            fq_nmod_mat_t candidate;
+            fq_nmod_mat_init(candidate, predicted, predicted, dixon_poly->ctx);
+            for (slong i = 0; i < predicted; i++) {
+                for (slong j = 0; j < predicted; j++) {
+                    fq_nmod_set(fq_nmod_mat_entry(candidate, i, j),
+                                fq_nmod_mat_entry(eval_mat, row_idx_array[i], col_idx_array[j]),
+                                dixon_poly->ctx);
+                }
+            }
+            rank = fq_nmod_mat_rank(candidate, dixon_poly->ctx);
+            fq_nmod_mat_clear(candidate, dixon_poly->ctx);
+            if (rank == predicted) num_rows = num_cols = predicted;
+            else candidate_ok = 0;
+        }
+        if (!candidate_ok) {
+            flint_free(row_idx_array); flint_free(col_idx_array);
+            row_idx_array = NULL; col_idx_array = NULL;
+        }
+        flint_free(model_H);
+        flint_free(row_order);
+        flint_free(col_order);
+        flint_free(row_counts);
+        flint_free(col_counts);
+        if (use_predicted_candidate && !candidate_ok) {
+            dixon_debug_log("  Predicted candidate failed; using degree-aware selector\n");
+            fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
+            if (eval_params) {
+                clear_evaluation_parameters(eval_params, 1, dixon_poly->ctx);
+            }
+            find_fq_optimal_maximal_rank_submatrix(full_matrix, nx_monoms, ndual_monoms,
+                                                   &row_idx_array, &col_idx_array,
+                                                   &num_rows, &num_cols, npars, -1);
+            goto coefficient_matrix_selected;
+        }
+        if (candidate_ok) {
+            dixon_debug_log("  Step 3 heuristic candidate accepted: %ld x %ld\n",
+                            predicted, predicted);
+            const char *reorder_env = getenv("DRSOLVE_PREDICT_REORDER");
+            if (reorder_env == NULL || strcmp(reorder_env, "0") != 0)
+                reorder_fq_selected_minor_by_degree(full_matrix,
+                                                    row_idx_array,
+                                                    col_idx_array,
+                                                    predicted, npars);
+            fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
+            if (eval_params) {
+                clear_evaluation_parameters(eval_params, 1, dixon_poly->ctx);
+            }
+            goto coefficient_matrix_selected;
+        }
+        rank = fq_nmod_mat_rank(eval_mat, dixon_poly->ctx);
         slong actual_size = FLINT_MIN(rank, min_size);
         
         row_idx_array = (slong*) flint_malloc(actual_size * sizeof(slong));
@@ -3959,6 +4212,9 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         num_cols = actual_size;
         
         fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
+        if (eval_params) {
+            clear_evaluation_parameters(eval_params, 1, dixon_poly->ctx);
+        }
     } else {
         slong small_size = 1;
         if (nx_monoms < small_size && ndual_monoms < small_size && 
@@ -3982,6 +4238,8 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                                   npars, -1);
         }
     }
+
+coefficient_matrix_selected:
 
     slong submat_rank = FLINT_MIN(num_rows, num_cols);
 
@@ -4277,7 +4535,21 @@ slong dixon_matrix_size(slong nvars, slong degree, ulong prime, slong field_degr
 }
 
 // ============ Main Dixon resultant function ============
-void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys, 
+static long *dixon_polynomial_degrees(const fq_mvpoly_t *polys, slong npolys,
+                                      slong nvars) {
+    long *degrees = (long *) flint_calloc((size_t) npolys, sizeof(long));
+    for (slong i = 0; i < npolys; i++) {
+        for (slong t = 0; t < polys[i].nterms; t++) {
+            long degree = 0;
+            if (polys[i].terms[t].var_exp)
+                for (slong v = 0; v < nvars; v++) degree += polys[i].terms[t].var_exp[v];
+            if (degree > degrees[i]) degrees[i] = degree;
+        }
+    }
+    return degrees;
+}
+
+void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
                        slong nvars, slong npars) {
     cleanup_unified_workspace();
     dixon_info_log("\nStep 1: Build Dixon polynomial\n");
@@ -4341,9 +4613,11 @@ void fq_dixon_resultant(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     slong *col_indices = (slong*) flint_malloc(d_poly.nterms * sizeof(slong));
     slong matrix_size;
     
+    long *rank_degrees = dixon_polynomial_degrees(polys, nvars + 1, nvars);
     extract_fq_coefficient_matrix_from_dixon(&coeff_matrix, row_indices, col_indices,
                                             &matrix_size, &d_poly, nvars, npars,
-                                            NULL, NULL, NULL);
+                                            NULL, NULL, NULL, rank_degrees, nvars + 1);
+    flint_free(rank_degrees);
     
     if (matrix_size > 0) {
         dixon_info_log("\nStep 4: Compute resultant\n");
@@ -4464,9 +4738,12 @@ void fq_dixon_resultant_with_names(fq_mvpoly_t *result, fq_mvpoly_t *polys,
     slong *col_indices = (slong*) flint_malloc(max_indices * sizeof(slong));
     slong matrix_size;
     
+    long *rank_degrees = dixon_polynomial_degrees(polys, nvars + 1, nvars);
     extract_fq_coefficient_matrix_from_dixon(&coeff_matrix, row_indices, col_indices,
                                             &matrix_size, &d_poly, nvars, npars,
-                                            var_names, par_names, gen_name);
+                                            var_names, par_names, gen_name,
+                                            rank_degrees, nvars + 1);
+    flint_free(rank_degrees);
     
     if (matrix_size > 0) {
         dixon_info_log("\nStep 4: Compute resultant\n");

@@ -1153,6 +1153,48 @@ static int dixon_rank_model_mixed(fmpz_t rank_out,
     return ok;
 }
 
+int dixon_rank_profile_from_degrees(slong **strata_out, slong *strata_len_out,
+                                    slong **hilbert_out, slong *hilbert_len_out,
+                                    slong *sigma_out, slong *rank_out,
+                                    const long *degrees, slong num_polys,
+                                    slong num_elim_vars) {
+    fmpz *R = NULL, *H = NULL;
+    fmpz_t rank;
+    slong r_len, h_len, sigma = 1;
+    int ok = 0;
+
+    if (!strata_out || !strata_len_out || !hilbert_out || !hilbert_len_out ||
+        !sigma_out || !rank_out || !degrees || num_polys != num_elim_vars + 1)
+        return 0;
+    *strata_out = NULL; *hilbert_out = NULL;
+    r_len = iterated_simplex_strata_mixed(&R, degrees, num_polys, num_elim_vars);
+    h_len = hilbert_truncated_mixed(&H, degrees, num_polys, num_elim_vars);
+    for (slong i = 0; i < num_polys; i++) sigma += degrees[i] - 1;
+    fmpz_init(rank);
+    if (r_len > 0 && h_len > 0 &&
+        dixon_rank_model_from_strata(rank, R, r_len, H, h_len, sigma) &&
+        fmpz_fits_si(rank)) {
+        slong *rr = flint_malloc((size_t) r_len * sizeof(slong));
+        slong *hh = flint_malloc((size_t) h_len * sizeof(slong));
+        ok = rr != NULL && hh != NULL;
+        for (slong i = 0; ok && i < r_len; i++) {
+            if (!fmpz_fits_si(R + i)) ok = 0; else rr[i] = fmpz_get_si(R + i);
+        }
+        for (slong i = 0; ok && i < h_len; i++) {
+            if (!fmpz_fits_si(H + i)) ok = 0; else hh[i] = fmpz_get_si(H + i);
+        }
+        if (ok) {
+            *strata_out = rr; *strata_len_out = r_len;
+            *hilbert_out = hh; *hilbert_len_out = h_len;
+            *sigma_out = sigma; *rank_out = fmpz_get_si(rank);
+        } else { flint_free(rr); flint_free(hh); }
+    }
+    fmpz_clear(rank);
+    if (R) { for (slong i = 0; i < r_len; i++) fmpz_clear(R + i); flint_free(R); }
+    if (H) { for (slong i = 0; i < h_len; i++) fmpz_clear(H + i); flint_free(H); }
+    return ok;
+}
+
 static int step1_row_highest_active_var_index(slong row_idx,
                                               slong num_elim_vars,
                                               slong num_parameter_vars) {

@@ -2327,7 +2327,7 @@ char* dixon_with_ideal_reduction(const char **poly_strings, slong num_polys,
     extract_fq_coefficient_matrix_from_dixon(&coeff_matrix, row_indices, col_indices,
                                             &matrix_size, &d_poly, num_elim_vars, state.npars,
                                             state.var_names, state.par_names,
-                                            state.generator_name);
+                                            state.generator_name, NULL, 0);
 
     /* Reduce each coefficient-matrix entry once before Step 4. */
     for (slong i = 0; i < matrix_size; i++) {
