@@ -3939,6 +3939,235 @@ fail:
     return 0;
 }
 
+typedef struct {
+    slong index;
+    slong degree_distance;
+    slong entry_degree;
+} dixon_pool_choice_t;
+
+static int dixon_compare_pool_choices(const void *lhs, const void *rhs)
+{
+    const dixon_pool_choice_t *a = (const dixon_pool_choice_t *) lhs;
+    const dixon_pool_choice_t *b = (const dixon_pool_choice_t *) rhs;
+    if (a->degree_distance != b->degree_distance)
+        return a->degree_distance < b->degree_distance ? -1 : 1;
+    if (a->entry_degree != b->entry_degree)
+        return a->entry_degree < b->entry_degree ? -1 : 1;
+    return a->index < b->index ? -1 : a->index > b->index;
+}
+
+static slong dixon_monom_total_degree(const monom_t *monom, slong nvars)
+{
+    slong degree = 0;
+    for (slong v = 0; v < nvars; v++) degree += monom->exp[v];
+    return degree;
+}
+
+static slong *dixon_build_repair_pool_side(
+    const slong *selected, slong selected_size, slong total_size,
+    const monom_t *monoms, slong nvars, slong extra,
+    fq_mvpoly_t ***full_matrix, const slong *opposite,
+    slong opposite_size, slong npars, int is_row, slong *pool_size_out)
+{
+    unsigned char *used = flint_calloc((size_t) total_size, 1);
+    slong *selected_degrees = flint_malloc((size_t) selected_size * sizeof(slong));
+    dixon_pool_choice_t *choices = flint_malloc(
+        (size_t) FLINT_MAX(total_size - selected_size, 1) * sizeof(*choices));
+    slong choice_count = 0;
+    slong take = FLINT_MIN(extra, total_size - selected_size);
+    slong *pool = flint_malloc((size_t) (selected_size + take) * sizeof(slong));
+
+    for (slong i = 0; i < selected_size; i++) {
+        pool[i] = selected[i];
+        used[selected[i]] = 1;
+        selected_degrees[i] = dixon_monom_total_degree(monoms + selected[i], nvars);
+    }
+    for (slong idx = 0; idx < total_size; idx++) {
+        if (used[idx]) continue;
+        slong degree = dixon_monom_total_degree(monoms + idx, nvars);
+        slong distance = LONG_MAX;
+        for (slong i = 0; i < selected_size; i++) {
+            slong delta = FLINT_ABS(degree - selected_degrees[i]);
+            if (delta < distance) distance = delta;
+        }
+        choices[choice_count].index = idx;
+        choices[choice_count].degree_distance = distance;
+        choices[choice_count].entry_degree = is_row
+            ? compute_fq_selected_cols_row_max_total_degree(
+                  full_matrix, idx, (slong *) opposite, opposite_size, npars)
+            : compute_fq_selected_rows_col_max_total_degree(
+                  full_matrix, (slong *) opposite, opposite_size, idx, npars);
+        choice_count++;
+    }
+    qsort(choices, (size_t) choice_count, sizeof(*choices),
+          dixon_compare_pool_choices);
+    for (slong i = 0; i < take; i++)
+        pool[selected_size + i] = choices[i].index;
+
+    *pool_size_out = selected_size + take;
+    flint_free(used);
+    flint_free(selected_degrees);
+    flint_free(choices);
+    return pool;
+}
+
+static slong dixon_repair_pool_numeric_rank(
+    fq_mvpoly_t ***full_matrix, const slong *pool_rows, slong pool_nrows,
+    const slong *pool_cols, slong pool_ncols, const fq_nmod_ctx_t ctx)
+{
+    fq_nmod_mat_t evaluated;
+    fq_nmod_t parameter;
+    fq_nmod_mat_init(evaluated, pool_nrows, pool_ncols, ctx);
+    fq_nmod_init(parameter, ctx);
+    init_evaluation_parameters(&parameter, 1, ctx, 0);
+    for (slong i = 0; i < pool_nrows; i++) {
+        for (slong j = 0; j < pool_ncols; j++) {
+            fq_mvpoly_t *entry = full_matrix[pool_rows[i]][pool_cols[j]];
+            if (entry != NULL && entry->nterms > 0)
+                evaluate_fq_mvpoly_at_params(
+                    fq_nmod_mat_entry(evaluated, i, j), entry, &parameter);
+            else
+                fq_nmod_zero(fq_nmod_mat_entry(evaluated, i, j), ctx);
+        }
+    }
+    slong rank = fq_nmod_mat_rank(evaluated, ctx);
+    fq_nmod_clear(parameter, ctx);
+    fq_nmod_mat_clear(evaluated, ctx);
+    return rank;
+}
+
+static slong dixon_extract_predicted_core(
+    fq_mvpoly_t ***full_matrix, const slong *rows, const slong *cols,
+    slong size, const fq_nmod_ctx_t ctx, slong **core_rows_out,
+    slong **core_cols_out)
+{
+    fq_nmod_mat_t evaluated, work, transposed;
+    fq_nmod_t parameter;
+    slong *row_perm = flint_malloc((size_t) size * sizeof(slong));
+    slong *col_perm = flint_malloc((size_t) size * sizeof(slong));
+    fq_nmod_mat_init(evaluated, size, size, ctx);
+    fq_nmod_init(parameter, ctx);
+    init_evaluation_parameters(&parameter, 1, ctx, 0);
+    for (slong i = 0; i < size; i++) {
+        for (slong j = 0; j < size; j++) {
+            fq_mvpoly_t *entry = full_matrix[rows[i]][cols[j]];
+            if (entry != NULL && entry->nterms > 0)
+                evaluate_fq_mvpoly_at_params(
+                    fq_nmod_mat_entry(evaluated, i, j), entry, &parameter);
+            else
+                fq_nmod_zero(fq_nmod_mat_entry(evaluated, i, j), ctx);
+        }
+    }
+    fq_nmod_clear(parameter, ctx);
+
+    fq_nmod_mat_init(work, size, size, ctx);
+    fq_nmod_mat_init(transposed, size, size, ctx);
+    for (slong i = 0; i < size; i++) {
+        for (slong j = 0; j < size; j++) {
+            fq_nmod_set(fq_nmod_mat_entry(work, i, j),
+                        fq_nmod_mat_entry(evaluated, i, j), ctx);
+            fq_nmod_set(fq_nmod_mat_entry(transposed, j, i),
+                        fq_nmod_mat_entry(evaluated, i, j), ctx);
+        }
+    }
+    slong row_rank = fq_nmod_mat_lu(row_perm, work, 0, ctx);
+    slong col_rank = fq_nmod_mat_lu(col_perm, transposed, 0, ctx);
+    slong core_rank = FLINT_MIN(row_rank, col_rank);
+    slong *core_rows = flint_malloc((size_t) core_rank * sizeof(slong));
+    slong *core_cols = flint_malloc((size_t) core_rank * sizeof(slong));
+    for (slong i = 0; i < core_rank; i++) {
+        core_rows[i] = rows[row_perm[i]];
+        core_cols[i] = cols[col_perm[i]];
+    }
+    *core_rows_out = core_rows;
+    *core_cols_out = core_cols;
+    flint_free(row_perm);
+    flint_free(col_perm);
+    fq_nmod_mat_clear(evaluated, ctx);
+    fq_nmod_mat_clear(work, ctx);
+    fq_nmod_mat_clear(transposed, ctx);
+    return core_rank;
+}
+
+static int dixon_repair_predicted_minor(
+    fq_mvpoly_t ***full_matrix, slong nrows, slong ncols,
+    const monom_t *row_monoms, const monom_t *col_monoms, slong nvars,
+    slong **rows_io, slong **cols_io, slong predicted,
+    slong npars, const fq_nmod_ctx_t ctx)
+{
+    slong *core_rows = NULL, *core_cols = NULL;
+    slong core_rank = dixon_extract_predicted_core(
+        full_matrix, *rows_io, *cols_io, predicted, ctx,
+        &core_rows, &core_cols);
+    slong deficiency = FLINT_MAX(predicted - core_rank, 1);
+    /* The pool must contain enough replacement rows/columns to grow the
+       independent core back to the predicted target. */
+    slong extra = deficiency + FLINT_MAX(4, 2 * deficiency);
+    slong available_extra = FLINT_MAX(nrows, ncols) - core_rank;
+    /* Exhaust all remaining support before declaring the model rank too
+       high.  Intermediate pools are only probes; dependent rows/columns are
+       discarded by the rank-profile selector when a pool reaches the target. */
+    slong max_extra = available_extra;
+
+    while (extra <= max_extra && (predicted < nrows || predicted < ncols)) {
+        slong pool_nrows, pool_ncols;
+        slong *pool_rows = dixon_build_repair_pool_side(
+            core_rows, core_rank, nrows, row_monoms, nvars, extra,
+            full_matrix, core_cols, core_rank, npars, 1, &pool_nrows);
+        slong *pool_cols = dixon_build_repair_pool_side(
+            core_cols, core_rank, ncols, col_monoms, nvars, extra,
+            full_matrix, core_rows, core_rank, npars, 0, &pool_ncols);
+        fq_mvpoly_t ***pool_matrix = flint_malloc(
+            (size_t) pool_nrows * sizeof(fq_mvpoly_t **));
+        for (slong i = 0; i < pool_nrows; i++) {
+            pool_matrix[i] = flint_malloc(
+                (size_t) pool_ncols * sizeof(fq_mvpoly_t *));
+            for (slong j = 0; j < pool_ncols; j++)
+                pool_matrix[i][j] = full_matrix[pool_rows[i]][pool_cols[j]];
+        }
+
+        slong pool_rank = dixon_repair_pool_numeric_rank(
+            full_matrix, pool_rows, pool_nrows, pool_cols, pool_ncols, ctx);
+        slong *local_rows = NULL, *local_cols = NULL;
+        slong repaired_rows = 0, repaired_cols = 0;
+        dixon_debug_log("  Repairing predicted minor in %ld x %ld pool "
+                        "(rank deficiency %ld, pool rank %ld)\n",
+                        pool_nrows, pool_ncols, deficiency, pool_rank);
+        if (pool_rank >= predicted) {
+            find_fq_optimal_maximal_rank_submatrix(
+                pool_matrix, pool_nrows, pool_ncols,
+                &local_rows, &local_cols, &repaired_rows, &repaired_cols,
+                npars, -1);
+        }
+
+        int repaired = repaired_rows == predicted && repaired_cols == predicted;
+        if (repaired) {
+            for (slong i = 0; i < predicted; i++) {
+                (*rows_io)[i] = pool_rows[local_rows[i]];
+                (*cols_io)[i] = pool_cols[local_cols[i]];
+            }
+        }
+        flint_free(local_rows);
+        flint_free(local_cols);
+        for (slong i = 0; i < pool_nrows; i++) flint_free(pool_matrix[i]);
+        flint_free(pool_matrix);
+        flint_free(pool_rows);
+        flint_free(pool_cols);
+        if (repaired) {
+            dixon_debug_log("  Predicted minor repaired with %ld extra candidates per side\n",
+                            extra);
+            flint_free(core_rows);
+            flint_free(core_cols);
+            return 1;
+        }
+        if (extra == max_extra) break;
+        extra = FLINT_MIN(2 * extra, max_extra);
+    }
+    flint_free(core_rows);
+    flint_free(core_cols);
+    return 0;
+}
+
 void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                               slong *row_indices, slong *col_indices,
                                               slong *matrix_size,
@@ -4052,14 +4281,19 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
     if (npars == 0 || use_predicted_candidate) {
         dixon_debug_log("  Using rank-predicted scalar specialization (%ld parameter(s))...\n", npars);
         fq_nmod_mat_t eval_mat;
-        fq_nmod_mat_init(eval_mat, nx_monoms, ndual_monoms, dixon_poly->ctx);
+        int eval_mat_ready = 0;
         fq_nmod_t *eval_params = NULL;
         if (npars == 1) {
             eval_params = (fq_nmod_t *) flint_malloc(sizeof(fq_nmod_t));
             init_evaluation_parameters(eval_params, 1, dixon_poly->ctx, 0);
         }
-        clock_t scalar_eval_cpu_start = clock();
-        double scalar_eval_wall_start = get_wall_time();
+        /* Keep the predicted npars=1 path candidate-only: the full scalar
+           matrix is needed only by the non-predicted fallback. */
+        if (!use_predicted_candidate) {
+            fq_nmod_mat_init(eval_mat, nx_monoms, ndual_monoms, dixon_poly->ctx);
+            eval_mat_ready = 1;
+            clock_t scalar_eval_cpu_start = clock();
+            double scalar_eval_wall_start = get_wall_time();
 #ifdef _OPENMP
         #pragma omp parallel for schedule(static)
 #endif
@@ -4077,9 +4311,10 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                 }
             }
         }
-        dixon_maybe_print_step_detail_time("Step 3 scalar matrix build",
-                                           scalar_eval_cpu_start,
-                                           scalar_eval_wall_start);
+            dixon_maybe_print_step_detail_time("Step 3 scalar matrix build",
+                                               scalar_eval_cpu_start,
+                                               scalar_eval_wall_start);
+        }
         /* Heuristic rank candidate from the bihomogeneous support.  Rows are
          * ordered by decreasing x-degree and columns by increasing dual-degree
          * so that the candidate follows the Dixon anti-diagonal.  This is only
@@ -4148,20 +4383,34 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                 x_monoms, nx_monoms, dual_monoms, ndual_monoms,
                 x_index, x_hash_size, dual_index, dual_hash_size,
                 nvars, model_H, model_h_len, sigma, (slong) dmin, predicted);
+        int candidate_built = candidate_ok;
         if (candidate_ok) {
             fq_nmod_mat_t candidate;
             fq_nmod_mat_init(candidate, predicted, predicted, dixon_poly->ctx);
             for (slong i = 0; i < predicted; i++) {
                 for (slong j = 0; j < predicted; j++) {
-                    fq_nmod_set(fq_nmod_mat_entry(candidate, i, j),
-                                fq_nmod_mat_entry(eval_mat, row_idx_array[i], col_idx_array[j]),
-                                dixon_poly->ctx);
+                    fq_mvpoly_t *entry =
+                        full_matrix[row_idx_array[i]][col_idx_array[j]];
+                    if (entry != NULL && entry->nterms > 0)
+                        evaluate_fq_mvpoly_at_params(
+                            fq_nmod_mat_entry(candidate, i, j), entry, eval_params);
+                    else
+                        fq_nmod_zero(fq_nmod_mat_entry(candidate, i, j),
+                                     dixon_poly->ctx);
                 }
             }
             rank = fq_nmod_mat_rank(candidate, dixon_poly->ctx);
             fq_nmod_mat_clear(candidate, dixon_poly->ctx);
             if (rank == predicted) num_rows = num_cols = predicted;
             else candidate_ok = 0;
+        }
+        if (!candidate_ok && candidate_built && rank < predicted) {
+            candidate_ok = dixon_repair_predicted_minor(
+                full_matrix, nx_monoms, ndual_monoms,
+                x_monoms, dual_monoms, nvars,
+                &row_idx_array, &col_idx_array, predicted, npars,
+                dixon_poly->ctx);
+            if (candidate_ok) num_rows = num_cols = predicted;
         }
         if (!candidate_ok) {
             flint_free(row_idx_array); flint_free(col_idx_array);
@@ -4174,7 +4423,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         flint_free(col_counts);
         if (use_predicted_candidate && !candidate_ok) {
             dixon_debug_log("  Predicted candidate failed; using degree-aware selector\n");
-            fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
+            if (eval_mat_ready) fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
             if (eval_params) {
                 clear_evaluation_parameters(eval_params, 1, dixon_poly->ctx);
             }
@@ -4192,7 +4441,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
                                                     row_idx_array,
                                                     col_idx_array,
                                                     predicted, npars);
-            fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
+            if (eval_mat_ready) fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
             if (eval_params) {
                 clear_evaluation_parameters(eval_params, 1, dixon_poly->ctx);
             }
@@ -4211,7 +4460,7 @@ void extract_fq_coefficient_matrix_from_dixon(fq_mvpoly_t ***coeff_matrix,
         num_rows = actual_size;
         num_cols = actual_size;
         
-        fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
+        if (eval_mat_ready) fq_nmod_mat_clear(eval_mat, dixon_poly->ctx);
         if (eval_params) {
             clear_evaluation_parameters(eval_params, 1, dixon_poly->ctx);
         }
